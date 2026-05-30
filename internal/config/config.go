@@ -8,14 +8,18 @@ import (
 )
 
 const (
-	defaultHTTPListenAddr      = ":8081"
-	defaultRegistryAddress     = "localhost:50052"
+	defaultAddr                = ":8080"
+	defaultStoreMode           = "memory"
+	defaultRegistryMode        = "memory"
+	defaultRegistryAddress     = "localhost:50051"
 	defaultRegistryDialTimeout = 5 * time.Second
 	defaultRequestTimeout      = 3 * time.Second
 )
 
 type Config struct {
-	HTTPListenAddr      string
+	Addr                string
+	StoreMode           string
+	RegistryMode        string
 	RegistryAddress     string
 	RegistryDialTimeout time.Duration
 	RequestTimeout      time.Duration
@@ -23,7 +27,9 @@ type Config struct {
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		HTTPListenAddr:      getenvOr("AERO_API_HTTP_ADDR", defaultHTTPListenAddr),
+		Addr:                getenvOr("AERO_API_ADDR", defaultAddr),
+		StoreMode:           getenvOr("AERO_API_STORE_MODE", defaultStoreMode),
+		RegistryMode:        getenvOr("AERO_API_REGISTRY_MODE", defaultRegistryMode),
 		RegistryAddress:     getenvOr("AERO_API_REGISTRY_ADDR", defaultRegistryAddress),
 		RegistryDialTimeout: defaultRegistryDialTimeout,
 		RequestTimeout:      defaultRequestTimeout,
@@ -36,8 +42,17 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	if cfg.HTTPListenAddr == "" {
-		return nil, fmt.Errorf("AERO_API_HTTP_ADDR cannot be empty")
+	if cfg.Addr == "" {
+		return nil, fmt.Errorf("AERO_API_ADDR cannot be empty")
+	}
+	if cfg.StoreMode != "memory" {
+		// TODO: support tidb and postgres durable store modes plus telemetry/replay backends.
+		return nil, fmt.Errorf("unsupported store mode %q", cfg.StoreMode)
+	}
+	switch cfg.RegistryMode {
+	case "memory", "grpc":
+	default:
+		return nil, fmt.Errorf("unsupported registry mode %q", cfg.RegistryMode)
 	}
 	if cfg.RegistryAddress == "" {
 		return nil, fmt.Errorf("AERO_API_REGISTRY_ADDR cannot be empty")

@@ -5,44 +5,21 @@ import (
 	"fmt"
 	"time"
 
-	registryv1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/registry/v1"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 )
 
-type Client struct {
-	conn grpc.ClientConnInterface
-	api  registryv1.AeroRegistryClient
+type Client interface {
+	GetLiveAircraftState(ctx context.Context, aircraftID string) (*domain.LiveAircraftState, error)
+	ListLiveAircraftStates(ctx context.Context) ([]domain.LiveAircraftState, error)
 }
 
-func New(ctx context.Context, address string, dialTimeout time.Duration) (*Client, func() error, error) {
-	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
-	defer cancel()
-
-	conn, err := grpc.DialContext(dialCtx, address,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithBlock(),
-	)
-	if err != nil {
-		return nil, nil, fmt.Errorf("dial registry: %w", err)
+func New(ctx context.Context, mode string, address string, dialTimeout time.Duration) (Client, func() error, error) {
+	switch mode {
+	case "memory":
+		return NewMemoryClient(), func() error { return nil }, nil
+	case "grpc":
+		return NewGRPCClient(ctx, address, dialTimeout)
+	default:
+		return nil, nil, fmt.Errorf("unsupported registry mode %q", mode)
 	}
-
-	c := &Client{
-		conn: conn,
-		api:  registryv1.NewAeroRegistryClient(conn),
-	}
-
-	return c, conn.Close, nil
-}
-
-func (c *Client) ListRelays(ctx context.Context) (*registryv1.ListRelaysResponse, error) {
-	return c.api.ListRelays(ctx, &registryv1.ListRelaysRequest{})
-}
-
-func (c *Client) ListAgents(ctx context.Context) (*registryv1.ListAgentsResponse, error) {
-	return c.api.ListAgents(ctx, &registryv1.ListAgentsRequest{})
-}
-
-func (c *Client) GetAgentPlacement(ctx context.Context, agentID string) (*registryv1.GetAgentPlacementResponse, error) {
-	return c.api.GetAgentPlacement(ctx, &registryv1.GetAgentPlacementRequest{AgentId: agentID})
 }

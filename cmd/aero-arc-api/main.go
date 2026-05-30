@@ -12,6 +12,8 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/config"
 	"github.com/Aero-Arc/aero-arc-api/internal/httpapi"
 	"github.com/Aero-Arc/aero-arc-api/internal/registry"
+	"github.com/Aero-Arc/aero-arc-api/internal/service"
+	"github.com/Aero-Arc/aero-arc-api/internal/store/memory"
 )
 
 func main() {
@@ -22,9 +24,9 @@ func main() {
 	}
 
 	ctx := context.Background()
-	registryClient, closeRegistry, err := registry.New(ctx, cfg.RegistryAddress, cfg.RegistryDialTimeout)
+	registryClient, closeRegistry, err := registry.New(ctx, cfg.RegistryMode, cfg.RegistryAddress, cfg.RegistryDialTimeout)
 	if err != nil {
-		slog.Error("failed to connect to registry", slog.String("error", err.Error()))
+		slog.Error("failed to initialize registry client", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 	defer func() {
@@ -33,15 +35,23 @@ func main() {
 		}
 	}()
 
+	// TODO: wire tidb/postgres durable stores, influxdb telemetry, s3 replay storage, and real registry gRPC clients.
+	durableStore := memory.NewDurableStore()
+	telemetryStore := memory.NewTelemetryStore()
+	replayStore := memory.NewReplayStore()
+	fleetService := service.NewFleetService(durableStore, telemetryStore, replayStore, registryClient)
+
 	httpServer := &http.Server{
-		Addr:              cfg.HTTPListenAddr,
-		Handler:           httpapi.New(registryClient, cfg.RequestTimeout).Handler(),
+		Addr:              cfg.Addr,
+		Handler:           httpapi.New(fleetService, cfg.RequestTimeout).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	go func() {
 		slog.Info("starting aero-arc-api",
-			slog.String("http_addr", cfg.HTTPListenAddr),
+			slog.String("http_addr", cfg.Addr),
+			slog.String("store_mode", cfg.StoreMode),
+			slog.String("registry_mode", cfg.RegistryMode),
 			slog.String("registry_addr", cfg.RegistryAddress),
 		)
 
