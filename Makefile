@@ -1,0 +1,41 @@
+BINARY := aero-arc-api
+CMD := ./cmd/aero-arc-api
+BIN_DIR := bin
+BIN := $(BIN_DIR)/$(BINARY)
+
+.PHONY: help build run test fmt vet tidy check clean
+
+help:
+	@printf "Targets:\n"
+	@printf "  make build  Build $(BIN)\n"
+	@printf "  make run    Run the API locally\n"
+	@printf "  make test   Run all tests\n"
+	@printf "  make fmt    Format Go files\n"
+	@printf "  make vet    Run go vet\n"
+	@printf "  make tidy   Tidy go.mod and go.sum\n"
+	@printf "  make check  Run fmt, vet, and test\n"
+	@printf "  make clean  Remove build artifacts\n"
+
+build:
+	@mkdir -p $(BIN_DIR)
+	go build -o $(BIN) $(CMD)
+
+run:
+	go run $(CMD) start
+
+test:
+	go test ./...
+
+fmt:
+	go fmt ./...
+
+vet:
+	go vet ./...
+
+tidy:
+	go mod tidy
+
+check: fmt vet test
+
+clean:
+	rm -rf $(BIN_DIR)

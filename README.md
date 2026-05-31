@@ -24,14 +24,25 @@ through this API service.
 The scaffold defaults to in-memory stores and an in-memory registry client.
 
 ```bash
-go run ./cmd/aero-arc-api
+go run ./cmd/aero-arc-api start
 ```
 
-Configuration is environment based:
+Configuration is available through flags or environment variables:
+
+```bash
+go run ./cmd/aero-arc-api start \
+  --addr :8080 \
+  --durable-store memory \
+  --telemetry-store memory \
+  --replay-store memory \
+  --registry-mode memory
+```
 
 ```bash
 AERO_API_ADDR=:8080
-AERO_API_STORE_MODE=memory
+AERO_API_DURABLE_STORE=memory
+AERO_API_TELEMETRY_STORE=memory
+AERO_API_REPLAY_STORE=memory
 AERO_API_REGISTRY_MODE=memory
 AERO_API_REGISTRY_ADDR=localhost:50051
 ```
@@ -84,8 +95,9 @@ curl -X POST http://localhost:8080/api/v1/maintenance-events \
 ## Development
 
 ```bash
-go test ./...
-go fmt ./...
+make build
+make test
+make check
 ```
 
 ## TODO

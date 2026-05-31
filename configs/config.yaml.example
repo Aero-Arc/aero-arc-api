@@ -1,10 +1,14 @@
 addr: ":8080"
-store_mode: "memory"
+durable_store: "memory"
+telemetry_store: "memory"
+replay_store: "memory"
 registry_mode: "memory" # use "grpc" to connect to aero-arc-registry
 registry_addr: "localhost:50051"
 
 # Environment variables used by the service:
 # AERO_API_ADDR=:8080
-# AERO_API_STORE_MODE=memory
+# AERO_API_DURABLE_STORE=memory
+# AERO_API_TELEMETRY_STORE=memory
+# AERO_API_REPLAY_STORE=memory
 # AERO_API_REGISTRY_MODE=memory
 # AERO_API_REGISTRY_ADDR=localhost:50051

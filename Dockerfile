@@ -10,3 +10,4 @@ FROM gcr.io/distroless/static-debian12
 COPY --from=build /out/aero-arc-api /aero-arc-api
 EXPOSE 8080
 ENTRYPOINT ["/aero-arc-api"]
+CMD ["start"]

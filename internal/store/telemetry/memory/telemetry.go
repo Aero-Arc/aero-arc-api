@@ -8,23 +8,23 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 )
 
-type TelemetryStore struct {
+type Store struct {
 	mu      sync.RWMutex
 	samples []domain.TelemetrySample
 }
 
-func NewTelemetryStore() *TelemetryStore {
-	return &TelemetryStore{}
+func NewStore() *Store {
+	return &Store{}
 }
 
-func (s *TelemetryStore) AddSample(_ context.Context, sample domain.TelemetrySample) error {
+func (s *Store) AddSample(_ context.Context, sample domain.TelemetrySample) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.samples = append(s.samples, sample)
 	return nil
 }
 
-func (s *TelemetryStore) GetLatestSample(_ context.Context, aircraftID string) (*domain.TelemetrySample, error) {
+func (s *Store) GetLatestSample(_ context.Context, aircraftID string) (*domain.TelemetrySample, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var latest *domain.TelemetrySample
@@ -40,7 +40,7 @@ func (s *TelemetryStore) GetLatestSample(_ context.Context, aircraftID string) (
 	return latest, nil
 }
 
-func (s *TelemetryStore) QueryFlightSamples(_ context.Context, flightID string, limit int) ([]domain.TelemetrySample, error) {
+func (s *Store) QueryFlightSamples(_ context.Context, flightID string, limit int) ([]domain.TelemetrySample, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	samples := make([]domain.TelemetrySample, 0)

@@ -7,28 +7,53 @@ import (
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
-	"github.com/Aero-Arc/aero-arc-api/internal/store/memory"
+	"github.com/Aero-Arc/aero-arc-api/internal/registry"
+	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
+	replaymemory "github.com/Aero-Arc/aero-arc-api/internal/store/replay/memory"
+	telemetrymemory "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/memory"
+	registryv1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/registry/v1"
+	"google.golang.org/grpc"
 )
 
 type failingRegistry struct{}
 
-func (failingRegistry) GetLiveAircraftState(context.Context, string) (*domain.LiveAircraftState, error) {
+func (failingRegistry) RegisterRelay(context.Context, *registryv1.RegisterRelayRequest, ...grpc.CallOption) (*registryv1.RegisterRelayResponse, error) {
 	return nil, errors.New("registry unavailable")
 }
 
-func (failingRegistry) ListLiveAircraftStates(context.Context) ([]domain.LiveAircraftState, error) {
+func (failingRegistry) HeartbeatRelay(context.Context, *registryv1.HeartbeatRelayRequest, ...grpc.CallOption) (*registryv1.HeartbeatRelayResponse, error) {
+	return nil, errors.New("registry unavailable")
+}
+
+func (failingRegistry) ListRelays(context.Context, *registryv1.ListRelaysRequest, ...grpc.CallOption) (*registryv1.ListRelaysResponse, error) {
+	return nil, errors.New("registry unavailable")
+}
+
+func (failingRegistry) RegisterAgent(context.Context, *registryv1.RegisterAgentRequest, ...grpc.CallOption) (*registryv1.RegisterAgentResponse, error) {
+	return nil, errors.New("registry unavailable")
+}
+
+func (failingRegistry) HeartbeatAgent(context.Context, *registryv1.HeartbeatAgentRequest, ...grpc.CallOption) (*registryv1.HeartbeatAgentResponse, error) {
+	return nil, errors.New("registry unavailable")
+}
+
+func (failingRegistry) ListAgents(context.Context, *registryv1.ListAgentsRequest, ...grpc.CallOption) (*registryv1.ListAgentsResponse, error) {
+	return nil, errors.New("registry unavailable")
+}
+
+func (failingRegistry) GetAgentPlacement(context.Context, *registryv1.GetAgentPlacementRequest, ...grpc.CallOption) (*registryv1.GetAgentPlacementResponse, error) {
 	return nil, errors.New("registry unavailable")
 }
 
 func TestFleetServiceComposesAircraftDashboard(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
-	durable := memory.NewDurableStore()
-	telemetry := memory.NewTelemetryStore()
-	replay := memory.NewReplayStore()
+	durable := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	replay := replaymemory.NewStore()
 	registry := newTestRegistry()
 
-	must(t, durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1", TailNumber: "N100AA"}))
+	must(t, durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1", AgentID: "agent-1", TailNumber: "N100AA"}))
 	must(t, durable.CreateBattery(ctx, domain.Battery{ID: "battery-1", StateOfHealth: 94}))
 	must(t, durable.RecordBatteryInstallation(ctx, domain.BatteryInstallation{
 		ID: "install-1", AircraftID: "aircraft-1", BatteryID: "battery-1", InstalledAt: now,
@@ -90,9 +115,9 @@ func TestReadinessCalculation(t *testing.T) {
 
 func TestFleetServiceGracefullyDegradesWhenRegistryUnavailable(t *testing.T) {
 	ctx := context.Background()
-	durable := memory.NewDurableStore()
-	telemetry := memory.NewTelemetryStore()
-	replay := memory.NewReplayStore()
+	durable := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	replay := replaymemory.NewStore()
 
 	must(t, durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1"}))
 	must(t, durable.CreateBattery(ctx, domain.Battery{ID: "battery-1", StateOfHealth: 92}))
@@ -114,32 +139,11 @@ func TestFleetServiceGracefullyDegradesWhenRegistryUnavailable(t *testing.T) {
 }
 
 func newTestRegistry() *testRegistry {
-	return &testRegistry{states: make(map[string]domain.LiveAircraftState)}
+	return &testRegistry{MemoryClient: registry.NewMemoryClient()}
 }
 
 type testRegistry struct {
-	states map[string]domain.LiveAircraftState
-}
-
-func (r *testRegistry) SetLiveAircraftState(_ context.Context, state domain.LiveAircraftState) error {
-	r.states[state.AircraftID] = state
-	return nil
-}
-
-func (r *testRegistry) GetLiveAircraftState(_ context.Context, aircraftID string) (*domain.LiveAircraftState, error) {
-	state, ok := r.states[aircraftID]
-	if !ok {
-		return nil, nil
-	}
-	return &state, nil
-}
-
-func (r *testRegistry) ListLiveAircraftStates(context.Context) ([]domain.LiveAircraftState, error) {
-	states := make([]domain.LiveAircraftState, 0, len(r.states))
-	for _, state := range r.states {
-		states = append(states, state)
-	}
-	return states, nil
+	*registry.MemoryClient
 }
 
 func must(t *testing.T, err error) {

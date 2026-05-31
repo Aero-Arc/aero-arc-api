@@ -10,90 +10,163 @@ import (
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
+	"github.com/mrshabel/mach"
 )
 
-func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+func (s *Server) handleHealthz(c *mach.Context) {
+	writeJSON(c, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+func (s *Server) handleReadyz(c *mach.Context) {
+	writeJSON(c, http.StatusOK, map[string]string{"status": "ready"})
 }
 
-func (s *Server) handleListAircraft(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := s.contextWithTimeout(r)
+func (s *Server) handleGetOverviewDashboard(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+
+	dashboard, err := s.fleet.GetOverviewDashboard(ctx)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, dashboard)
+}
+
+func (s *Server) handleGetOperationsDashboard(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+
+	dashboard, err := s.fleet.GetOperationsDashboard(ctx)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, dashboard)
+}
+
+func (s *Server) handleGetPreflightDashboard(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+
+	dashboard, err := s.fleet.GetPreflightDashboard(ctx)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, dashboard)
+}
+
+func (s *Server) handleGetConformanceDashboard(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+
+	dashboard, err := s.fleet.GetConformanceDashboard(ctx)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, dashboard)
+}
+
+func (s *Server) handleGetMaintenanceDashboard(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+
+	dashboard, err := s.fleet.GetMaintenanceDashboard(ctx)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, dashboard)
+}
+
+func (s *Server) handleGetRecordsDashboard(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+
+	dashboard, err := s.fleet.GetRecordsDashboard(ctx)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, dashboard)
+}
+
+func (s *Server) handleListAircraft(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
 
 	dashboards, err := s.fleet.ListAircraftDashboards(ctx)
 	if err != nil {
-		writeServiceError(w, err)
+		writeServiceError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"aircraft": dashboards})
+	writeJSON(c, http.StatusOK, map[string]any{"aircraft": dashboards})
 }
 
-func (s *Server) handleGetAircraft(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := s.contextWithTimeout(r)
+func (s *Server) handleGetAircraft(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
 
-	dashboard, err := s.fleet.GetAircraftDashboard(ctx, r.PathValue("aircraft_id"))
+	dashboard, err := s.fleet.GetAircraftDashboard(ctx, c.Param("aircraft_id"))
 	if err != nil {
-		writeServiceError(w, err)
+		writeServiceError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, dashboard)
+	writeJSON(c, http.StatusOK, dashboard)
 }
 
-func (s *Server) handleListAircraftFlights(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := s.contextWithTimeout(r)
+func (s *Server) handleListAircraftFlights(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
 
-	flights, err := s.fleet.ListFlightRecords(ctx, r.PathValue("aircraft_id"))
+	flights, err := s.fleet.ListFlightRecords(ctx, c.Param("aircraft_id"))
 	if err != nil {
-		writeServiceError(w, err)
+		writeServiceError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"flights": flights})
+	writeJSON(c, http.StatusOK, map[string]any{"flights": flights})
 }
 
-func (s *Server) handleGetFlight(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := s.contextWithTimeout(r)
+func (s *Server) handleGetFlight(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
 
-	flight, err := s.fleet.GetFlightRecord(ctx, r.PathValue("flight_id"))
+	flight, err := s.fleet.GetFlightRecord(ctx, c.Param("flight_id"))
 	if err != nil {
-		writeServiceError(w, err)
+		writeServiceError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, flight)
+	writeJSON(c, http.StatusOK, flight)
 }
 
-func (s *Server) handleGetFlightReplay(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := s.contextWithTimeout(r)
+func (s *Server) handleGetFlightReplay(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
 
-	limit, err := parseLimit(r)
+	limit, err := parseLimit(c)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	replay, err := s.fleet.GetFlightReplay(ctx, r.PathValue("flight_id"), limit)
+	replay, err := s.fleet.GetFlightReplay(ctx, c.Param("flight_id"), limit)
 	if err != nil {
-		writeServiceError(w, err)
+		writeServiceError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, replay)
+	writeJSON(c, http.StatusOK, replay)
 }
 
-func (s *Server) handleCreateAircraft(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleCreateAircraft(c *mach.Context) {
 	var aircraft domain.Aircraft
-	if err := decodeJSON(r, &aircraft); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := decodeJSON(c, &aircraft); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	if strings.TrimSpace(aircraft.ID) == "" {
-		writeError(w, http.StatusBadRequest, "id is required")
+		writeError(c, http.StatusBadRequest, "id is required")
 		return
 	}
 	now := time.Now().UTC()
@@ -102,23 +175,23 @@ func (s *Server) handleCreateAircraft(w http.ResponseWriter, r *http.Request) {
 	}
 	aircraft.UpdatedAt = now
 
-	ctx, cancel := s.contextWithTimeout(r)
+	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
 	if err := s.fleet.CreateAircraft(ctx, aircraft); err != nil {
-		writeServiceError(w, err)
+		writeServiceError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, aircraft)
+	writeJSON(c, http.StatusCreated, aircraft)
 }
 
-func (s *Server) handleCreateBattery(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleCreateBattery(c *mach.Context) {
 	var battery domain.Battery
-	if err := decodeJSON(r, &battery); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := decodeJSON(c, &battery); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	if strings.TrimSpace(battery.ID) == "" {
-		writeError(w, http.StatusBadRequest, "id is required")
+		writeError(c, http.StatusBadRequest, "id is required")
 		return
 	}
 	now := time.Now().UTC()
@@ -127,48 +200,48 @@ func (s *Server) handleCreateBattery(w http.ResponseWriter, r *http.Request) {
 	}
 	battery.UpdatedAt = now
 
-	ctx, cancel := s.contextWithTimeout(r)
+	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
 	if err := s.fleet.CreateBattery(ctx, battery); err != nil {
-		writeServiceError(w, err)
+		writeServiceError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, battery)
+	writeJSON(c, http.StatusCreated, battery)
 }
 
-func (s *Server) handleCreateMaintenanceEvent(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleCreateMaintenanceEvent(c *mach.Context) {
 	var event domain.MaintenanceEvent
-	if err := decodeJSON(r, &event); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := decodeJSON(c, &event); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	if strings.TrimSpace(event.ID) == "" {
-		writeError(w, http.StatusBadRequest, "id is required")
+		writeError(c, http.StatusBadRequest, "id is required")
 		return
 	}
 	if strings.TrimSpace(event.AircraftID) == "" {
-		writeError(w, http.StatusBadRequest, "aircraft_id is required")
+		writeError(c, http.StatusBadRequest, "aircraft_id is required")
 		return
 	}
 	if event.OpenedAt.IsZero() {
 		event.OpenedAt = time.Now().UTC()
 	}
 
-	ctx, cancel := s.contextWithTimeout(r)
+	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
 	if err := s.fleet.RecordMaintenanceEvent(ctx, event); err != nil {
-		writeServiceError(w, err)
+		writeServiceError(c, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, event)
+	writeJSON(c, http.StatusCreated, event)
 }
 
-func (s *Server) contextWithTimeout(r *http.Request) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(r.Context(), s.requestTimeout)
+func (s *Server) contextWithTimeout(c *mach.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(c.Context(), s.requestTimeout)
 }
 
-func parseLimit(r *http.Request) (int, error) {
-	raw := r.URL.Query().Get("limit")
+func parseLimit(c *mach.Context) (int, error) {
+	raw := c.Query("limit")
 	if raw == "" {
 		return 500, nil
 	}
@@ -182,9 +255,9 @@ func parseLimit(r *http.Request) (int, error) {
 	return limit, nil
 }
 
-func decodeJSON(r *http.Request, dst any) error {
-	defer r.Body.Close()
-	decoder := json.NewDecoder(r.Body)
+func decodeJSON(c *mach.Context, dst any) error {
+	defer c.Request.Body.Close()
+	decoder := json.NewDecoder(c.Request.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(dst); err != nil {
 		return err

@@ -11,14 +11,16 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/registry"
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
-	"github.com/Aero-Arc/aero-arc-api/internal/store/memory"
+	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
+	replaymemory "github.com/Aero-Arc/aero-arc-api/internal/store/replay/memory"
+	telemetrymemory "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/memory"
 )
 
 func TestHandleListAircraft(t *testing.T) {
 	ctx := context.Background()
-	durable := memory.NewDurableStore()
-	telemetry := memory.NewTelemetryStore()
-	replay := memory.NewReplayStore()
+	durable := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	replay := replaymemory.NewStore()
 	reg := registry.NewMemoryClient()
 
 	if err := durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1", TailNumber: "N100AA"}); err != nil {
@@ -61,5 +63,70 @@ func TestHandleListAircraft(t *testing.T) {
 	}
 	if body.Aircraft[0].Readiness.Status != "ready" {
 		t.Fatalf("readiness = %q, want ready", body.Aircraft[0].Readiness.Status)
+	}
+}
+
+func TestHandleGetAircraftUsesMachPathParam(t *testing.T) {
+	ctx := context.Background()
+	durable := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	replay := replaymemory.NewStore()
+	reg := registry.NewMemoryClient()
+
+	if err := durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1", TailNumber: "N100AA"}); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := service.NewFleetService(durable, telemetry, replay, reg)
+	server := New(svc, time.Second)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/aircraft/aircraft-1", nil)
+	rec := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var body domain.AircraftDashboard
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Aircraft.ID != "aircraft-1" {
+		t.Fatalf("aircraft ID = %q, want aircraft-1", body.Aircraft.ID)
+	}
+}
+
+func TestHandleGetOverviewDashboard(t *testing.T) {
+	ctx := context.Background()
+	durable := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	replay := replaymemory.NewStore()
+	reg := registry.NewMemoryClient()
+
+	if err := durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1", TailNumber: "N100AA"}); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := service.NewFleetService(durable, telemetry, replay, reg)
+	server := New(svc, time.Second)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/overview", nil)
+	rec := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var body domain.OverviewDashboard
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Metrics) == 0 {
+		t.Fatal("metrics are empty")
+	}
+	if len(body.Aircraft) != 1 {
+		t.Fatalf("aircraft count = %d, want 1", len(body.Aircraft))
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -13,21 +14,109 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/httpapi"
 	"github.com/Aero-Arc/aero-arc-api/internal/registry"
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
-	"github.com/Aero-Arc/aero-arc-api/internal/store/memory"
+	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
+	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
+	"github.com/Aero-Arc/aero-arc-api/internal/store/replay"
+	replaymemory "github.com/Aero-Arc/aero-arc-api/internal/store/replay/memory"
+	"github.com/Aero-Arc/aero-arc-api/internal/store/telemetry"
+	telemetrymemory "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/memory"
+	"github.com/urfave/cli/v3"
 )
 
 func main() {
-	cfg, err := config.Load()
-	if err != nil {
-		slog.Error("failed to load config", slog.String("error", err.Error()))
+	cmd := newCommand()
+	if err := cmd.Run(context.Background(), os.Args); err != nil {
+		slog.Error("aero-arc-api failed", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+}
 
-	ctx := context.Background()
+func newCommand() *cli.Command {
+	defaults := config.Defaults()
+
+	return &cli.Command{
+		Name:  "aero-arc-api",
+		Usage: "run the Aero Arc API service",
+		Commands: []*cli.Command{
+			{
+				Name:  "start",
+				Usage: "start the HTTP API server",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:    "addr",
+						Value:   defaults.Addr,
+						Usage:   "HTTP listen address",
+						Sources: cli.EnvVars("AERO_API_ADDR"),
+					},
+					&cli.StringFlag{
+						Name:    "durable-store",
+						Value:   defaults.DurableStore,
+						Usage:   "durable store mode",
+						Sources: cli.EnvVars("AERO_API_DURABLE_STORE"),
+					},
+					&cli.StringFlag{
+						Name:    "telemetry-store",
+						Value:   defaults.TelemetryStore,
+						Usage:   "telemetry store mode",
+						Sources: cli.EnvVars("AERO_API_TELEMETRY_STORE"),
+					},
+					&cli.StringFlag{
+						Name:    "replay-store",
+						Value:   defaults.ReplayStore,
+						Usage:   "replay store mode",
+						Sources: cli.EnvVars("AERO_API_REPLAY_STORE"),
+					},
+					&cli.StringFlag{
+						Name:    "registry-mode",
+						Value:   defaults.RegistryMode,
+						Usage:   "registry client mode",
+						Sources: cli.EnvVars("AERO_API_REGISTRY_MODE"),
+					},
+					&cli.StringFlag{
+						Name:    "registry-addr",
+						Value:   defaults.RegistryAddress,
+						Usage:   "registry gRPC address",
+						Sources: cli.EnvVars("AERO_API_REGISTRY_ADDR"),
+					},
+					&cli.DurationFlag{
+						Name:    "registry-dial-timeout",
+						Value:   defaults.RegistryDialTimeout,
+						Usage:   "registry gRPC dial timeout",
+						Sources: cli.EnvVars("AERO_API_REGISTRY_DIAL_TIMEOUT"),
+					},
+					&cli.DurationFlag{
+						Name:    "request-timeout",
+						Value:   defaults.RequestTimeout,
+						Usage:   "per-request timeout",
+						Sources: cli.EnvVars("AERO_API_REQUEST_TIMEOUT"),
+					},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					cfg := &config.Config{
+						Addr:                cmd.String("addr"),
+						DurableStore:        cmd.String("durable-store"),
+						TelemetryStore:      cmd.String("telemetry-store"),
+						ReplayStore:         cmd.String("replay-store"),
+						RegistryMode:        cmd.String("registry-mode"),
+						RegistryAddress:     cmd.String("registry-addr"),
+						RegistryDialTimeout: cmd.Duration("registry-dial-timeout"),
+						RequestTimeout:      cmd.Duration("request-timeout"),
+					}
+					if err := cfg.Validate(); err != nil {
+						return err
+					}
+
+					return run(ctx, cfg)
+				},
+			},
+		},
+	}
+}
+
+func run(ctx context.Context, cfg *config.Config) error {
 	registryClient, closeRegistry, err := registry.New(ctx, cfg.RegistryMode, cfg.RegistryAddress, cfg.RegistryDialTimeout)
 	if err != nil {
-		slog.Error("failed to initialize registry client", slog.String("error", err.Error()))
-		os.Exit(1)
+		return err
 	}
 	defer func() {
 		if err := closeRegistry(); err != nil {
@@ -35,10 +124,18 @@ func main() {
 		}
 	}()
 
-	// TODO: wire tidb/postgres durable stores, influxdb telemetry, s3 replay storage, and real registry gRPC clients.
-	durableStore := memory.NewDurableStore()
-	telemetryStore := memory.NewTelemetryStore()
-	replayStore := memory.NewReplayStore()
+	durableStore, err := newDurableStore(cfg.DurableStore)
+	if err != nil {
+		return err
+	}
+	telemetryStore, err := newTelemetryStore(cfg.TelemetryStore)
+	if err != nil {
+		return err
+	}
+	replayStore, err := newReplayStore(cfg.ReplayStore)
+	if err != nil {
+		return err
+	}
 	fleetService := service.NewFleetService(durableStore, telemetryStore, replayStore, registryClient)
 
 	httpServer := &http.Server{
@@ -47,23 +144,30 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
+	serverErr := make(chan error, 1)
 	go func() {
 		slog.Info("starting aero-arc-api",
 			slog.String("http_addr", cfg.Addr),
-			slog.String("store_mode", cfg.StoreMode),
+			slog.String("durable_store", cfg.DurableStore),
+			slog.String("telemetry_store", cfg.TelemetryStore),
+			slog.String("replay_store", cfg.ReplayStore),
 			slog.String("registry_mode", cfg.RegistryMode),
 			slog.String("registry_addr", cfg.RegistryAddress),
 		)
 
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("http server stopped unexpectedly", slog.String("error", err.Error()))
-			os.Exit(1)
+			serverErr <- err
 		}
 	}()
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	select {
+	case <-ctx.Done():
+	case err := <-serverErr:
+		return err
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -73,4 +177,32 @@ func main() {
 	}
 
 	slog.Info("aero-arc-api shutdown complete")
+	return nil
+}
+
+func newDurableStore(mode string) (durable.Store, error) {
+	switch mode {
+	case "memory":
+		return durablememory.NewStore(), nil
+	default:
+		return nil, fmt.Errorf("unsupported durable store %q", mode)
+	}
+}
+
+func newTelemetryStore(mode string) (telemetry.Store, error) {
+	switch mode {
+	case "memory":
+		return telemetrymemory.NewStore(), nil
+	default:
+		return nil, fmt.Errorf("unsupported telemetry store %q", mode)
+	}
+}
+
+func newReplayStore(mode string) (replay.Store, error) {
+	switch mode {
+	case "memory":
+		return replaymemory.NewStore(), nil
+	default:
+		return nil, fmt.Errorf("unsupported replay store %q", mode)
+	}
 }

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
+	"github.com/mrshabel/mach"
 )
 
 type Server struct {
@@ -17,34 +18,33 @@ func New(fleet *service.FleetService, requestTimeout time.Duration) *Server {
 }
 
 func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", s.handleHealthz)
-	mux.HandleFunc("GET /readyz", s.handleReadyz)
+	app := mach.New()
+	app.Use(mach.CORSWithConfig(mach.CORSConfig{
+		AllowOrigins: []string{"*"},
+		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodOptions},
+		AllowHeaders: []string{"Content-Type", "Authorization"},
+	}))
 
-	mux.HandleFunc("GET /api/v1/aircraft", s.handleListAircraft)
-	mux.HandleFunc("POST /api/v1/aircraft", s.handleCreateAircraft)
-	mux.HandleFunc("GET /api/v1/aircraft/{aircraft_id}", s.handleGetAircraft)
-	mux.HandleFunc("GET /api/v1/aircraft/{aircraft_id}/flights", s.handleListAircraftFlights)
-	mux.HandleFunc("GET /api/v1/flights/{flight_id}", s.handleGetFlight)
-	mux.HandleFunc("GET /api/v1/flights/{flight_id}/replay", s.handleGetFlightReplay)
+	app.GET("/healthz", s.handleHealthz)
+	app.GET("/readyz", s.handleReadyz)
 
-	mux.HandleFunc("POST /api/v1/batteries", s.handleCreateBattery)
-	mux.HandleFunc("POST /api/v1/maintenance-events", s.handleCreateMaintenanceEvent)
+	api := app.Group("/api/v1")
+	api.GET("/overview", s.handleGetOverviewDashboard)
+	api.GET("/operations", s.handleGetOperationsDashboard)
+	api.GET("/preflight", s.handleGetPreflightDashboard)
+	api.GET("/conformance", s.handleGetConformanceDashboard)
+	api.GET("/maintenance", s.handleGetMaintenanceDashboard)
+	api.GET("/records", s.handleGetRecordsDashboard)
 
-	return withCORS(mux)
-}
+	api.GET("/aircraft", s.handleListAircraft)
+	api.POST("/aircraft", s.handleCreateAircraft)
+	api.GET("/aircraft/{aircraft_id}", s.handleGetAircraft)
+	api.GET("/aircraft/{aircraft_id}/flights", s.handleListAircraftFlights)
+	api.GET("/flights/{flight_id}", s.handleGetFlight)
+	api.GET("/flights/{flight_id}/replay", s.handleGetFlightReplay)
 
-func withCORS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	api.POST("/batteries", s.handleCreateBattery)
+	api.POST("/maintenance-events", s.handleCreateMaintenanceEvent)
 
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
+	return app
 }

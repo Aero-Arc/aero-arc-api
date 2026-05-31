@@ -3,7 +3,9 @@ services:
     build: .
     environment:
       AERO_API_ADDR: ":8080"
-      AERO_API_STORE_MODE: "memory"
+      AERO_API_DURABLE_STORE: "memory"
+      AERO_API_TELEMETRY_STORE: "memory"
+      AERO_API_REPLAY_STORE: "memory"
       AERO_API_REGISTRY_MODE: "memory"
       AERO_API_REGISTRY_ADDR: "localhost:50051"
     ports:
@@ -11,7 +13,7 @@ services:
 
     # Future wiring:
     # - Set AERO_API_REGISTRY_MODE=grpc when aero-arc-registry is reachable at AERO_API_REGISTRY_ADDR.
-    # - TiDB/Postgres durable store configuration belongs in store-specific env vars.
-    # - Telemetry store configuration, such as InfluxDB, belongs in telemetry-specific env vars.
-    # - Replay storage configuration, such as S3/object storage, belongs in replay-specific env vars.
+    # - Set AERO_API_DURABLE_STORE=postgres or tidb once those backends are wired.
+    # - Set AERO_API_TELEMETRY_STORE=influxdb once that backend is wired.
+    # - Set AERO_API_REPLAY_STORE=s3 once that backend is wired.
     # - The frontend should call only aero-arc-api, not registry or stores directly.
