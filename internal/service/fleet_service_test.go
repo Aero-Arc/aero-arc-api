@@ -54,12 +54,12 @@ func TestFleetServiceComposesAircraftDashboard(t *testing.T) {
 	registry := newTestRegistry()
 
 	must(t, durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1", AgentID: "agent-1", TailNumber: "N100AA"}))
-	must(t, durable.CreateBattery(ctx, domain.Battery{ID: "battery-1", StateOfHealth: 94}))
+	must(t, durable.CreateBattery(ctx, domain.Battery{ID: "battery-1", StateOfHealth: float64Ptr(94)}))
 	must(t, durable.RecordBatteryInstallation(ctx, domain.BatteryInstallation{
 		ID: "install-1", AircraftID: "aircraft-1", BatteryID: "battery-1", InstalledAt: now,
 	}))
 	must(t, telemetry.AddSample(ctx, domain.TelemetrySample{
-		ID: "sample-1", AircraftID: "aircraft-1", RecordedAt: now, BatteryPct: 87,
+		ID: "sample-1", AircraftID: "aircraft-1", RecordedAt: now, BatteryPct: float64Ptr(87),
 	}))
 	must(t, registry.SetLiveAircraftState(ctx, domain.LiveAircraftState{
 		AircraftID: "aircraft-1", AgentID: "agent-1", RelayID: "relay-1", Connected: true,
@@ -90,7 +90,7 @@ func TestFleetServiceComposesAircraftDashboard(t *testing.T) {
 
 func TestReadinessCalculation(t *testing.T) {
 	now := time.Now().UTC()
-	battery := &domain.Battery{ID: "battery-1", StateOfHealth: 90}
+	battery := &domain.Battery{ID: "battery-1", StateOfHealth: float64Ptr(90)}
 	critical := []domain.MaintenanceEvent{{
 		ID: "mx-1", Severity: "critical", OpenedAt: now,
 	}}
@@ -99,7 +99,7 @@ func TestReadinessCalculation(t *testing.T) {
 		t.Fatalf("critical readiness = %q, want blocked", got.Status)
 	}
 
-	lowBattery := &domain.Battery{ID: "battery-1", StateOfHealth: 79}
+	lowBattery := &domain.Battery{ID: "battery-1", StateOfHealth: float64Ptr(79)}
 	if got := CalculateReadiness(lowBattery, nil, true); got.Status != "warning" {
 		t.Fatalf("low battery readiness = %q, want warning", got.Status)
 	}
@@ -120,7 +120,7 @@ func TestFleetServiceGracefullyDegradesWhenRegistryUnavailable(t *testing.T) {
 	replay := replaymemory.NewStore()
 
 	must(t, durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1"}))
-	must(t, durable.CreateBattery(ctx, domain.Battery{ID: "battery-1", StateOfHealth: 92}))
+	must(t, durable.CreateBattery(ctx, domain.Battery{ID: "battery-1", StateOfHealth: float64Ptr(92)}))
 	must(t, durable.RecordBatteryInstallation(ctx, domain.BatteryInstallation{
 		ID: "install-1", AircraftID: "aircraft-1", BatteryID: "battery-1", InstalledAt: time.Now().UTC(),
 	}))
@@ -151,4 +151,8 @@ func must(t *testing.T, err error) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+func float64Ptr(value float64) *float64 {
+	return &value
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
+	"github.com/Aero-Arc/aero-arc-api/internal/readmodel"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/replay"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/telemetry"
@@ -51,25 +52,25 @@ func (s *FleetService) RecordMaintenanceEvent(ctx context.Context, event domain.
 	return s.durable.RecordMaintenanceEvent(ctx, event)
 }
 
-func (s *FleetService) GetOverviewDashboard(ctx context.Context) (domain.OverviewDashboard, error) {
+func (s *FleetService) GetOverviewDashboard(ctx context.Context) (readmodel.OverviewDashboard, error) {
 	aircraft, err := s.ListAircraftDashboards(ctx)
 	if err != nil {
-		return domain.OverviewDashboard{}, err
+		return readmodel.OverviewDashboard{}, err
 	}
 	intents, err := s.durable.ListOperationalIntents(ctx, "")
 	if err != nil {
-		return domain.OverviewDashboard{}, fmt.Errorf("list operational intents: %w", err)
+		return readmodel.OverviewDashboard{}, fmt.Errorf("list operational intents: %w", err)
 	}
 	evidence, err := s.durable.ListEvidence(ctx, "")
 	if err != nil {
-		return domain.OverviewDashboard{}, fmt.Errorf("list evidence: %w", err)
+		return readmodel.OverviewDashboard{}, fmt.Errorf("list evidence: %w", err)
 	}
 	reviews, err := s.durable.ListReportabilityReviews(ctx, "")
 	if err != nil {
-		return domain.OverviewDashboard{}, fmt.Errorf("list reportability reviews: %w", err)
+		return readmodel.OverviewDashboard{}, fmt.Errorf("list reportability reviews: %w", err)
 	}
 
-	return domain.OverviewDashboard{
+	return readmodel.OverviewDashboard{
 		Metrics:             overviewMetrics(aircraft, intents, evidence, reviews),
 		Aircraft:            aircraft,
 		OperationalIntents:  intents,
@@ -78,93 +79,93 @@ func (s *FleetService) GetOverviewDashboard(ctx context.Context) (domain.Overvie
 	}, nil
 }
 
-func (s *FleetService) GetOperationsDashboard(ctx context.Context) (domain.OperationsDashboard, error) {
+func (s *FleetService) GetOperationsDashboard(ctx context.Context) (readmodel.OperationsDashboard, error) {
 	intents, err := s.durable.ListOperationalIntents(ctx, "")
 	if err != nil {
-		return domain.OperationsDashboard{}, fmt.Errorf("list operational intents: %w", err)
+		return readmodel.OperationsDashboard{}, fmt.Errorf("list operational intents: %w", err)
 	}
 	conformance, err := s.durable.ListConformanceSummaries(ctx, "")
 	if err != nil {
-		return domain.OperationsDashboard{}, fmt.Errorf("list conformance summaries: %w", err)
+		return readmodel.OperationsDashboard{}, fmt.Errorf("list conformance summaries: %w", err)
 	}
 
-	return domain.OperationsDashboard{
+	return readmodel.OperationsDashboard{
 		Metrics:            operationsMetrics(intents, conformance),
 		OperationalIntents: intents,
 		Conformance:        conformance,
 	}, nil
 }
 
-func (s *FleetService) GetPreflightDashboard(ctx context.Context) (domain.PreflightDashboard, error) {
+func (s *FleetService) GetPreflightDashboard(ctx context.Context) (readmodel.PreflightDashboard, error) {
 	checks, err := s.durable.ListPreflightChecks(ctx, "")
 	if err != nil {
-		return domain.PreflightDashboard{}, fmt.Errorf("list preflight checks: %w", err)
+		return readmodel.PreflightDashboard{}, fmt.Errorf("list preflight checks: %w", err)
 	}
 
-	return domain.PreflightDashboard{
+	return readmodel.PreflightDashboard{
 		Metrics: preflightMetrics(checks),
 		Checks:  checks,
 	}, nil
 }
 
-func (s *FleetService) GetConformanceDashboard(ctx context.Context) (domain.ConformanceDashboard, error) {
+func (s *FleetService) GetConformanceDashboard(ctx context.Context) (readmodel.ConformanceDashboard, error) {
 	summaries, err := s.durable.ListConformanceSummaries(ctx, "")
 	if err != nil {
-		return domain.ConformanceDashboard{}, fmt.Errorf("list conformance summaries: %w", err)
+		return readmodel.ConformanceDashboard{}, fmt.Errorf("list conformance summaries: %w", err)
 	}
 	events, err := s.durable.ListConformanceEvents(ctx, "")
 	if err != nil {
-		return domain.ConformanceDashboard{}, fmt.Errorf("list conformance events: %w", err)
+		return readmodel.ConformanceDashboard{}, fmt.Errorf("list conformance events: %w", err)
 	}
 
-	return domain.ConformanceDashboard{
+	return readmodel.ConformanceDashboard{
 		Metrics:   conformanceMetrics(summaries, events),
 		Summaries: summaries,
 		Events:    events,
 	}, nil
 }
 
-func (s *FleetService) GetMaintenanceDashboard(ctx context.Context) (domain.MaintenanceDashboard, error) {
+func (s *FleetService) GetMaintenanceDashboard(ctx context.Context) (readmodel.MaintenanceDashboard, error) {
 	events, err := s.durable.ListMaintenanceEvents(ctx, "")
 	if err != nil {
-		return domain.MaintenanceDashboard{}, fmt.Errorf("list maintenance events: %w", err)
+		return readmodel.MaintenanceDashboard{}, fmt.Errorf("list maintenance events: %w", err)
 	}
 	batteries, err := s.durable.ListBatteries(ctx)
 	if err != nil {
-		return domain.MaintenanceDashboard{}, fmt.Errorf("list batteries: %w", err)
+		return readmodel.MaintenanceDashboard{}, fmt.Errorf("list batteries: %w", err)
 	}
 
-	return domain.MaintenanceDashboard{
+	return readmodel.MaintenanceDashboard{
 		Metrics:   maintenanceMetrics(events, batteries),
 		Events:    events,
 		Batteries: batteries,
 	}, nil
 }
 
-func (s *FleetService) GetRecordsDashboard(ctx context.Context) (domain.RecordsDashboard, error) {
+func (s *FleetService) GetRecordsDashboard(ctx context.Context) (readmodel.RecordsDashboard, error) {
 	evidence, err := s.durable.ListEvidence(ctx, "")
 	if err != nil {
-		return domain.RecordsDashboard{}, fmt.Errorf("list evidence: %w", err)
+		return readmodel.RecordsDashboard{}, fmt.Errorf("list evidence: %w", err)
 	}
 	reviews, err := s.durable.ListReportabilityReviews(ctx, "")
 	if err != nil {
-		return domain.RecordsDashboard{}, fmt.Errorf("list reportability reviews: %w", err)
+		return readmodel.RecordsDashboard{}, fmt.Errorf("list reportability reviews: %w", err)
 	}
 
-	return domain.RecordsDashboard{
+	return readmodel.RecordsDashboard{
 		Metrics:             recordsMetrics(evidence, reviews),
 		EvidenceRecords:     evidence,
 		ReportabilityReview: reviews,
 	}, nil
 }
 
-func (s *FleetService) ListAircraftDashboards(ctx context.Context) ([]domain.AircraftDashboard, error) {
+func (s *FleetService) ListAircraftDashboards(ctx context.Context) ([]readmodel.AircraftDashboard, error) {
 	aircraft, err := s.durable.ListAircraft(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list aircraft: %w", err)
 	}
 
-	dashboards := make([]domain.AircraftDashboard, 0, len(aircraft))
+	dashboards := make([]readmodel.AircraftDashboard, 0, len(aircraft))
 	for _, item := range aircraft {
 		dashboard, err := s.buildDashboard(ctx, item)
 		if err != nil {
@@ -175,10 +176,10 @@ func (s *FleetService) ListAircraftDashboards(ctx context.Context) ([]domain.Air
 	return dashboards, nil
 }
 
-func (s *FleetService) GetAircraftDashboard(ctx context.Context, aircraftID string) (domain.AircraftDashboard, error) {
+func (s *FleetService) GetAircraftDashboard(ctx context.Context, aircraftID string) (readmodel.AircraftDashboard, error) {
 	aircraft, err := s.durable.GetAircraft(ctx, aircraftID)
 	if err != nil {
-		return domain.AircraftDashboard{}, fmt.Errorf("get aircraft: %w", err)
+		return readmodel.AircraftDashboard{}, fmt.Errorf("get aircraft: %w", err)
 	}
 	return s.buildDashboard(ctx, aircraft)
 }
@@ -231,21 +232,21 @@ func (s *FleetService) GetFlightReplay(ctx context.Context, flightID string, lim
 	}, nil
 }
 
-func (s *FleetService) buildDashboard(ctx context.Context, aircraft domain.Aircraft) (domain.AircraftDashboard, error) {
+func (s *FleetService) buildDashboard(ctx context.Context, aircraft domain.Aircraft) (readmodel.AircraftDashboard, error) {
 	battery, err := s.activeBattery(ctx, aircraft.ID)
 	if err != nil {
-		return domain.AircraftDashboard{}, err
+		return readmodel.AircraftDashboard{}, err
 	}
 
 	maintenanceEvents, err := s.durable.ListMaintenanceEvents(ctx, aircraft.ID)
 	if err != nil {
-		return domain.AircraftDashboard{}, fmt.Errorf("list maintenance events: %w", err)
+		return readmodel.AircraftDashboard{}, fmt.Errorf("list maintenance events: %w", err)
 	}
 
 	latestTelemetry, _ := s.telemetry.GetLatestSample(ctx, aircraft.ID)
 	liveState, liveAvailable := s.liveState(ctx, aircraft)
 
-	return domain.AircraftDashboard{
+	return readmodel.AircraftDashboard{
 		Aircraft:           aircraft,
 		ActiveBattery:      battery,
 		MaintenanceEvents:  maintenanceEvents,
@@ -333,7 +334,7 @@ func CalculateReadiness(battery *domain.Battery, maintenanceEvents []domain.Main
 
 	if battery == nil {
 		reasons = append(reasons, "battery missing")
-	} else if battery.StateOfHealth < 80 {
+	} else if battery.StateOfHealth != nil && *battery.StateOfHealth < 80 {
 		reasons = append(reasons, "battery state of health below 80")
 	}
 	if !liveStateAvailable {
@@ -349,7 +350,7 @@ func CalculateReadiness(battery *domain.Battery, maintenanceEvents []domain.Main
 	return domain.Readiness{Status: "unknown", Reasons: []string{"not enough data"}}
 }
 
-func overviewMetrics(aircraft []domain.AircraftDashboard, intents []domain.OperationalIntent, evidence []domain.EvidenceRecord, reviews []domain.ReportabilityReview) []domain.DashboardMetric {
+func overviewMetrics(aircraft []readmodel.AircraftDashboard, intents []domain.OperationalIntent, evidence []domain.EvidenceRecord, reviews []domain.ReportabilityReview) []readmodel.DashboardMetric {
 	readyAircraft := 0
 	openBlocks := 0
 	for _, item := range aircraft {
@@ -363,7 +364,7 @@ func overviewMetrics(aircraft []domain.AircraftDashboard, intents []domain.Opera
 
 	activeIntents := 0
 	for _, intent := range intents {
-		if intent.Status == domain.IntentStatusActive || intent.Status == domain.IntentStatusReady {
+		if intent.Status == domain.IntentStatusActive || intent.Status == domain.IntentStatusAccepted {
 			activeIntents++
 		}
 	}
@@ -375,47 +376,47 @@ func overviewMetrics(aircraft []domain.AircraftDashboard, intents []domain.Opera
 		}
 	}
 
-	return []domain.DashboardMetric{
+	return []readmodel.DashboardMetric{
 		{Label: "Ready aircraft", Value: fmt.Sprintf("%d/%d", readyAircraft, len(aircraft)), Status: string(domain.ReadinessStatusReady)},
-		{Label: "Active intents", Value: fmt.Sprintf("%d", activeIntents), Status: string(domain.IntentStatusActive)},
+		{Label: "Accepted/active intents", Value: fmt.Sprintf("%d", activeIntents), Status: string(domain.IntentStatusAccepted)},
 		{Label: "Open preflight blocks", Value: fmt.Sprintf("%d", openBlocks), Status: string(domain.ReadinessStatusBlocked)},
 		{Label: "Evidence records", Value: fmt.Sprintf("%d", len(evidence))},
 		{Label: "Reportable events", Value: fmt.Sprintf("%d", reportable), Status: string(domain.ReportabilityStatusReportable)},
 	}
 }
 
-func operationsMetrics(intents []domain.OperationalIntent, conformance []domain.ConformanceSummary) []domain.DashboardMetric {
-	ready := 0
-	blocked := 0
+func operationsMetrics(intents []domain.OperationalIntent, conformance []domain.ConformanceSummary) []readmodel.DashboardMetric {
+	accepted := 0
+	submitted := 0
 	conformanceRequired := 0
 	for _, intent := range intents {
 		switch intent.Status {
-		case domain.IntentStatusReady:
-			ready++
-		case domain.IntentStatusBlocked:
-			blocked++
+		case domain.IntentStatusAccepted:
+			accepted++
+		case domain.IntentStatusSubmitted, domain.IntentStatusReview:
+			submitted++
 		}
 		if intent.ConformanceRequired {
 			conformanceRequired++
 		}
 	}
 
-	activeConformance := 0
+	nonConforming := 0
 	for _, summary := range conformance {
-		if summary.Status == domain.ConformanceStatusActive || summary.Status == domain.ConformanceStatusRequired {
-			activeConformance++
+		if summary.Status == domain.ConformanceStatusNonConforming {
+			nonConforming++
 		}
 	}
 
-	return []domain.DashboardMetric{
+	return []readmodel.DashboardMetric{
 		{Label: "Operational intents", Value: fmt.Sprintf("%d", len(intents))},
-		{Label: "Ready to launch", Value: fmt.Sprintf("%d", ready), Status: string(domain.IntentStatusReady)},
-		{Label: "Blocked", Value: fmt.Sprintf("%d", blocked), Status: string(domain.IntentStatusBlocked)},
-		{Label: "Conformance required", Value: fmt.Sprintf("%d", conformanceRequired), Detail: fmt.Sprintf("%d active monitors", activeConformance)},
+		{Label: "Accepted", Value: fmt.Sprintf("%d", accepted), Status: string(domain.IntentStatusAccepted)},
+		{Label: "Submitted/review", Value: fmt.Sprintf("%d", submitted), Status: string(domain.IntentStatusSubmitted)},
+		{Label: "Conformance required", Value: fmt.Sprintf("%d", conformanceRequired), Detail: fmt.Sprintf("%d non-conforming", nonConforming)},
 	}
 }
 
-func preflightMetrics(checks []domain.PreflightCheck) []domain.DashboardMetric {
+func preflightMetrics(checks []domain.PreflightCheck) []readmodel.DashboardMetric {
 	clear := 0
 	review := 0
 	blocked := 0
@@ -430,41 +431,45 @@ func preflightMetrics(checks []domain.PreflightCheck) []domain.DashboardMetric {
 		}
 	}
 
-	return []domain.DashboardMetric{
+	return []readmodel.DashboardMetric{
 		{Label: "Checks complete", Value: fmt.Sprintf("%d/%d", clear, len(checks)), Status: string(domain.PreflightStatusClear)},
 		{Label: "Needs review", Value: fmt.Sprintf("%d", review), Status: string(domain.PreflightStatusReview)},
 		{Label: "Blocking items", Value: fmt.Sprintf("%d", blocked), Status: string(domain.PreflightStatusBlocked)},
 	}
 }
 
-func conformanceMetrics(summaries []domain.ConformanceSummary, events []domain.ConformanceEvent) []domain.DashboardMetric {
-	active := 0
+func conformanceMetrics(summaries []domain.ConformanceSummary, events []domain.ConformanceEvent) []readmodel.DashboardMetric {
+	conforming := 0
 	reportable := 0
 	totalScore := 0.0
+	scores := 0
 	for _, summary := range summaries {
-		if summary.Status == domain.ConformanceStatusActive {
-			active++
+		if summary.Status == domain.ConformanceStatusConforming {
+			conforming++
 		}
 		if summary.ReportabilityStatus == domain.ReportabilityStatusReportable {
 			reportable++
 		}
-		totalScore += summary.Score
+		if summary.Score != nil {
+			totalScore += *summary.Score
+			scores++
+		}
 	}
 
 	avgScore := 0.0
-	if len(summaries) > 0 {
-		avgScore = totalScore / float64(len(summaries))
+	if scores > 0 {
+		avgScore = totalScore / float64(scores)
 	}
 
-	return []domain.DashboardMetric{
+	return []readmodel.DashboardMetric{
 		{Label: "Target conformance", Value: fmt.Sprintf("%.1f%%", avgScore*100)},
-		{Label: "Active monitors", Value: fmt.Sprintf("%d", active), Status: string(domain.ConformanceStatusActive)},
+		{Label: "Conforming", Value: fmt.Sprintf("%d", conforming), Status: string(domain.ConformanceStatusConforming)},
 		{Label: "Open alerts", Value: fmt.Sprintf("%d", len(events))},
 		{Label: "Reportable", Value: fmt.Sprintf("%d", reportable), Status: string(domain.ReportabilityStatusReportable)},
 	}
 }
 
-func maintenanceMetrics(events []domain.MaintenanceEvent, batteries []domain.Battery) []domain.DashboardMetric {
+func maintenanceMetrics(events []domain.MaintenanceEvent, batteries []domain.Battery) []readmodel.DashboardMetric {
 	openEvents := 0
 	critical := 0
 	for _, event := range events {
@@ -477,15 +482,21 @@ func maintenanceMetrics(events []domain.MaintenanceEvent, batteries []domain.Bat
 	}
 
 	avgSOH := 0.0
+	batteriesWithSOH := 0
 	if len(batteries) > 0 {
 		total := 0.0
 		for _, battery := range batteries {
-			total += battery.StateOfHealth
+			if battery.StateOfHealth != nil {
+				total += *battery.StateOfHealth
+				batteriesWithSOH++
+			}
 		}
-		avgSOH = total / float64(len(batteries))
+		if batteriesWithSOH > 0 {
+			avgSOH = total / float64(batteriesWithSOH)
+		}
 	}
 
-	return []domain.DashboardMetric{
+	return []readmodel.DashboardMetric{
 		{Label: "Open irregularities", Value: fmt.Sprintf("%d", openEvents)},
 		{Label: "Critical", Value: fmt.Sprintf("%d", critical), Status: string(domain.SeverityCritical)},
 		{Label: "Battery SOH avg", Value: fmt.Sprintf("%.0f%%", avgSOH)},
@@ -493,7 +504,7 @@ func maintenanceMetrics(events []domain.MaintenanceEvent, batteries []domain.Bat
 	}
 }
 
-func recordsMetrics(evidence []domain.EvidenceRecord, reviews []domain.ReportabilityReview) []domain.DashboardMetric {
+func recordsMetrics(evidence []domain.EvidenceRecord, reviews []domain.ReportabilityReview) []readmodel.DashboardMetric {
 	pending := 0
 	reportable := 0
 	for _, record := range evidence {
@@ -507,7 +518,7 @@ func recordsMetrics(evidence []domain.EvidenceRecord, reviews []domain.Reportabi
 		}
 	}
 
-	return []domain.DashboardMetric{
+	return []readmodel.DashboardMetric{
 		{Label: "Evidence records", Value: fmt.Sprintf("%d", len(evidence))},
 		{Label: "Pending reviews", Value: fmt.Sprintf("%d", pending), Status: string(domain.EvidenceStatusReview)},
 		{Label: "Reportable events", Value: fmt.Sprintf("%d", reportable), Status: string(domain.ReportabilityStatusReportable)},
