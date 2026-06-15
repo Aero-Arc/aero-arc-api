@@ -11,6 +11,7 @@ import (
 
 type Store struct {
 	mu                   sync.RWMutex
+	operators            map[string]domain.Operator
 	aircraft             map[string]domain.Aircraft
 	batteries            map[string]domain.Battery
 	batteryInstallations []domain.BatteryInstallation
@@ -18,27 +19,62 @@ type Store struct {
 	operatingLimits      map[string]domain.OperatingLimit
 	maintenanceEvents    []domain.MaintenanceEvent
 	operationalIntents   map[string]domain.OperationalIntent
+	operationalVolumes   map[string]domain.OperationalVolume
+	authorizations       map[string]domain.RegulatoryAuthorization
 	preflightChecks      []domain.PreflightCheck
 	flightRecords        map[string]domain.FlightRecord
 	conformanceEvents    []domain.ConformanceEvent
 	conformanceSummaries map[string]domain.ConformanceSummary
 	evidenceRecords      map[string]domain.EvidenceRecord
 	reportabilityReviews []domain.ReportabilityReview
+	complianceFindings   []domain.ComplianceFinding
 	personnel            map[string]domain.OperationsPersonnel
+	personnelAssignments []domain.PersonnelAssignment
 }
 
 func NewStore() *Store {
 	return &Store{
+		operators:            make(map[string]domain.Operator),
 		aircraft:             make(map[string]domain.Aircraft),
 		batteries:            make(map[string]domain.Battery),
 		operatingProfiles:    make(map[string]domain.AircraftOperatingProfile),
 		operatingLimits:      make(map[string]domain.OperatingLimit),
 		operationalIntents:   make(map[string]domain.OperationalIntent),
+		operationalVolumes:   make(map[string]domain.OperationalVolume),
+		authorizations:       make(map[string]domain.RegulatoryAuthorization),
 		flightRecords:        make(map[string]domain.FlightRecord),
 		conformanceSummaries: make(map[string]domain.ConformanceSummary),
 		evidenceRecords:      make(map[string]domain.EvidenceRecord),
 		personnel:            make(map[string]domain.OperationsPersonnel),
 	}
+}
+
+func (s *Store) UpsertOperator(_ context.Context, operator domain.Operator) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.operators[operator.ID] = operator
+	return nil
+}
+
+func (s *Store) GetOperator(_ context.Context, operatorID string) (domain.Operator, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	operator, ok := s.operators[operatorID]
+	if !ok {
+		return domain.Operator{}, durable.ErrNotFound
+	}
+	return operator, nil
+}
+
+func (s *Store) ListOperators(_ context.Context) ([]domain.Operator, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	operators := make([]domain.Operator, 0, len(s.operators))
+	for _, item := range s.operators {
+		operators = append(operators, item)
+	}
+	sort.Slice(operators, func(i, j int) bool { return operators[i].Name < operators[j].Name })
+	return operators, nil
 }
 
 func (s *Store) CreateAircraft(_ context.Context, aircraft domain.Aircraft) error {
@@ -207,6 +243,63 @@ func (s *Store) ListOperationalIntents(_ context.Context, aircraftID string) ([]
 	return intents, nil
 }
 
+func (s *Store) RecordOperationalVolume(_ context.Context, volume domain.OperationalVolume) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.operationalVolumes[volume.ID] = volume
+	return nil
+}
+
+func (s *Store) ListOperationalVolumes(_ context.Context, intentID string) ([]domain.OperationalVolume, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	volumes := make([]domain.OperationalVolume, 0)
+	for _, volume := range s.operationalVolumes {
+		if intentID == "" || volume.IntentID == intentID {
+			volumes = append(volumes, volume)
+		}
+	}
+	sort.Slice(volumes, func(i, j int) bool {
+		if volumes[i].Sequence == volumes[j].Sequence {
+			return volumes[i].StartsAt.Before(volumes[j].StartsAt)
+		}
+		return volumes[i].Sequence < volumes[j].Sequence
+	})
+	return volumes, nil
+}
+
+func (s *Store) UpsertRegulatoryAuthorization(_ context.Context, authorization domain.RegulatoryAuthorization) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.authorizations[authorization.ID] = authorization
+	return nil
+}
+
+func (s *Store) GetRegulatoryAuthorization(_ context.Context, authorizationID string) (domain.RegulatoryAuthorization, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	authorization, ok := s.authorizations[authorizationID]
+	if !ok {
+		return domain.RegulatoryAuthorization{}, durable.ErrNotFound
+	}
+	return authorization, nil
+}
+
+func (s *Store) ListRegulatoryAuthorizations(_ context.Context, operatorID string) ([]domain.RegulatoryAuthorization, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	authorizations := make([]domain.RegulatoryAuthorization, 0)
+	for _, authorization := range s.authorizations {
+		if operatorID == "" || authorization.OperatorID == operatorID {
+			authorizations = append(authorizations, authorization)
+		}
+	}
+	sort.Slice(authorizations, func(i, j int) bool {
+		return authorizations[i].ValidFrom.Before(authorizations[j].ValidFrom)
+	})
+	return authorizations, nil
+}
+
 func (s *Store) RecordPreflightCheck(_ context.Context, check domain.PreflightCheck) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -347,6 +440,30 @@ func (s *Store) ListReportabilityReviews(_ context.Context, intentID string) ([]
 	return reviews, nil
 }
 
+func (s *Store) RecordComplianceFinding(_ context.Context, finding domain.ComplianceFinding) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.complianceFindings = append(s.complianceFindings, finding)
+	return nil
+}
+
+func (s *Store) ListComplianceFindings(_ context.Context, subjectType string, subjectID string) ([]domain.ComplianceFinding, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	findings := make([]domain.ComplianceFinding, 0)
+	for _, finding := range s.complianceFindings {
+		if subjectType != "" && finding.SubjectType != subjectType {
+			continue
+		}
+		if subjectID != "" && finding.SubjectID != subjectID {
+			continue
+		}
+		findings = append(findings, finding)
+	}
+	sort.Slice(findings, func(i, j int) bool { return findings[i].EvaluatedAt.After(findings[j].EvaluatedAt) })
+	return findings, nil
+}
+
 func (s *Store) UpsertOperationsPersonnel(_ context.Context, person domain.OperationsPersonnel) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -362,4 +479,24 @@ func (s *Store) GetOperationsPersonnel(_ context.Context, personID string) (doma
 		return domain.OperationsPersonnel{}, durable.ErrNotFound
 	}
 	return person, nil
+}
+
+func (s *Store) RecordPersonnelAssignment(_ context.Context, assignment domain.PersonnelAssignment) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.personnelAssignments = append(s.personnelAssignments, assignment)
+	return nil
+}
+
+func (s *Store) ListPersonnelAssignments(_ context.Context, intentID string) ([]domain.PersonnelAssignment, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	assignments := make([]domain.PersonnelAssignment, 0)
+	for _, assignment := range s.personnelAssignments {
+		if intentID == "" || assignment.IntentID == intentID {
+			assignments = append(assignments, assignment)
+		}
+	}
+	sort.Slice(assignments, func(i, j int) bool { return assignments[i].AssignedAt.Before(assignments[j].AssignedAt) })
+	return assignments, nil
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
+	"github.com/Aero-Arc/aero-arc-api/internal/readmodel"
 	"github.com/Aero-Arc/aero-arc-api/internal/registry"
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
@@ -26,7 +27,7 @@ func TestHandleListAircraft(t *testing.T) {
 	if err := durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1", TailNumber: "N100AA"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := durable.CreateBattery(ctx, domain.Battery{ID: "battery-1", StateOfHealth: 91}); err != nil {
+	if err := durable.CreateBattery(ctx, domain.Battery{ID: "battery-1", StateOfHealth: float64Ptr(91)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := durable.RecordBatteryInstallation(ctx, domain.BatteryInstallation{
@@ -50,7 +51,7 @@ func TestHandleListAircraft(t *testing.T) {
 	}
 
 	var body struct {
-		Aircraft []domain.AircraftDashboard `json:"aircraft"`
+		Aircraft []readmodel.AircraftDashboard `json:"aircraft"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
@@ -88,7 +89,7 @@ func TestHandleGetAircraftUsesMachPathParam(t *testing.T) {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 
-	var body domain.AircraftDashboard
+	var body readmodel.AircraftDashboard
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -119,7 +120,7 @@ func TestHandleGetOverviewDashboard(t *testing.T) {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 
-	var body domain.OverviewDashboard
+	var body readmodel.OverviewDashboard
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -129,4 +130,8 @@ func TestHandleGetOverviewDashboard(t *testing.T) {
 	if len(body.Aircraft) != 1 {
 		t.Fatalf("aircraft count = %d, want 1", len(body.Aircraft))
 	}
+}
+
+func float64Ptr(value float64) *float64 {
+	return &value
 }

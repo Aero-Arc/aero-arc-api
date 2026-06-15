@@ -18,6 +18,10 @@ var ErrNotFound = errors.New("not found")
 
 // Store defines the durable system-of-record operations used by the API.
 type Store interface {
+	UpsertOperator(ctx context.Context, operator domain.Operator) error
+	GetOperator(ctx context.Context, operatorID string) (domain.Operator, error)
+	ListOperators(ctx context.Context) ([]domain.Operator, error)
+
 	CreateAircraft(ctx context.Context, aircraft domain.Aircraft) error
 	GetAircraft(ctx context.Context, aircraftID string) (domain.Aircraft, error)
 	ListAircraft(ctx context.Context) ([]domain.Aircraft, error)
@@ -40,6 +44,11 @@ type Store interface {
 	CreateOperationalIntent(ctx context.Context, intent domain.OperationalIntent) error
 	GetOperationalIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error)
 	ListOperationalIntents(ctx context.Context, aircraftID string) ([]domain.OperationalIntent, error)
+	RecordOperationalVolume(ctx context.Context, volume domain.OperationalVolume) error
+	ListOperationalVolumes(ctx context.Context, intentID string) ([]domain.OperationalVolume, error)
+	UpsertRegulatoryAuthorization(ctx context.Context, authorization domain.RegulatoryAuthorization) error
+	GetRegulatoryAuthorization(ctx context.Context, authorizationID string) (domain.RegulatoryAuthorization, error)
+	ListRegulatoryAuthorizations(ctx context.Context, operatorID string) ([]domain.RegulatoryAuthorization, error)
 
 	RecordPreflightCheck(ctx context.Context, check domain.PreflightCheck) error
 	ListPreflightChecks(ctx context.Context, intentID string) ([]domain.PreflightCheck, error)
@@ -59,7 +68,11 @@ type Store interface {
 
 	RecordReportabilityReview(ctx context.Context, review domain.ReportabilityReview) error
 	ListReportabilityReviews(ctx context.Context, intentID string) ([]domain.ReportabilityReview, error)
+	RecordComplianceFinding(ctx context.Context, finding domain.ComplianceFinding) error
+	ListComplianceFindings(ctx context.Context, subjectType string, subjectID string) ([]domain.ComplianceFinding, error)
 
 	UpsertOperationsPersonnel(ctx context.Context, person domain.OperationsPersonnel) error
 	GetOperationsPersonnel(ctx context.Context, personID string) (domain.OperationsPersonnel, error)
+	RecordPersonnelAssignment(ctx context.Context, assignment domain.PersonnelAssignment) error
+	ListPersonnelAssignments(ctx context.Context, intentID string) ([]domain.PersonnelAssignment, error)
 }
