@@ -220,6 +220,16 @@ func (s *Store) CreateOperationalIntent(_ context.Context, intent domain.Operati
 	return nil
 }
 
+func (s *Store) UpdateOperationalIntent(_ context.Context, intent domain.OperationalIntent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.operationalIntents[intent.ID]; !ok {
+		return durable.ErrNotFound
+	}
+	s.operationalIntents[intent.ID] = intent
+	return nil
+}
+
 func (s *Store) GetOperationalIntent(_ context.Context, intentID string) (domain.OperationalIntent, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -303,6 +313,12 @@ func (s *Store) ListRegulatoryAuthorizations(_ context.Context, operatorID strin
 func (s *Store) RecordPreflightCheck(_ context.Context, check domain.PreflightCheck) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for i, existing := range s.preflightChecks {
+		if existing.ID == check.ID {
+			s.preflightChecks[i] = check
+			return nil
+		}
+	}
 	s.preflightChecks = append(s.preflightChecks, check)
 	return nil
 }
@@ -353,6 +369,12 @@ func (s *Store) ListFlightRecords(_ context.Context, aircraftID string) ([]domai
 func (s *Store) RecordConformanceEvent(_ context.Context, event domain.ConformanceEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for i, existing := range s.conformanceEvents {
+		if existing.ID == event.ID {
+			s.conformanceEvents[i] = event
+			return nil
+		}
+	}
 	s.conformanceEvents = append(s.conformanceEvents, event)
 	return nil
 }
@@ -443,6 +465,12 @@ func (s *Store) ListReportabilityReviews(_ context.Context, intentID string) ([]
 func (s *Store) RecordComplianceFinding(_ context.Context, finding domain.ComplianceFinding) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for i, existing := range s.complianceFindings {
+		if existing.ID == finding.ID {
+			s.complianceFindings[i] = finding
+			return nil
+		}
+	}
 	s.complianceFindings = append(s.complianceFindings, finding)
 	return nil
 }

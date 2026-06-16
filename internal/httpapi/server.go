@@ -10,11 +10,24 @@ import (
 
 type Server struct {
 	fleet          *service.FleetService
+	intents        *service.IntentService
+	preflight      *service.PreflightService
+	conformance    *service.ConformanceService
 	requestTimeout time.Duration
 }
 
 func New(fleet *service.FleetService, requestTimeout time.Duration) *Server {
 	return &Server{fleet: fleet, requestTimeout: requestTimeout}
+}
+
+func NewWithWorkflows(fleet *service.FleetService, intents *service.IntentService, preflight *service.PreflightService, conformance *service.ConformanceService, requestTimeout time.Duration) *Server {
+	return &Server{
+		fleet:          fleet,
+		intents:        intents,
+		preflight:      preflight,
+		conformance:    conformance,
+		requestTimeout: requestTimeout,
+	}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -43,8 +56,23 @@ func (s *Server) Handler() http.Handler {
 	api.GET("/flights/{flight_id}", s.handleGetFlight)
 	api.GET("/flights/{flight_id}/replay", s.handleGetFlightReplay)
 
+	if s.workflowsAvailable() {
+		api.POST("/operational-intents", s.handleCreateOperationalIntent)
+		api.POST("/operational-intents/{intent_id}/volumes", s.handleAddOperationalVolume)
+		api.POST("/operational-intents/{intent_id}/submit", s.handleSubmitOperationalIntent)
+		api.POST("/operational-intents/{intent_id}/preflight/evaluate", s.handleEvaluateOperationalIntentPreflight)
+		api.POST("/operational-intents/{intent_id}/accept", s.handleAcceptOperationalIntent)
+		api.POST("/operational-intents/{intent_id}/activate", s.handleActivateOperationalIntent)
+		api.GET("/operational-intents/{intent_id}/conformance", s.handleGetOperationalIntentConformance)
+		api.POST("/telemetry", s.handleTelemetry)
+	}
+
 	api.POST("/batteries", s.handleCreateBattery)
 	api.POST("/maintenance-events", s.handleCreateMaintenanceEvent)
 
 	return app
+}
+
+func (s *Server) workflowsAvailable() bool {
+	return s.intents != nil && s.preflight != nil && s.conformance != nil
 }

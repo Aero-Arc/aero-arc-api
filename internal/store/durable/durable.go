@@ -42,6 +42,7 @@ type Store interface {
 	ListMaintenanceEvents(ctx context.Context, aircraftID string) ([]domain.MaintenanceEvent, error)
 
 	CreateOperationalIntent(ctx context.Context, intent domain.OperationalIntent) error
+	UpdateOperationalIntent(ctx context.Context, intent domain.OperationalIntent) error
 	GetOperationalIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error)
 	ListOperationalIntents(ctx context.Context, aircraftID string) ([]domain.OperationalIntent, error)
 	RecordOperationalVolume(ctx context.Context, volume domain.OperationalVolume) error

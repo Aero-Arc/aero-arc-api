@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Aero-Arc/aero-arc-api/internal/service"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	"github.com/mrshabel/mach"
 )
@@ -23,6 +24,14 @@ func writeError(c *mach.Context, statusCode int, message string) {
 func writeServiceError(c *mach.Context, err error) {
 	if errors.Is(err, durable.ErrNotFound) {
 		writeError(c, http.StatusNotFound, "resource not found")
+		return
+	}
+	if errors.Is(err, service.ErrValidation) {
+		writeError(c, http.StatusBadRequest, strings.TrimSpace(err.Error()))
+		return
+	}
+	if errors.Is(err, service.ErrInvalidTransition) || errors.Is(err, service.ErrActivationBlocked) {
+		writeError(c, http.StatusConflict, strings.TrimSpace(err.Error()))
 		return
 	}
 	writeJSON(c, http.StatusInternalServerError, map[string]string{

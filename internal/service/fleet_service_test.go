@@ -108,8 +108,47 @@ func TestReadinessCalculation(t *testing.T) {
 		t.Fatalf("missing live state readiness = %q, want warning", got.Status)
 	}
 
+	unknownSOH := &domain.Battery{ID: "battery-1"}
+	got := CalculateReadiness(unknownSOH, nil, true)
+	if got.Status != "warning" {
+		t.Fatalf("unknown SOH readiness = %q, want warning", got.Status)
+	}
+	if len(got.Reasons) != 1 || got.Reasons[0] != "battery state of health unknown" {
+		t.Fatalf("unknown SOH reasons = %#v, want battery state of health unknown", got.Reasons)
+	}
+
 	if got := CalculateReadiness(battery, nil, true); got.Status != "ready" {
 		t.Fatalf("healthy readiness = %q, want ready", got.Status)
+	}
+}
+
+func TestFleetServiceReadinessDoesNotReportReadyWhenBatterySOHUnknown(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	durable := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	replay := replaymemory.NewStore()
+	registry := newTestRegistry()
+
+	must(t, durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1", AgentID: "agent-1", TailNumber: "N100AA"}))
+	must(t, durable.CreateBattery(ctx, domain.Battery{ID: "battery-1"}))
+	must(t, durable.RecordBatteryInstallation(ctx, domain.BatteryInstallation{
+		ID: "install-1", AircraftID: "aircraft-1", BatteryID: "battery-1", InstalledAt: now,
+	}))
+	must(t, registry.SetLiveAircraftState(ctx, domain.LiveAircraftState{
+		AircraftID: "aircraft-1", AgentID: "agent-1", RelayID: "relay-1", Connected: true,
+	}))
+
+	svc := NewFleetService(durable, telemetry, replay, registry)
+	dashboard, err := svc.GetAircraftDashboard(ctx, "aircraft-1")
+	if err != nil {
+		t.Fatalf("GetAircraftDashboard returned error: %v", err)
+	}
+	if dashboard.Readiness.Status == domain.ReadinessStatusReady {
+		t.Fatal("readiness should not be ready when battery state of health is unknown")
+	}
+	if len(dashboard.Readiness.Reasons) != 1 || dashboard.Readiness.Reasons[0] != "battery state of health unknown" {
+		t.Fatalf("readiness reasons = %#v, want battery state of health unknown", dashboard.Readiness.Reasons)
 	}
 }
 
