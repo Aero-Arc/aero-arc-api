@@ -4,6 +4,7 @@ telemetry_store: "memory"
 replay_store: "memory"
 registry_mode: "memory" # use "grpc" to connect to aero-arc-registry
 registry_addr: "localhost:50051"
+seed: "" # set to "demo" for local UI fixture data
 
 # Environment variables used by the service:
 # AERO_API_ADDR=:8080
@@ -12,3 +13,4 @@ registry_addr: "localhost:50051"
 # AERO_API_REPLAY_STORE=memory
 # AERO_API_REGISTRY_MODE=memory
 # AERO_API_REGISTRY_ADDR=localhost:50051
+# AERO_API_SEED=demo

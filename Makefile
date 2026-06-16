@@ -3,12 +3,13 @@ CMD := ./cmd/aero-arc-api
 BIN_DIR := bin
 BIN := $(BIN_DIR)/$(BINARY)
 
-.PHONY: help build run test fmt vet tidy check clean
+.PHONY: help build run run-demo test fmt vet tidy check clean
 
 help:
 	@printf "Targets:\n"
 	@printf "  make build  Build $(BIN)\n"
 	@printf "  make run    Run the API locally\n"
+	@printf "  make run-demo Run the API locally with demo dashboard data\n"
 	@printf "  make test   Run all tests\n"
 	@printf "  make fmt    Format Go files\n"
 	@printf "  make vet    Run go vet\n"
@@ -22,6 +23,9 @@ build:
 
 run:
 	go run $(CMD) start
+
+run-demo:
+	go run $(CMD) start --seed demo
 
 test:
 	go test ./...
