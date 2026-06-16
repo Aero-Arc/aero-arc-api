@@ -492,6 +492,19 @@ func (s *Store) ListComplianceFindings(_ context.Context, subjectType string, su
 	return findings, nil
 }
 
+func (s *Store) ListComplianceFindingsForIntent(_ context.Context, intentID string) ([]domain.ComplianceFinding, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	findings := make([]domain.ComplianceFinding, 0)
+	for _, finding := range s.complianceFindings {
+		if finding.IntentID == intentID || (finding.SubjectType == "operational_intent" && finding.SubjectID == intentID) {
+			findings = append(findings, finding)
+		}
+	}
+	sort.Slice(findings, func(i, j int) bool { return findings[i].EvaluatedAt.After(findings[j].EvaluatedAt) })
+	return findings, nil
+}
+
 func (s *Store) UpsertOperationsPersonnel(_ context.Context, person domain.OperationsPersonnel) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

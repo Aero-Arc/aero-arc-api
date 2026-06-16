@@ -248,13 +248,16 @@ func (s *IntentService) activationReadiness(ctx context.Context, intent domain.O
 	if err != nil {
 		return fmt.Errorf("list preflight checks: %w", err)
 	}
+	if len(checks) == 0 {
+		return fmt.Errorf("%w: current preflight checks are required", ErrActivationBlocked)
+	}
 	for _, check := range checks {
 		if check.Blocking && (check.Status == domain.PreflightStatusBlocked || check.Status == domain.PreflightStatusAction) {
 			return fmt.Errorf("%w: blocking preflight check %s", ErrActivationBlocked, check.ID)
 		}
 	}
 
-	findings, err := s.durable.ListComplianceFindings(ctx, "operational_intent", intent.ID)
+	findings, err := s.durable.ListComplianceFindingsForIntent(ctx, intent.ID)
 	if err != nil {
 		return fmt.Errorf("list compliance findings: %w", err)
 	}

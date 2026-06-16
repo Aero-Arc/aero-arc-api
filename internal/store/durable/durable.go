@@ -71,6 +71,7 @@ type Store interface {
 	ListReportabilityReviews(ctx context.Context, intentID string) ([]domain.ReportabilityReview, error)
 	RecordComplianceFinding(ctx context.Context, finding domain.ComplianceFinding) error
 	ListComplianceFindings(ctx context.Context, subjectType string, subjectID string) ([]domain.ComplianceFinding, error)
+	ListComplianceFindingsForIntent(ctx context.Context, intentID string) ([]domain.ComplianceFinding, error)
 
 	UpsertOperationsPersonnel(ctx context.Context, person domain.OperationsPersonnel) error
 	GetOperationsPersonnel(ctx context.Context, personID string) (domain.OperationsPersonnel, error)

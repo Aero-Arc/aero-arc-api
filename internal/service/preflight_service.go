@@ -191,6 +191,21 @@ func (b *preflightBuilder) check(category domain.PreflightCheckCategory, key, so
 	}
 	b.checks = append(b.checks, check)
 	if !blocking {
+		b.findings = append(b.findings, domain.ComplianceFinding{
+			ID:              fmt.Sprintf("finding-%s-%s", b.intent.ID, key),
+			OperatorID:      b.intent.OperatorID,
+			IntentID:        b.intent.ID,
+			IntentVersion:   b.intent.Version,
+			SubjectType:     "operational_intent",
+			SubjectID:       b.intent.ID,
+			RequirementCode: requirementCode,
+			Status:          domain.ComplianceFindingPass,
+			Severity:        domain.SeverityInfo,
+			Blocking:        false,
+			RuleVersion:     "demo.v1",
+			Message:         summary,
+			EvaluatedAt:     b.now,
+		})
 		return
 	}
 	b.findings = append(b.findings, domain.ComplianceFinding{

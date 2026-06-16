@@ -132,6 +132,86 @@ func TestHandleGetOverviewDashboard(t *testing.T) {
 	}
 }
 
+func TestHandleActivateOperationalIntentRunsPreflight(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 6, 15, 15, 0, 0, 0, time.UTC)
+	durable := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	replay := replaymemory.NewStore()
+	reg := registry.NewMemoryClient()
+
+	if err := durable.CreateAircraft(ctx, domain.Aircraft{
+		ID:               "aircraft-1",
+		OperatorID:       "operator-1",
+		TailNumber:       "N100AA",
+		Status:           domain.AircraftStatusActive,
+		AcceptanceStatus: domain.AcceptanceStatusAccepted,
+		RemoteIDStatus:   domain.RemoteIDStatusBroadcasting,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	intents := service.NewIntentService(durable)
+	intent, err := intents.CreateIntent(ctx, service.CreateIntentRequest{
+		ID:                  "intent-1",
+		OperatorID:          "operator-1",
+		AircraftID:          "aircraft-1",
+		Name:                "Demo intent",
+		Summary:             "Activation should evaluate preflight",
+		AuthorizationPath:   domain.AuthorizationPathDemo,
+		PopulationCategory:  domain.PopulationCategoryOne,
+		ConformanceRequired: true,
+		PlannedStartAt:      now,
+		PlannedEndAt:        now.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("CreateIntent returned error: %v", err)
+	}
+	if _, err = intents.AddOperationalVolume(ctx, intent.ID, service.AddOperationalVolumeRequest{
+		ID:           "volume-1",
+		Sequence:     1,
+		GeoJSON:      `{"type":"Polygon","coordinates":[[[-98,35],[-97,35],[-97,36],[-98,36],[-98,35]]]}`,
+		MinAltitudeM: 10,
+		MaxAltitudeM: 120,
+		StartsAt:     now,
+		EndsAt:       now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("AddOperationalVolume returned error: %v", err)
+	}
+	if _, err = intents.SubmitIntent(ctx, intent.ID); err != nil {
+		t.Fatalf("SubmitIntent returned error: %v", err)
+	}
+	if _, err = intents.AcceptIntent(ctx, intent.ID); err != nil {
+		t.Fatalf("AcceptIntent returned error: %v", err)
+	}
+
+	fleet := service.NewFleetService(durable, telemetry, replay, reg)
+	server := NewWithWorkflows(
+		fleet,
+		intents,
+		service.NewPreflightService(durable),
+		service.NewConformanceService(durable, telemetry),
+		time.Second,
+	)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/operational-intents/intent-1/activate", nil)
+	rec := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	checks, err := durable.ListPreflightChecks(ctx, intent.ID)
+	if err != nil {
+		t.Fatalf("ListPreflightChecks returned error: %v", err)
+	}
+	if len(checks) == 0 {
+		t.Fatal("activate handler should have recorded preflight checks")
+	}
+}
+
 func float64Ptr(value float64) *float64 {
 	return &value
 }

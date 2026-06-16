@@ -74,10 +74,23 @@ func (s *ConformanceService) EvaluateTelemetry(ctx context.Context, sample domai
 	status := domain.ConformanceStatusConforming
 	reportability := domain.ReportabilityStatusNo
 	events := make([]domain.ConformanceEvent, 0)
+	existing, err := s.durable.GetConformanceSummary(ctx, intent.ID)
+	if err != nil {
+		return ConformanceEvaluation{}, fmt.Errorf("get conformance summary: %w", err)
+	}
+	alertCount := len(events)
+	if existing != nil {
+		alertCount = existing.AlertCount
+		if existing.ReportabilityStatus != domain.ReportabilityStatusNo {
+			reportability = existing.ReportabilityStatus
+		}
+	}
 	if !inside {
 		score = 0
 		status = domain.ConformanceStatusNonConforming
-		reportability = domain.ReportabilityStatusReview
+		if reportability == domain.ReportabilityStatusNo {
+			reportability = domain.ReportabilityStatusReview
+		}
 		event := domain.ConformanceEvent{
 			ID:               conformanceEventID(sample, intent),
 			OperatorID:       intent.OperatorID,
@@ -99,6 +112,7 @@ func (s *ConformanceService) EvaluateTelemetry(ctx context.Context, sample domai
 			return ConformanceEvaluation{}, fmt.Errorf("record conformance event: %w", err)
 		}
 		events = append(events, event)
+		alertCount += len(events)
 	}
 
 	summary := domain.ConformanceSummary{
@@ -110,14 +124,9 @@ func (s *ConformanceService) EvaluateTelemetry(ctx context.Context, sample domai
 		AircraftID:          sample.AircraftID,
 		Status:              status,
 		Score:               &score,
-		AlertCount:          len(events),
+		AlertCount:          alertCount,
 		ReportabilityStatus: reportability,
 		UpdatedAt:           s.now().UTC(),
-	}
-	if existing, err := s.durable.GetConformanceSummary(ctx, intent.ID); err != nil {
-		return ConformanceEvaluation{}, fmt.Errorf("get conformance summary: %w", err)
-	} else if existing != nil && !inside {
-		summary.AlertCount = existing.AlertCount + len(events)
 	}
 	if err := s.durable.UpsertConformanceSummary(ctx, summary); err != nil {
 		return ConformanceEvaluation{}, fmt.Errorf("upsert conformance summary: %w", err)

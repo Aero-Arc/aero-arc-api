@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -307,6 +308,15 @@ func (s *Server) handleAcceptOperationalIntent(c *mach.Context) {
 func (s *Server) handleActivateOperationalIntent(c *mach.Context) {
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
+	evaluation, err := s.preflight.EvaluateIntent(ctx, c.Param("intent_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	if evaluation.Blocked {
+		writeServiceError(c, fmt.Errorf("%w: preflight evaluation blocked", service.ErrActivationBlocked))
+		return
+	}
 	intent, err := s.intents.ActivateIntent(ctx, c.Param("intent_id"))
 	if err != nil {
 		writeServiceError(c, err)

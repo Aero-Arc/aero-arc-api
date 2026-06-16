@@ -82,6 +82,32 @@ func TestActivationBlockedWhenNoOperationalVolumeExists(t *testing.T) {
 	}
 }
 
+func TestActivationBlockedWhenNoPreflightChecksExist(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+
+	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intent, err := intents.CreateIntent(ctx, workflowIntentRequest(now))
+	if err != nil {
+		t.Fatalf("CreateIntent returned error: %v", err)
+	}
+	if _, err = intents.AddOperationalVolume(ctx, intent.ID, workflowVolumeRequest(now)); err != nil {
+		t.Fatalf("AddOperationalVolume returned error: %v", err)
+	}
+	if _, err = intents.SubmitIntent(ctx, intent.ID); err != nil {
+		t.Fatalf("SubmitIntent returned error: %v", err)
+	}
+	if _, err = intents.AcceptIntent(ctx, intent.ID); err != nil {
+		t.Fatalf("AcceptIntent returned error: %v", err)
+	}
+
+	if _, err = intents.ActivateIntent(ctx, intent.ID); !errors.Is(err, ErrActivationBlocked) {
+		t.Fatalf("ActivateIntent error = %v, want ErrActivationBlocked", err)
+	}
+}
+
 func TestPreflightBlockedWhenBatterySOHMissing(t *testing.T) {
 	ctx := context.Background()
 	store := durablememory.NewStore()
@@ -98,6 +124,55 @@ func TestPreflightBlockedWhenBatterySOHMissing(t *testing.T) {
 	}
 	if !hasFinding(evaluation.Findings, "BATTERY-SOH-KNOWN") {
 		t.Fatalf("findings = %#v, want BATTERY-SOH-KNOWN", evaluation.Findings)
+	}
+}
+
+func TestPreflightClearOverwritesStaleBlockingFinding(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, nil)
+	intent := seedSubmittedIntentWithVolume(t, ctx, store, now)
+	preflight := NewPreflightServiceWithClock(store, fixedClock(now))
+
+	evaluation, err := preflight.EvaluateIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatalf("EvaluateIntent returned error: %v", err)
+	}
+	if !evaluation.Blocked || !hasFinding(evaluation.Findings, "BATTERY-SOH-KNOWN") {
+		t.Fatalf("initial evaluation = %#v, want blocked battery SOH finding", evaluation)
+	}
+
+	must(t, store.CreateBattery(ctx, domain.Battery{
+		ID:            "battery-1",
+		OperatorID:    "operator-1",
+		SerialNumber:  "B101",
+		StateOfHealth: float64Ptr(95),
+		Status:        domain.MaintenanceStatusCurrent,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}))
+	evaluation, err = preflight.EvaluateIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatalf("EvaluateIntent after remediation returned error: %v", err)
+	}
+	if evaluation.Blocked {
+		t.Fatalf("remediated evaluation blocked unexpectedly: %#v", evaluation.Findings)
+	}
+	findings, err := store.ListComplianceFindingsForIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatalf("ListComplianceFindingsForIntent returned error: %v", err)
+	}
+	if hasBlockingFinding(findings, "BATTERY-SOH-KNOWN") {
+		t.Fatalf("stale blocking battery SOH finding remained: %#v", findings)
+	}
+
+	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	if _, err = intents.AcceptIntent(ctx, intent.ID); err != nil {
+		t.Fatalf("AcceptIntent returned error: %v", err)
+	}
+	if _, err = intents.ActivateIntent(ctx, intent.ID); err != nil {
+		t.Fatalf("ActivateIntent after remediation returned error: %v", err)
 	}
 }
 
@@ -192,6 +267,48 @@ func TestConformanceTelemetryOutsideVolumeCreatesIntentExit(t *testing.T) {
 	}
 	if evaluation.Events[0].EventCode != domain.ConformanceEventIntentExit {
 		t.Fatalf("event code = %q, want intent_exit", evaluation.Events[0].EventCode)
+	}
+}
+
+func TestConformanceTelemetryInsideAfterExitPreservesPriorAlerts(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+	seedActiveIntentWithVolume(t, ctx, store, now)
+	conformance := NewConformanceServiceWithClock(store, telemetry, fixedClock(now))
+
+	if _, err := conformance.EvaluateTelemetry(ctx, domain.TelemetrySample{
+		ID:         "sample-outside",
+		AircraftID: "aircraft-1",
+		RecordedAt: now.Add(30 * time.Minute),
+		Latitude:   36.5,
+		Longitude:  -98.5,
+		AltitudeM:  60,
+	}); err != nil {
+		t.Fatalf("outside EvaluateTelemetry returned error: %v", err)
+	}
+
+	evaluation, err := conformance.EvaluateTelemetry(ctx, domain.TelemetrySample{
+		ID:         "sample-inside-after-exit",
+		AircraftID: "aircraft-1",
+		RecordedAt: now.Add(31 * time.Minute),
+		Latitude:   35.5,
+		Longitude:  -97.5,
+		AltitudeM:  60,
+	})
+	if err != nil {
+		t.Fatalf("inside EvaluateTelemetry returned error: %v", err)
+	}
+	if evaluation.Summary.Status != domain.ConformanceStatusConforming {
+		t.Fatalf("summary status = %q, want conforming", evaluation.Summary.Status)
+	}
+	if evaluation.Summary.AlertCount != 1 {
+		t.Fatalf("alert count = %d, want 1", evaluation.Summary.AlertCount)
+	}
+	if evaluation.Summary.ReportabilityStatus != domain.ReportabilityStatusReview {
+		t.Fatalf("reportability = %q, want review", evaluation.Summary.ReportabilityStatus)
 	}
 }
 
@@ -306,6 +423,15 @@ func squareGeoJSON() string {
 func hasFinding(findings []domain.ComplianceFinding, requirementCode string) bool {
 	for _, finding := range findings {
 		if finding.RequirementCode == requirementCode {
+			return true
+		}
+	}
+	return false
+}
+
+func hasBlockingFinding(findings []domain.ComplianceFinding, requirementCode string) bool {
+	for _, finding := range findings {
+		if finding.RequirementCode == requirementCode && finding.Blocking && (finding.Status == domain.ComplianceFindingFail || finding.Status == domain.ComplianceFindingReview) {
 			return true
 		}
 	}
