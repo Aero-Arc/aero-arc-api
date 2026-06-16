@@ -16,6 +16,7 @@ const (
 	defaultRegistryAddress     = "localhost:50051"
 	defaultRegistryDialTimeout = 5 * time.Second
 	defaultRequestTimeout      = 3 * time.Second
+	defaultSeed                = ""
 )
 
 type Config struct {
@@ -27,6 +28,7 @@ type Config struct {
 	RegistryAddress     string
 	RegistryDialTimeout time.Duration
 	RequestTimeout      time.Duration
+	Seed                string
 }
 
 func Defaults() *Config {
@@ -39,6 +41,7 @@ func Defaults() *Config {
 		RegistryAddress:     defaultRegistryAddress,
 		RegistryDialTimeout: defaultRegistryDialTimeout,
 		RequestTimeout:      defaultRequestTimeout,
+		Seed:                defaultSeed,
 	}
 }
 
@@ -51,6 +54,7 @@ func Load() (*Config, error) {
 	applyStringEnv("AERO_API_REPLAY_STORE", &cfg.ReplayStore)
 	applyStringEnv("AERO_API_REGISTRY_MODE", &cfg.RegistryMode)
 	applyStringEnv("AERO_API_REGISTRY_ADDR", &cfg.RegistryAddress)
+	applyStringEnv("AERO_API_SEED", &cfg.Seed)
 	if err := applyDurationEnv("AERO_API_REGISTRY_DIAL_TIMEOUT", &cfg.RegistryDialTimeout); err != nil {
 		return nil, err
 	}
@@ -94,6 +98,11 @@ func (cfg *Config) Validate() error {
 	}
 	if cfg.RequestTimeout <= 0 {
 		return fmt.Errorf("AERO_API_REQUEST_TIMEOUT must be > 0")
+	}
+	switch cfg.Seed {
+	case "", "none", "demo":
+	default:
+		return fmt.Errorf("unsupported seed mode %q", cfg.Seed)
 	}
 
 	return nil

@@ -27,6 +27,18 @@ The scaffold defaults to in-memory stores and an in-memory registry client.
 go run ./cmd/aero-arc-api start
 ```
 
+For local UI development, start the API with seeded demo dashboard data:
+
+```bash
+go run ./cmd/aero-arc-api start --seed demo
+```
+
+or:
+
+```bash
+make run-demo
+```
+
 Configuration is available through flags or environment variables:
 
 ```bash
@@ -35,7 +47,8 @@ go run ./cmd/aero-arc-api start \
   --durable-store memory \
   --telemetry-store memory \
   --replay-store memory \
-  --registry-mode memory
+  --registry-mode memory \
+  --seed demo
 ```
 
 ```bash
@@ -45,6 +58,7 @@ AERO_API_TELEMETRY_STORE=memory
 AERO_API_REPLAY_STORE=memory
 AERO_API_REGISTRY_MODE=memory
 AERO_API_REGISTRY_ADDR=localhost:50051
+AERO_API_SEED=demo
 ```
 
 `AERO_API_REGISTRY_MODE=grpc` connects to the real `aero-arc-registry` gRPC
@@ -63,6 +77,16 @@ this scaffold.
 - `GET /api/v1/flights/{flight_id}/replay?limit=500`
 - `POST /api/v1/batteries`
 - `POST /api/v1/maintenance-events`
+
+## Demo Data
+
+`--seed demo` / `AERO_API_SEED=demo` populates the in-memory stores at startup
+with representative aircraft, batteries, operational intents, preflight checks,
+maintenance events, conformance records, evidence records, reportability
+reviews, latest telemetry, live registry state, and one replay manifest.
+
+This seed mode is intended for local UI and API testing only. It is opt-in and
+supports the dashboard endpoints consumed by `aero-arc-ops`.
 
 ## Example Requests
 

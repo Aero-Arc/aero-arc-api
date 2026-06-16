@@ -13,6 +13,7 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/config"
 	"github.com/Aero-Arc/aero-arc-api/internal/httpapi"
 	"github.com/Aero-Arc/aero-arc-api/internal/registry"
+	"github.com/Aero-Arc/aero-arc-api/internal/seed"
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
@@ -90,6 +91,12 @@ func newCommand() *cli.Command {
 						Usage:   "per-request timeout",
 						Sources: cli.EnvVars("AERO_API_REQUEST_TIMEOUT"),
 					},
+					&cli.StringFlag{
+						Name:    "seed",
+						Value:   defaults.Seed,
+						Usage:   "optional startup fixture seed mode: demo",
+						Sources: cli.EnvVars("AERO_API_SEED"),
+					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					cfg := &config.Config{
@@ -101,6 +108,7 @@ func newCommand() *cli.Command {
 						RegistryAddress:     cmd.String("registry-addr"),
 						RegistryDialTimeout: cmd.Duration("registry-dial-timeout"),
 						RequestTimeout:      cmd.Duration("request-timeout"),
+						Seed:                cmd.String("seed"),
 					}
 					if err := cfg.Validate(); err != nil {
 						return err
@@ -136,6 +144,12 @@ func run(ctx context.Context, cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
+	if cfg.Seed == "demo" {
+		if err := seed.Demo(ctx, durableStore, telemetryStore, replayStore, registryClient); err != nil {
+			return err
+		}
+		slog.Info("seeded demo data")
+	}
 	fleetService := service.NewFleetService(durableStore, telemetryStore, replayStore, registryClient)
 
 	httpServer := &http.Server{
@@ -153,6 +167,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 			slog.String("replay_store", cfg.ReplayStore),
 			slog.String("registry_mode", cfg.RegistryMode),
 			slog.String("registry_addr", cfg.RegistryAddress),
+			slog.String("seed", cfg.Seed),
 		)
 
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
