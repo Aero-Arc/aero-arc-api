@@ -275,6 +275,35 @@ func TestPreflightBlockedWhenCriticalMaintenanceOpen(t *testing.T) {
 	}
 }
 
+func TestPreflightBlockedWhenOperationalVolumeMissingInlineGeoJSON(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+	intent := seedSubmittedIntentWithVolumeRequest(t, ctx, store, now, AddOperationalVolumeRequest{
+		ID:           "volume-uri-only",
+		Sequence:     1,
+		GeometryURI:  "s3://demo/volume.geojson",
+		MinAltitudeM: 10,
+		MaxAltitudeM: 120,
+		AltitudeRef:  domain.AltitudeReferenceAGL,
+		StartsAt:     now,
+		EndsAt:       now.Add(time.Hour),
+		VolumeType:   domain.OperationalVolumeLoiter,
+	})
+
+	evaluation, err := NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatalf("EvaluateIntent returned error: %v", err)
+	}
+	if !evaluation.Blocked {
+		t.Fatal("preflight should block URI-only geometry")
+	}
+	if !hasFinding(evaluation.Findings, "VOLUME-GEOJSON") {
+		t.Fatalf("findings = %#v, want VOLUME-GEOJSON", evaluation.Findings)
+	}
+}
+
 func TestConformanceTelemetryInsideVolumeConforming(t *testing.T) {
 	ctx := context.Background()
 	store := durablememory.NewStore()
@@ -312,6 +341,62 @@ func TestConformanceTelemetryInsideVolumeConforming(t *testing.T) {
 	}
 }
 
+func TestConformanceTelemetryRespectsPolygonInteriorRing(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+	seedActiveIntentWithVolumeRequest(t, ctx, store, now, AddOperationalVolumeRequest{
+		ID:           "volume-with-hole",
+		Sequence:     1,
+		GeoJSON:      polygonWithHoleGeoJSON(),
+		MinAltitudeM: 10,
+		MaxAltitudeM: 120,
+		AltitudeRef:  domain.AltitudeReferenceAGL,
+		StartsAt:     now,
+		EndsAt:       now.Add(time.Hour),
+		VolumeType:   domain.OperationalVolumeLoiter,
+	})
+	conformance := NewConformanceServiceWithClock(store, telemetry, fixedClock(now))
+
+	inHole, err := conformance.EvaluateTelemetry(ctx, domain.TelemetrySample{
+		ID:         "sample-in-hole",
+		AircraftID: "aircraft-1",
+		RecordedAt: now.Add(30 * time.Minute),
+		Latitude:   35.5,
+		Longitude:  -97.5,
+		AltitudeM:  60,
+	})
+	if err != nil {
+		t.Fatalf("EvaluateTelemetry in hole returned error: %v", err)
+	}
+	if inHole.Summary.Status != domain.ConformanceStatusNonConforming {
+		t.Fatalf("hole sample status = %q, want non_conforming", inHole.Summary.Status)
+	}
+	if len(inHole.Events) != 1 || inHole.Events[0].EventCode != domain.ConformanceEventIntentExit {
+		t.Fatalf("hole events = %#v, want one intent_exit", inHole.Events)
+	}
+
+	inExterior, err := conformance.EvaluateTelemetry(ctx, domain.TelemetrySample{
+		ID:         "sample-in-exterior",
+		AircraftID: "aircraft-1",
+		RecordedAt: now.Add(31 * time.Minute),
+		Latitude:   35.1,
+		Longitude:  -97.9,
+		AltitudeM:  60,
+	})
+	if err != nil {
+		t.Fatalf("EvaluateTelemetry in exterior returned error: %v", err)
+	}
+	if inExterior.Summary.Status != domain.ConformanceStatusConforming {
+		t.Fatalf("exterior sample status = %q, want conforming", inExterior.Summary.Status)
+	}
+	if len(inExterior.Events) != 0 {
+		t.Fatalf("exterior events = %#v, want none", inExterior.Events)
+	}
+}
+
 func TestConformanceTelemetryOutsideVolumeCreatesIntentExit(t *testing.T) {
 	ctx := context.Background()
 	store := durablememory.NewStore()
@@ -339,6 +424,52 @@ func TestConformanceTelemetryOutsideVolumeCreatesIntentExit(t *testing.T) {
 	}
 	if evaluation.Events[0].EventCode != domain.ConformanceEventIntentExit {
 		t.Fatalf("event code = %q, want intent_exit", evaluation.Events[0].EventCode)
+	}
+}
+
+func TestConformanceTelemetryDuplicateOutsideSampleDoesNotDoubleCountAlert(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+	intent := seedActiveIntentWithVolume(t, ctx, store, now)
+	conformance := NewConformanceServiceWithClock(store, telemetry, fixedClock(now))
+	sample := domain.TelemetrySample{
+		ID:         "sample-outside-retry",
+		AircraftID: "aircraft-1",
+		RecordedAt: now.Add(30 * time.Minute),
+		Latitude:   36.5,
+		Longitude:  -98.5,
+		AltitudeM:  60,
+	}
+
+	first, err := conformance.EvaluateTelemetry(ctx, sample)
+	if err != nil {
+		t.Fatalf("first EvaluateTelemetry returned error: %v", err)
+	}
+	second, err := conformance.EvaluateTelemetry(ctx, sample)
+	if err != nil {
+		t.Fatalf("second EvaluateTelemetry returned error: %v", err)
+	}
+	if first.Summary.AlertCount != 1 {
+		t.Fatalf("first alert count = %d, want 1", first.Summary.AlertCount)
+	}
+	if second.Summary.AlertCount != 1 {
+		t.Fatalf("second alert count = %d, want 1", second.Summary.AlertCount)
+	}
+	events, err := store.ListConformanceEvents(ctx, "")
+	if err != nil {
+		t.Fatalf("ListConformanceEvents returned error: %v", err)
+	}
+	matching := 0
+	for _, event := range events {
+		if event.IntentID == intent.ID && event.IntentVersion == intent.Version {
+			matching++
+		}
+	}
+	if matching != 1 {
+		t.Fatalf("matching conformance events = %d, want 1; events=%#v", matching, events)
 	}
 }
 
@@ -424,12 +555,17 @@ func seedWorkflowAircraft(t *testing.T, ctx context.Context, store durable.Store
 
 func seedSubmittedIntentWithVolume(t *testing.T, ctx context.Context, store durable.Store, now time.Time) domain.OperationalIntent {
 	t.Helper()
+	return seedSubmittedIntentWithVolumeRequest(t, ctx, store, now, workflowVolumeRequest(now))
+}
+
+func seedSubmittedIntentWithVolumeRequest(t *testing.T, ctx context.Context, store durable.Store, now time.Time, volumeReq AddOperationalVolumeRequest) domain.OperationalIntent {
+	t.Helper()
 	intents := NewIntentServiceWithClock(store, fixedClock(now))
 	intent, err := intents.CreateIntent(ctx, workflowIntentRequest(now))
 	if err != nil {
 		t.Fatalf("CreateIntent returned error: %v", err)
 	}
-	if _, err = intents.AddOperationalVolume(ctx, intent.ID, workflowVolumeRequest(now)); err != nil {
+	if _, err = intents.AddOperationalVolume(ctx, intent.ID, volumeReq); err != nil {
 		t.Fatalf("AddOperationalVolume returned error: %v", err)
 	}
 	intent, err = intents.SubmitIntent(ctx, intent.ID)
@@ -441,7 +577,12 @@ func seedSubmittedIntentWithVolume(t *testing.T, ctx context.Context, store dura
 
 func seedActiveIntentWithVolume(t *testing.T, ctx context.Context, store durable.Store, now time.Time) domain.OperationalIntent {
 	t.Helper()
-	intent := seedSubmittedIntentWithVolume(t, ctx, store, now)
+	return seedActiveIntentWithVolumeRequest(t, ctx, store, now, workflowVolumeRequest(now))
+}
+
+func seedActiveIntentWithVolumeRequest(t *testing.T, ctx context.Context, store durable.Store, now time.Time, volumeReq AddOperationalVolumeRequest) domain.OperationalIntent {
+	t.Helper()
+	intent := seedSubmittedIntentWithVolumeRequest(t, ctx, store, now, volumeReq)
 	if evaluation, err := NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID); err != nil {
 		t.Fatalf("EvaluateIntent returned error: %v", err)
 	} else if evaluation.Blocked {
@@ -490,6 +631,10 @@ func workflowVolumeRequest(now time.Time) AddOperationalVolumeRequest {
 
 func squareGeoJSON() string {
 	return `{"type":"Polygon","coordinates":[[[-98,35],[-97,35],[-97,36],[-98,36],[-98,35]]]}`
+}
+
+func polygonWithHoleGeoJSON() string {
+	return `{"type":"Polygon","coordinates":[[[-98,35],[-97,35],[-97,36],[-98,36],[-98,35]],[[-97.75,35.25],[-97.25,35.25],[-97.25,35.75],[-97.75,35.75],[-97.75,35.25]]]}`
 }
 
 func hasFinding(findings []domain.ComplianceFinding, requirementCode string) bool {

@@ -90,6 +90,11 @@ func (s *PreflightService) EvaluateIntent(ctx context.Context, intentID string) 
 		} else {
 			builder.block(domain.PreflightCheckAirspace, prefix+"_inside_intent_window", "intent_service", "VOLUME-IN-INTENT", "operational volume must be inside planned intent window", "adjust volume or planned intent time window")
 		}
+		if volume.GeoJSON != "" {
+			builder.clear(domain.PreflightCheckAirspace, prefix+"_inline_geojson", "intent_service", "VOLUME-GEOJSON", "operational volume has inline GeoJSON evaluable by this server")
+		} else {
+			builder.block(domain.PreflightCheckAirspace, prefix+"_inline_geojson", "intent_service", "VOLUME-GEOJSON", "operational volume requires inline GeoJSON for local conformance evaluation", "provide inline GeoJSON; geometry_uri resolution is not implemented")
+		}
 	}
 
 	s.evaluateBattery(ctx, &builder, intent)

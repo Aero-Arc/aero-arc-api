@@ -78,12 +78,8 @@ func (s *ConformanceService) EvaluateTelemetry(ctx context.Context, sample domai
 	if err != nil {
 		return ConformanceEvaluation{}, fmt.Errorf("get conformance summary: %w", err)
 	}
-	alertCount := len(events)
-	if existing != nil {
-		alertCount = existing.AlertCount
-		if existing.ReportabilityStatus != domain.ReportabilityStatusNo {
-			reportability = existing.ReportabilityStatus
-		}
+	if existing != nil && existing.ReportabilityStatus != domain.ReportabilityStatusNo {
+		reportability = existing.ReportabilityStatus
 	}
 	if !inside {
 		score = 0
@@ -112,7 +108,10 @@ func (s *ConformanceService) EvaluateTelemetry(ctx context.Context, sample domai
 			return ConformanceEvaluation{}, fmt.Errorf("record conformance event: %w", err)
 		}
 		events = append(events, event)
-		alertCount += len(events)
+	}
+	alertCount, err := s.alertCount(ctx, intent)
+	if err != nil {
+		return ConformanceEvaluation{}, err
 	}
 
 	summary := domain.ConformanceSummary{
@@ -133,6 +132,20 @@ func (s *ConformanceService) EvaluateTelemetry(ctx context.Context, sample domai
 	}
 
 	return ConformanceEvaluation{Intent: intent, Summary: summary, Events: events}, nil
+}
+
+func (s *ConformanceService) alertCount(ctx context.Context, intent domain.OperationalIntent) (int, error) {
+	events, err := s.durable.ListConformanceEvents(ctx, "")
+	if err != nil {
+		return 0, fmt.Errorf("list conformance events: %w", err)
+	}
+	unique := make(map[string]struct{})
+	for _, event := range events {
+		if event.IntentID == intent.ID && event.IntentVersion == intent.Version {
+			unique[event.ID] = struct{}{}
+		}
+	}
+	return len(unique), nil
 }
 
 func (s *ConformanceService) GetIntentConformance(ctx context.Context, intentID string) (ConformanceEvaluation, error) {
@@ -189,7 +202,7 @@ func sampleInsideVolume(sample domain.TelemetrySample, volume domain.Operational
 		return false
 	}
 	if volume.GeoJSON == "" {
-		return true
+		return false
 	}
 	return pointInGeoJSONPolygon(sample.Longitude, sample.Latitude, []byte(volume.GeoJSON))
 }
@@ -228,7 +241,15 @@ func pointInGeoJSONPolygon(lon, lat float64, raw []byte) bool {
 	if err := json.Unmarshal(coords, &polygon); err != nil || len(polygon) == 0 {
 		return false
 	}
-	return pointInRing(lon, lat, polygon[0])
+	if !pointInRing(lon, lat, polygon[0]) {
+		return false
+	}
+	for _, hole := range polygon[1:] {
+		if pointInRing(lon, lat, hole) {
+			return false
+		}
+	}
+	return true
 }
 
 func pointInRing(lon, lat float64, ring [][]float64) bool {
