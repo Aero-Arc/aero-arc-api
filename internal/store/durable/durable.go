@@ -42,6 +42,7 @@ type Store interface {
 	ListMaintenanceEvents(ctx context.Context, aircraftID string) ([]domain.MaintenanceEvent, error)
 
 	CreateOperationalIntent(ctx context.Context, intent domain.OperationalIntent) error
+	UpdateOperationalIntent(ctx context.Context, intent domain.OperationalIntent) error
 	GetOperationalIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error)
 	ListOperationalIntents(ctx context.Context, aircraftID string) ([]domain.OperationalIntent, error)
 	RecordOperationalVolume(ctx context.Context, volume domain.OperationalVolume) error
@@ -70,6 +71,7 @@ type Store interface {
 	ListReportabilityReviews(ctx context.Context, intentID string) ([]domain.ReportabilityReview, error)
 	RecordComplianceFinding(ctx context.Context, finding domain.ComplianceFinding) error
 	ListComplianceFindings(ctx context.Context, subjectType string, subjectID string) ([]domain.ComplianceFinding, error)
+	ListComplianceFindingsForIntent(ctx context.Context, intentID string) ([]domain.ComplianceFinding, error)
 
 	UpsertOperationsPersonnel(ctx context.Context, person domain.OperationsPersonnel) error
 	GetOperationsPersonnel(ctx context.Context, personID string) (domain.OperationsPersonnel, error)

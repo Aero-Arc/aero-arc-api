@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
+	"github.com/Aero-Arc/aero-arc-api/internal/service"
 	"github.com/mrshabel/mach"
 )
 
@@ -234,6 +236,125 @@ func (s *Server) handleCreateMaintenanceEvent(c *mach.Context) {
 		return
 	}
 	writeJSON(c, http.StatusCreated, event)
+}
+
+func (s *Server) handleCreateOperationalIntent(c *mach.Context) {
+	var req service.CreateIntentRequest
+	if err := decodeJSON(c, &req); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	intent, err := s.intents.CreateIntent(ctx, req)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusCreated, intent)
+}
+
+func (s *Server) handleAddOperationalVolume(c *mach.Context) {
+	var req service.AddOperationalVolumeRequest
+	if err := decodeJSON(c, &req); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	volume, err := s.intents.AddOperationalVolume(ctx, c.Param("intent_id"), req)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusCreated, volume)
+}
+
+func (s *Server) handleSubmitOperationalIntent(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	intent, err := s.intents.SubmitIntent(ctx, c.Param("intent_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, intent)
+}
+
+func (s *Server) handleEvaluateOperationalIntentPreflight(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	evaluation, err := s.preflight.EvaluateIntent(ctx, c.Param("intent_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, evaluation)
+}
+
+func (s *Server) handleAcceptOperationalIntent(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	intent, err := s.intents.AcceptIntent(ctx, c.Param("intent_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, intent)
+}
+
+func (s *Server) handleActivateOperationalIntent(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	evaluation, err := s.preflight.EvaluateIntent(ctx, c.Param("intent_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	if evaluation.Blocked {
+		writeServiceError(c, fmt.Errorf("%w: preflight evaluation blocked", service.ErrActivationBlocked))
+		return
+	}
+	intent, err := s.intents.ActivateIntent(ctx, c.Param("intent_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, intent)
+}
+
+func (s *Server) handleTelemetry(c *mach.Context) {
+	var sample domain.TelemetrySample
+	if err := decodeJSON(c, &sample); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(sample.AircraftID) == "" {
+		writeError(c, http.StatusBadRequest, "aircraft_id is required")
+		return
+	}
+
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	evaluation, err := s.conformance.EvaluateTelemetry(ctx, sample)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, evaluation)
+}
+
+func (s *Server) handleGetOperationalIntentConformance(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	evaluation, err := s.conformance.GetIntentConformance(ctx, c.Param("intent_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, evaluation)
 }
 
 func (s *Server) contextWithTimeout(c *mach.Context) (context.Context, context.CancelFunc) {

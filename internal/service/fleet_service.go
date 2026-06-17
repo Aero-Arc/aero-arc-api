@@ -334,6 +334,8 @@ func CalculateReadiness(battery *domain.Battery, maintenanceEvents []domain.Main
 
 	if battery == nil {
 		reasons = append(reasons, "battery missing")
+	} else if battery.StateOfHealth == nil {
+		reasons = append(reasons, "battery state of health unknown")
 	} else if battery.StateOfHealth != nil && *battery.StateOfHealth < 80 {
 		reasons = append(reasons, "battery state of health below 80")
 	}
