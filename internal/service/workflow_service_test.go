@@ -341,6 +341,118 @@ func TestConformanceTelemetryInsideVolumeConforming(t *testing.T) {
 	}
 }
 
+func TestConformanceTelemetryHonorsSampleIntentID(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+	createActiveIntentWithVolume(t, ctx, store, now, "intent-a", "volume-a", squareGeoJSON(), now)
+	createActiveIntentWithVolume(t, ctx, store, now, "intent-b", "volume-b", eastSquareGeoJSON(), now.Add(10*time.Minute))
+
+	evaluation, err := NewConformanceServiceWithClock(store, telemetry, fixedClock(now)).EvaluateTelemetry(ctx, domain.TelemetrySample{
+		ID:         "sample-intent-b",
+		IntentID:   "intent-b",
+		AircraftID: "aircraft-1",
+		RecordedAt: now.Add(30 * time.Minute),
+		Latitude:   35.5,
+		Longitude:  -96.25,
+		AltitudeM:  60,
+	})
+	if err != nil {
+		t.Fatalf("EvaluateTelemetry returned error: %v", err)
+	}
+	if evaluation.Intent.ID != "intent-b" {
+		t.Fatalf("evaluated intent = %q, want intent-b", evaluation.Intent.ID)
+	}
+	if evaluation.Summary.Status != domain.ConformanceStatusConforming {
+		t.Fatalf("summary status = %q, want conforming", evaluation.Summary.Status)
+	}
+}
+
+func TestConformanceTelemetryIntentIDWrongAircraftFails(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+	createActiveIntentWithVolume(t, ctx, store, now, "intent-1", "volume-1", squareGeoJSON(), now)
+
+	_, err := NewConformanceServiceWithClock(store, telemetry, fixedClock(now)).EvaluateTelemetry(ctx, domain.TelemetrySample{
+		ID:         "sample-wrong-aircraft",
+		IntentID:   "intent-1",
+		AircraftID: "aircraft-2",
+		RecordedAt: now.Add(30 * time.Minute),
+		Latitude:   35.5,
+		Longitude:  -97.5,
+		AltitudeM:  60,
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("EvaluateTelemetry error = %v, want ErrValidation", err)
+	}
+}
+
+func TestConformanceTelemetryActiveIntentWithoutVolumesProducesUnknownNoEvent(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+	must(t, store.CreateOperationalIntent(ctx, domain.OperationalIntent{
+		ID:             "intent-no-volumes",
+		OperatorID:     "operator-1",
+		AircraftID:     "aircraft-1",
+		Version:        1,
+		Status:         domain.IntentStatusActive,
+		PlannedStartAt: now,
+		PlannedEndAt:   now.Add(time.Hour),
+		UpdatedAt:      now,
+	}))
+	must(t, store.UpsertConformanceSummary(ctx, domain.ConformanceSummary{
+		ID:                  "conformance-intent-no-volumes",
+		OperatorID:          "operator-1",
+		IntentID:            "intent-no-volumes",
+		IntentVersion:       1,
+		AircraftID:          "aircraft-1",
+		Status:              domain.ConformanceStatusNonConforming,
+		AlertCount:          2,
+		ReportabilityStatus: domain.ReportabilityStatusReview,
+		UpdatedAt:           now,
+	}))
+
+	evaluation, err := NewConformanceServiceWithClock(store, telemetry, fixedClock(now)).EvaluateTelemetry(ctx, domain.TelemetrySample{
+		ID:         "sample-no-volumes",
+		IntentID:   "intent-no-volumes",
+		AircraftID: "aircraft-1",
+		RecordedAt: now.Add(30 * time.Minute),
+		Latitude:   35.5,
+		Longitude:  -97.5,
+		AltitudeM:  60,
+	})
+	if err != nil {
+		t.Fatalf("EvaluateTelemetry returned error: %v", err)
+	}
+	if evaluation.Summary.Status != domain.ConformanceStatusUnknown {
+		t.Fatalf("summary status = %q, want unknown", evaluation.Summary.Status)
+	}
+	if evaluation.Summary.AlertCount != 2 {
+		t.Fatalf("alert count = %d, want preserved count 2", evaluation.Summary.AlertCount)
+	}
+	if evaluation.Summary.ReportabilityStatus != domain.ReportabilityStatusReview {
+		t.Fatalf("reportability = %q, want review", evaluation.Summary.ReportabilityStatus)
+	}
+	if len(evaluation.Events) != 0 {
+		t.Fatalf("events = %#v, want none", evaluation.Events)
+	}
+	events, err := store.ListConformanceEvents(ctx, "")
+	if err != nil {
+		t.Fatalf("ListConformanceEvents returned error: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("stored events = %#v, want none", events)
+	}
+}
+
 func TestConformanceTelemetryRespectsPolygonInteriorRing(t *testing.T) {
 	ctx := context.Background()
 	store := durablememory.NewStore()
@@ -600,6 +712,54 @@ func seedActiveIntentWithVolumeRequest(t *testing.T, ctx context.Context, store 
 	return intent
 }
 
+func createActiveIntentWithVolume(t *testing.T, ctx context.Context, store durable.Store, now time.Time, intentID string, volumeID string, geoJSON string, plannedStart time.Time) domain.OperationalIntent {
+	t.Helper()
+	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intent, err := intents.CreateIntent(ctx, CreateIntentRequest{
+		ID:                  intentID,
+		OperatorID:          "operator-1",
+		AircraftID:          "aircraft-1",
+		Name:                intentID,
+		Summary:             "test intent",
+		AuthorizationPath:   domain.AuthorizationPathDemo,
+		PopulationCategory:  domain.PopulationCategoryOne,
+		ConformanceRequired: true,
+		PlannedStartAt:      plannedStart,
+		PlannedEndAt:        plannedStart.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("CreateIntent returned error: %v", err)
+	}
+	if _, err = intents.AddOperationalVolume(ctx, intent.ID, AddOperationalVolumeRequest{
+		ID:           volumeID,
+		Sequence:     1,
+		GeoJSON:      geoJSON,
+		MinAltitudeM: 10,
+		MaxAltitudeM: 120,
+		AltitudeRef:  domain.AltitudeReferenceAGL,
+		StartsAt:     plannedStart,
+		EndsAt:       plannedStart.Add(time.Hour),
+		VolumeType:   domain.OperationalVolumeLoiter,
+	}); err != nil {
+		t.Fatalf("AddOperationalVolume returned error: %v", err)
+	}
+	if intent, err = intents.SubmitIntent(ctx, intent.ID); err != nil {
+		t.Fatalf("SubmitIntent returned error: %v", err)
+	}
+	if evaluation, err := NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID); err != nil {
+		t.Fatalf("EvaluateIntent returned error: %v", err)
+	} else if evaluation.Blocked {
+		t.Fatalf("preflight blocked unexpectedly: %#v", evaluation.Findings)
+	}
+	if intent, err = intents.AcceptIntent(ctx, intent.ID); err != nil {
+		t.Fatalf("AcceptIntent returned error: %v", err)
+	}
+	if intent, err = intents.ActivateIntent(ctx, intent.ID); err != nil {
+		t.Fatalf("ActivateIntent returned error: %v", err)
+	}
+	return intent
+}
+
 func workflowIntentRequest(now time.Time) CreateIntentRequest {
 	return CreateIntentRequest{
 		ID:                  "intent-1",
@@ -635,6 +795,10 @@ func squareGeoJSON() string {
 
 func polygonWithHoleGeoJSON() string {
 	return `{"type":"Polygon","coordinates":[[[-98,35],[-97,35],[-97,36],[-98,36],[-98,35]],[[-97.75,35.25],[-97.25,35.25],[-97.25,35.75],[-97.75,35.75],[-97.75,35.25]]]}`
+}
+
+func eastSquareGeoJSON() string {
+	return `{"type":"Polygon","coordinates":[[[-96.5,35],[-96,35],[-96,36],[-96.5,36],[-96.5,35]]]}`
 }
 
 func hasFinding(findings []domain.ComplianceFinding, requirementCode string) bool {

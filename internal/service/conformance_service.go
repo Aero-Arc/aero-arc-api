@@ -48,13 +48,20 @@ func (s *ConformanceService) EvaluateTelemetry(ctx context.Context, sample domai
 		}
 	}
 
-	intent, err := s.activeIntentForAircraft(ctx, sample.AircraftID, sample.RecordedAt)
+	intent, err := s.resolveIntentForTelemetry(ctx, sample)
 	if err != nil {
 		return ConformanceEvaluation{}, err
 	}
 	volumes, err := s.durable.ListOperationalVolumes(ctx, intent.ID)
 	if err != nil {
 		return ConformanceEvaluation{}, fmt.Errorf("list operational volumes: %w", err)
+	}
+	if len(volumes) == 0 {
+		summary, err := s.unknownSummary(ctx, intent, sample)
+		if err != nil {
+			return ConformanceEvaluation{}, err
+		}
+		return ConformanceEvaluation{Intent: intent, Summary: summary, Events: nil}, nil
 	}
 
 	expectedVolumeID := ""
@@ -132,6 +139,55 @@ func (s *ConformanceService) EvaluateTelemetry(ctx context.Context, sample domai
 	}
 
 	return ConformanceEvaluation{Intent: intent, Summary: summary, Events: events}, nil
+}
+
+func (s *ConformanceService) resolveIntentForTelemetry(ctx context.Context, sample domain.TelemetrySample) (domain.OperationalIntent, error) {
+	if sample.IntentID == "" {
+		return s.activeIntentForAircraft(ctx, sample.AircraftID, sample.RecordedAt)
+	}
+
+	intent, err := s.durable.GetOperationalIntent(ctx, sample.IntentID)
+	if err != nil {
+		return domain.OperationalIntent{}, fmt.Errorf("get operational intent: %w", err)
+	}
+	if intent.AircraftID != sample.AircraftID {
+		return domain.OperationalIntent{}, fmt.Errorf("%w: telemetry aircraft_id %s does not match intent aircraft_id %s", ErrValidation, sample.AircraftID, intent.AircraftID)
+	}
+	if intent.Status != domain.IntentStatusActive {
+		return domain.OperationalIntent{}, fmt.Errorf("%w: referenced intent %s is not active", ErrActivationBlocked, intent.ID)
+	}
+	if sample.RecordedAt.Before(intent.PlannedStartAt) || sample.RecordedAt.After(intent.PlannedEndAt) {
+		return domain.OperationalIntent{}, fmt.Errorf("%w: telemetry time is outside referenced intent window", ErrActivationBlocked)
+	}
+	return intent, nil
+}
+
+func (s *ConformanceService) unknownSummary(ctx context.Context, intent domain.OperationalIntent, sample domain.TelemetrySample) (domain.ConformanceSummary, error) {
+	reportability := domain.ReportabilityStatusNo
+	alertCount := 0
+	if existing, err := s.durable.GetConformanceSummary(ctx, intent.ID); err != nil {
+		return domain.ConformanceSummary{}, fmt.Errorf("get conformance summary: %w", err)
+	} else if existing != nil {
+		reportability = existing.ReportabilityStatus
+		alertCount = existing.AlertCount
+	}
+
+	summary := domain.ConformanceSummary{
+		ID:                  fmt.Sprintf("conformance-%s", intent.ID),
+		OperatorID:          intent.OperatorID,
+		IntentID:            intent.ID,
+		IntentVersion:       intent.Version,
+		FlightID:            sample.FlightID,
+		AircraftID:          sample.AircraftID,
+		Status:              domain.ConformanceStatusUnknown,
+		AlertCount:          alertCount,
+		ReportabilityStatus: reportability,
+		UpdatedAt:           s.now().UTC(),
+	}
+	if err := s.durable.UpsertConformanceSummary(ctx, summary); err != nil {
+		return domain.ConformanceSummary{}, fmt.Errorf("upsert conformance summary: %w", err)
+	}
+	return summary, nil
 }
 
 func (s *ConformanceService) alertCount(ctx context.Context, intent domain.OperationalIntent) (int, error) {
