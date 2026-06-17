@@ -122,6 +122,9 @@ func (s *IntentService) AddOperationalVolume(ctx context.Context, intentID strin
 	if err != nil {
 		return domain.OperationalVolume{}, fmt.Errorf("get operational intent: %w", err)
 	}
+	if intent.Status != domain.IntentStatusDraft {
+		return domain.OperationalVolume{}, fmt.Errorf("%w: operational volumes are locked after draft status (%s)", ErrInvalidTransition, intent.Status)
+	}
 
 	now := s.now().UTC()
 	id := strings.TrimSpace(req.ID)

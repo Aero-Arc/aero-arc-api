@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -209,6 +210,66 @@ func TestHandleActivateOperationalIntentRunsPreflight(t *testing.T) {
 	}
 	if len(checks) == 0 {
 		t.Fatal("activate handler should have recorded preflight checks")
+	}
+}
+
+func TestHandleAddOperationalVolumeRejectsSubmittedIntent(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 6, 15, 15, 0, 0, 0, time.UTC)
+	durable := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	replay := replaymemory.NewStore()
+	reg := registry.NewMemoryClient()
+
+	if err := durable.CreateAircraft(ctx, domain.Aircraft{
+		ID:               "aircraft-1",
+		OperatorID:       "operator-1",
+		TailNumber:       "N100AA",
+		Status:           domain.AircraftStatusActive,
+		AcceptanceStatus: domain.AcceptanceStatusAccepted,
+		RemoteIDStatus:   domain.RemoteIDStatusBroadcasting,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	intents := service.NewIntentService(durable)
+	intent, err := intents.CreateIntent(ctx, service.CreateIntentRequest{
+		ID:                  "intent-1",
+		OperatorID:          "operator-1",
+		AircraftID:          "aircraft-1",
+		Name:                "Demo intent",
+		Summary:             "Volume edits should lock after submit",
+		AuthorizationPath:   domain.AuthorizationPathDemo,
+		PopulationCategory:  domain.PopulationCategoryOne,
+		ConformanceRequired: true,
+		PlannedStartAt:      now,
+		PlannedEndAt:        now.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("CreateIntent returned error: %v", err)
+	}
+	if _, err = intents.SubmitIntent(ctx, intent.ID); err != nil {
+		t.Fatalf("SubmitIntent returned error: %v", err)
+	}
+
+	fleet := service.NewFleetService(durable, telemetry, replay, reg)
+	server := NewWithWorkflows(
+		fleet,
+		intents,
+		service.NewPreflightService(durable),
+		service.NewConformanceService(durable, telemetry),
+		time.Second,
+	)
+	body := []byte(`{"id":"volume-1","sequence":1,"geojson":"{\"type\":\"Polygon\",\"coordinates\":[[[-98,35],[-97,35],[-97,36],[-98,36],[-98,35]]]}","min_altitude_m":10,"max_altitude_m":120,"starts_at":"2026-06-15T15:00:00Z","ends_at":"2026-06-15T16:00:00Z"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/operational-intents/intent-1/volumes", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusConflict, rec.Body.String())
 	}
 }
 

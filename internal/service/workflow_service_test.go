@@ -108,6 +108,78 @@ func TestActivationBlockedWhenNoPreflightChecksExist(t *testing.T) {
 	}
 }
 
+func TestAddOperationalVolumeSucceedsForDraftIntent(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+
+	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intent, err := intents.CreateIntent(ctx, workflowIntentRequest(now))
+	if err != nil {
+		t.Fatalf("CreateIntent returned error: %v", err)
+	}
+
+	volume, err := intents.AddOperationalVolume(ctx, intent.ID, workflowVolumeRequest(now))
+	if err != nil {
+		t.Fatalf("AddOperationalVolume returned error: %v", err)
+	}
+	if volume.IntentID != intent.ID {
+		t.Fatalf("volume intent ID = %q, want %q", volume.IntentID, intent.ID)
+	}
+}
+
+func TestAddOperationalVolumeFailsAfterSubmit(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+
+	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intent, err := intents.CreateIntent(ctx, workflowIntentRequest(now))
+	if err != nil {
+		t.Fatalf("CreateIntent returned error: %v", err)
+	}
+	if _, err = intents.SubmitIntent(ctx, intent.ID); err != nil {
+		t.Fatalf("SubmitIntent returned error: %v", err)
+	}
+
+	if _, err = intents.AddOperationalVolume(ctx, intent.ID, workflowVolumeRequest(now)); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("AddOperationalVolume error = %v, want ErrInvalidTransition", err)
+	}
+}
+
+func TestAddOperationalVolumeFailsAfterAccept(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+
+	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intent := seedSubmittedIntentWithVolume(t, ctx, store, now)
+	if _, err := intents.AcceptIntent(ctx, intent.ID); err != nil {
+		t.Fatalf("AcceptIntent returned error: %v", err)
+	}
+
+	if _, err := intents.AddOperationalVolume(ctx, intent.ID, workflowVolumeRequest(now)); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("AddOperationalVolume error = %v, want ErrInvalidTransition", err)
+	}
+}
+
+func TestAddOperationalVolumeFailsAfterActivate(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+
+	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intent := seedActiveIntentWithVolume(t, ctx, store, now)
+
+	if _, err := intents.AddOperationalVolume(ctx, intent.ID, workflowVolumeRequest(now)); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("AddOperationalVolume error = %v, want ErrInvalidTransition", err)
+	}
+}
+
 func TestPreflightBlockedWhenBatterySOHMissing(t *testing.T) {
 	ctx := context.Background()
 	store := durablememory.NewStore()

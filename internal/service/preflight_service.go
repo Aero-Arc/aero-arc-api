@@ -50,7 +50,7 @@ func (s *PreflightService) EvaluateIntent(ctx context.Context, intentID string) 
 		builder.block(domain.PreflightCheckAirspace, "aircraft_exists", "fleet_registry", "AIRCRAFT-EXISTS", "aircraft does not exist", "create or select a valid aircraft")
 	} else {
 		builder.clear(domain.PreflightCheckAirspace, "aircraft_exists", "fleet_registry", "AIRCRAFT-EXISTS", "aircraft exists")
-		if aircraft.Status != domain.AircraftStatusActive && aircraft.AcceptanceStatus != domain.AcceptanceStatusAccepted {
+		if aircraft.Status != domain.AircraftStatusActive || aircraft.AcceptanceStatus != domain.AcceptanceStatusAccepted {
 			builder.block(domain.PreflightCheckAirspace, "aircraft_operational_status", "fleet_registry", "AIRCRAFT-STATUS", "aircraft is not active or accepted", "set aircraft active or complete acceptance")
 		} else {
 			builder.clear(domain.PreflightCheckAirspace, "aircraft_operational_status", "fleet_registry", "AIRCRAFT-STATUS", "aircraft status allows operation")
