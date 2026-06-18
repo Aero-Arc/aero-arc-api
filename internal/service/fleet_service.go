@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -184,6 +185,64 @@ func (s *FleetService) GetAircraftDashboard(ctx context.Context, aircraftID stri
 	return s.buildDashboard(ctx, aircraft)
 }
 
+func (s *FleetService) GetAircraftMapView(ctx context.Context, aircraftID string, limit int) (readmodel.AircraftMapView, error) {
+	aircraft, err := s.durable.GetAircraft(ctx, aircraftID)
+	if err != nil {
+		return readmodel.AircraftMapView{}, fmt.Errorf("get aircraft: %w", err)
+	}
+
+	latestTelemetry, _ := s.telemetry.GetLatestSample(ctx, aircraft.ID)
+	liveState, liveAvailable := s.liveState(ctx, aircraft)
+
+	replaySamples, err := s.telemetry.QueryAircraftSamples(ctx, aircraft.ID, limit)
+	if err != nil {
+		return readmodel.AircraftMapView{}, fmt.Errorf("query aircraft samples: %w", err)
+	}
+
+	view := readmodel.AircraftMapView{
+		Aircraft:           aircraft,
+		LiveState:          liveState,
+		LiveStateAvailable: liveAvailable,
+		LatestTelemetry:    latestTelemetry,
+		ReplaySamples:      replaySamples,
+		OperationalVolumes: make([]domain.OperationalVolume, 0),
+		ConformanceEvents:  make([]domain.ConformanceEvent, 0),
+	}
+
+	intent, err := s.activeIntent(ctx, aircraft.ID)
+	if err != nil {
+		return readmodel.AircraftMapView{}, err
+	}
+	if intent == nil {
+		return view, nil
+	}
+	view.ActiveIntent = intent
+
+	volumes, err := s.durable.ListOperationalVolumes(ctx, intent.ID)
+	if err != nil {
+		return readmodel.AircraftMapView{}, fmt.Errorf("list operational volumes: %w", err)
+	}
+	view.OperationalVolumes = volumes
+
+	summary, err := s.durable.GetConformanceSummary(ctx, intent.ID)
+	if err != nil {
+		return readmodel.AircraftMapView{}, fmt.Errorf("get conformance summary: %w", err)
+	}
+	view.ConformanceSummary = summary
+
+	events, err := s.durable.ListConformanceEvents(ctx, "")
+	if err != nil {
+		return readmodel.AircraftMapView{}, fmt.Errorf("list conformance events: %w", err)
+	}
+	for _, event := range events {
+		if event.IntentID == intent.ID {
+			view.ConformanceEvents = append(view.ConformanceEvents, event)
+		}
+	}
+
+	return view, nil
+}
+
 func (s *FleetService) ListFlightRecords(ctx context.Context, aircraftID string) ([]domain.FlightRecord, error) {
 	if _, err := s.durable.GetAircraft(ctx, aircraftID); err != nil {
 		return nil, fmt.Errorf("get aircraft: %w", err)
@@ -274,6 +333,29 @@ func (s *FleetService) activeBattery(ctx context.Context, aircraftID string) (*d
 		return nil, fmt.Errorf("get active battery: %w", err)
 	}
 	return &battery, nil
+}
+
+func (s *FleetService) activeIntent(ctx context.Context, aircraftID string) (*domain.OperationalIntent, error) {
+	intents, err := s.durable.ListOperationalIntents(ctx, aircraftID)
+	if err != nil {
+		return nil, fmt.Errorf("list operational intents: %w", err)
+	}
+	active := make([]domain.OperationalIntent, 0)
+	for _, intent := range intents {
+		if intent.Status == domain.IntentStatusActive {
+			active = append(active, intent)
+		}
+	}
+	if len(active) == 0 {
+		return nil, nil
+	}
+	sort.Slice(active, func(i, j int) bool {
+		if active[i].PlannedStartAt.Equal(active[j].PlannedStartAt) {
+			return active[i].UpdatedAt.After(active[j].UpdatedAt)
+		}
+		return active[i].PlannedStartAt.After(active[j].PlannedStartAt)
+	})
+	return &active[0], nil
 }
 
 func (s *FleetService) liveState(ctx context.Context, aircraft domain.Aircraft) (*domain.LiveAircraftState, bool) {

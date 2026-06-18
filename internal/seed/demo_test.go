@@ -38,12 +38,38 @@ func TestDemoPopulatesDashboardStores(t *testing.T) {
 		t.Fatalf("intent count = %d, want 3", len(intents))
 	}
 
+	volumes, err := durable.ListOperationalVolumes(ctx, "intent-2041")
+	if err != nil {
+		t.Fatalf("ListOperationalVolumes returned error: %v", err)
+	}
+	if len(volumes) != 1 {
+		t.Fatalf("volume count = %d, want 1", len(volumes))
+	}
+	if volumes[0].ID != "volume-2041-route" || volumes[0].GeoJSON == "" {
+		t.Fatalf("volume = %#v, want seeded inline GeoJSON route volume", volumes[0])
+	}
+	allVolumes, err := durable.ListOperationalVolumes(ctx, "")
+	if err != nil {
+		t.Fatalf("ListOperationalVolumes all returned error: %v", err)
+	}
+	if len(allVolumes) != 3 {
+		t.Fatalf("all volume count = %d, want 3", len(allVolumes))
+	}
+
 	sample, err := telemetry.GetLatestSample(ctx, "aircraft-eagle-7")
 	if err != nil {
 		t.Fatalf("GetLatestSample returned error: %v", err)
 	}
 	if sample == nil {
 		t.Fatal("expected latest telemetry sample")
+	}
+
+	ravenSample, err := telemetry.GetLatestSample(ctx, "aircraft-raven-5")
+	if err != nil {
+		t.Fatalf("GetLatestSample raven returned error: %v", err)
+	}
+	if ravenSample == nil {
+		t.Fatal("expected raven last-known telemetry sample")
 	}
 
 	manifest, err := replay.GetReplayManifest(ctx, "flight-2041-a")

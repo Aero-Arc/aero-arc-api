@@ -52,6 +52,7 @@ func (s *Server) Handler() http.Handler {
 	api.GET("/aircraft", s.handleListAircraft)
 	api.POST("/aircraft", s.handleCreateAircraft)
 	api.GET("/aircraft/{aircraft_id}", s.handleGetAircraft)
+	api.GET("/aircraft/{aircraft_id}/map", s.handleGetAircraftMap)
 	api.GET("/aircraft/{aircraft_id}/flights", s.handleListAircraftFlights)
 	api.GET("/flights/{flight_id}", s.handleGetFlight)
 	api.GET("/flights/{flight_id}/replay", s.handleGetFlightReplay)

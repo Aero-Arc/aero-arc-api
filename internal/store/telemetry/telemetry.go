@@ -15,5 +15,6 @@ import (
 // Store defines the telemetry read model used by the API.
 type Store interface {
 	GetLatestSample(ctx context.Context, aircraftID string) (*domain.TelemetrySample, error)
+	QueryAircraftSamples(ctx context.Context, aircraftID string, limit int) ([]domain.TelemetrySample, error)
 	QueryFlightSamples(ctx context.Context, flightID string, limit int) ([]domain.TelemetrySample, error)
 }
