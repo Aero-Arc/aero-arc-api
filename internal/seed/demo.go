@@ -210,6 +210,65 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 		}
 	}
 
+	volumes := []domain.OperationalVolume{
+		{
+			ID:            "volume-2041-route",
+			OperatorID:    "operator-demo",
+			IntentID:      "intent-2041",
+			IntentVersion: 3,
+			Sequence:      1,
+			GeoJSON:       `{"type":"Polygon","coordinates":[[[-97.51545,35.46645],[-97.51400,35.46645],[-97.51400,35.46815],[-97.51545,35.46815],[-97.51545,35.46645]]]}`,
+			MinAltitudeM:  60,
+			MaxAltitudeM:  110,
+			AltitudeRef:   domain.AltitudeReferenceAGL,
+			StartsAt:      now.Add(-20 * time.Minute),
+			EndsAt:        now.Add(30 * time.Minute),
+			BufferMeters:  float64Ptr(25),
+			VolumeType:    domain.OperationalVolumeRoute,
+			CreatedAt:     now.Add(-35 * time.Minute),
+			UpdatedAt:     now.Add(-28 * time.Minute),
+		},
+		{
+			ID:            "volume-2042-grid",
+			OperatorID:    "operator-demo",
+			IntentID:      "intent-2042",
+			IntentVersion: 1,
+			Sequence:      1,
+			GeoJSON:       `{"type":"Polygon","coordinates":[[[-97.42720,35.53150],[-97.42555,35.53150],[-97.42555,35.53310],[-97.42720,35.53310],[-97.42720,35.53150]]]}`,
+			MinAltitudeM:  50,
+			MaxAltitudeM:  90,
+			AltitudeRef:   domain.AltitudeReferenceAGL,
+			StartsAt:      now.Add(50 * time.Minute),
+			EndsAt:        now.Add(110 * time.Minute),
+			BufferMeters:  float64Ptr(20),
+			VolumeType:    domain.OperationalVolumeLoiter,
+			CreatedAt:     now.Add(-3 * time.Hour),
+			UpdatedAt:     now.Add(-45 * time.Minute),
+		},
+		{
+			ID:            "volume-2043-demo-route",
+			OperatorID:    "operator-demo",
+			IntentID:      "intent-2043",
+			IntentVersion: 2,
+			Sequence:      1,
+			GeoJSON:       `{"type":"Polygon","coordinates":[[[-97.49150,35.48700],[-97.48940,35.48700],[-97.48940,35.48920],[-97.49150,35.48920],[-97.49150,35.48700]]]}`,
+			MinAltitudeM:  45,
+			MaxAltitudeM:  80,
+			AltitudeRef:   domain.AltitudeReferenceAGL,
+			StartsAt:      now.Add(115 * time.Minute),
+			EndsAt:        now.Add(185 * time.Minute),
+			BufferMeters:  float64Ptr(30),
+			VolumeType:    domain.OperationalVolumeRoute,
+			CreatedAt:     now.Add(-22 * time.Hour),
+			UpdatedAt:     now.Add(-1 * time.Hour),
+		},
+	}
+	for _, item := range volumes {
+		if err := durableStore.RecordOperationalVolume(ctx, item); err != nil {
+			return fmt.Errorf("seed operational volume %s: %w", item.ID, err)
+		}
+	}
+
 	preflightChecks := []domain.PreflightCheck{
 		{ID: "preflight-2041-weather", OperatorID: "operator-demo", IntentID: "intent-2041", IntentVersion: 3, AircraftID: "aircraft-eagle-7", Category: domain.PreflightCheckWeather, Source: "weather-feed", Status: domain.PreflightStatusClear, Summary: "Winds 8 kt, visibility 10 sm.", RequirementCode: "WX-001", RuleVersion: "2026.06", ValidUntil: timePtr(now.Add(45 * time.Minute)), EvidenceRecordID: "evidence-preflight-2041", CapturedAt: now.Add(-30 * time.Minute)},
 		{ID: "preflight-2041-airspace", OperatorID: "operator-demo", IntentID: "intent-2041", IntentVersion: 3, AircraftID: "aircraft-eagle-7", Category: domain.PreflightCheckAirspace, Source: "airspace-review", Status: domain.PreflightStatusClear, Summary: "Operating volume remains inside approved corridor.", RequirementCode: "AIR-022", RuleVersion: "2026.06", ValidUntil: timePtr(now.Add(90 * time.Minute)), EvidenceRecordID: "evidence-preflight-2041", CapturedAt: now.Add(-28 * time.Minute)},
@@ -302,6 +361,9 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 	}
 	if err := telemetry.AddSample(ctx, domain.TelemetrySample{ID: "sample-falcon-latest", OperatorID: "operator-demo", AircraftID: "aircraft-falcon-3", RecordedAt: now.Add(-12 * time.Minute), Latitude: 35.53210, Longitude: -97.42640, AltitudeM: 0, VelocityMPS: 0, HeadingDeg: 0, BatteryPct: float64Ptr(74)}); err != nil {
 		return fmt.Errorf("seed falcon telemetry: %w", err)
+	}
+	if err := telemetry.AddSample(ctx, domain.TelemetrySample{ID: "sample-raven-last-known", OperatorID: "operator-demo", AircraftID: "aircraft-raven-5", IntentID: "intent-2043", IntentVersion: 2, RecordedAt: now.Add(-38 * time.Minute), Latitude: 35.48820, Longitude: -97.49040, AltitudeM: 0, VelocityMPS: 0, HeadingDeg: 0, BatteryPct: float64Ptr(42)}); err != nil {
+		return fmt.Errorf("seed raven telemetry: %w", err)
 	}
 
 	if err := replay.PutReplayManifest(ctx, domain.ReplayManifest{

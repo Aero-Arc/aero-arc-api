@@ -99,6 +99,73 @@ func TestHandleGetAircraftUsesMachPathParam(t *testing.T) {
 	}
 }
 
+func TestHandleGetAircraftMap(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 6, 17, 15, 0, 0, 0, time.UTC)
+	durable := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	replay := replaymemory.NewStore()
+	reg := registry.NewMemoryClient()
+
+	if err := durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1", AgentID: "agent-1", TailNumber: "N100AA", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.SetLiveAircraftState(ctx, domain.LiveAircraftState{AircraftID: "aircraft-1", AgentID: "agent-1", RelayID: "relay-1", Connected: true}); err != nil {
+		t.Fatal(err)
+	}
+	for _, sample := range []domain.TelemetrySample{
+		{ID: "sample-1", AircraftID: "aircraft-1", RecordedAt: now.Add(time.Minute), Latitude: 35.1, Longitude: -97.1, AltitudeM: 51},
+		{ID: "sample-2", AircraftID: "aircraft-1", RecordedAt: now.Add(2 * time.Minute), Latitude: 35.2, Longitude: -97.2, AltitudeM: 52},
+		{ID: "sample-3", AircraftID: "aircraft-1", RecordedAt: now.Add(3 * time.Minute), Latitude: 35.3, Longitude: -97.3, AltitudeM: 53},
+	} {
+		if err := telemetry.AddSample(ctx, sample); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := durable.CreateOperationalIntent(ctx, domain.OperationalIntent{
+		ID:             "intent-1",
+		AircraftID:     "aircraft-1",
+		Version:        1,
+		Status:         domain.IntentStatusActive,
+		PlannedStartAt: now,
+		PlannedEndAt:   now.Add(time.Hour),
+		UpdatedAt:      now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := service.NewFleetService(durable, telemetry, replay, reg)
+	server := New(svc, time.Second)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/aircraft/aircraft-1/map?limit=2", nil)
+	rec := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var body readmodel.AircraftMapView
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Aircraft.ID != "aircraft-1" {
+		t.Fatalf("aircraft ID = %q, want aircraft-1", body.Aircraft.ID)
+	}
+	if !body.LiveStateAvailable {
+		t.Fatal("live state should be available")
+	}
+	if body.LatestTelemetry == nil || body.LatestTelemetry.ID != "sample-3" {
+		t.Fatalf("latest telemetry = %#v, want sample-3", body.LatestTelemetry)
+	}
+	if len(body.ReplaySamples) != 2 || body.ReplaySamples[0].ID != "sample-2" || body.ReplaySamples[1].ID != "sample-3" {
+		t.Fatalf("replay samples = %#v, want sample-2/sample-3", body.ReplaySamples)
+	}
+	if body.ActiveIntent == nil || body.ActiveIntent.ID != "intent-1" {
+		t.Fatalf("active intent = %#v, want intent-1", body.ActiveIntent)
+	}
+}
+
 func TestHandleGetOverviewDashboard(t *testing.T) {
 	ctx := context.Background()
 	durable := durablememory.NewStore()

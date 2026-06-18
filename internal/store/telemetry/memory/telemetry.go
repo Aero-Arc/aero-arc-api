@@ -40,6 +40,22 @@ func (s *Store) GetLatestSample(_ context.Context, aircraftID string) (*domain.T
 	return latest, nil
 }
 
+func (s *Store) QueryAircraftSamples(_ context.Context, aircraftID string, limit int) ([]domain.TelemetrySample, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	samples := make([]domain.TelemetrySample, 0)
+	for _, sample := range s.samples {
+		if sample.AircraftID == aircraftID {
+			samples = append(samples, sample)
+		}
+	}
+	sort.Slice(samples, func(i, j int) bool { return samples[i].RecordedAt.Before(samples[j].RecordedAt) })
+	if limit > 0 && len(samples) > limit {
+		samples = samples[len(samples)-limit:]
+	}
+	return samples, nil
+}
+
 func (s *Store) QueryFlightSamples(_ context.Context, flightID string, limit int) ([]domain.TelemetrySample, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

@@ -119,6 +119,24 @@ func (s *Server) handleGetAircraft(c *mach.Context) {
 	writeJSON(c, http.StatusOK, dashboard)
 }
 
+func (s *Server) handleGetAircraftMap(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+
+	limit, err := parseLimit(c)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	view, err := s.fleet.GetAircraftMapView(ctx, c.Param("aircraft_id"), limit)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, view)
+}
+
 func (s *Server) handleListAircraftFlights(c *mach.Context) {
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -174,6 +175,152 @@ func TestFleetServiceGracefullyDegradesWhenRegistryUnavailable(t *testing.T) {
 	}
 	if dashboard.Readiness.Status != "warning" {
 		t.Fatalf("readiness = %q, want warning", dashboard.Readiness.Status)
+	}
+}
+
+func TestFleetServiceComposesAircraftMapView(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 6, 17, 15, 0, 0, 0, time.UTC)
+	durable := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	replay := replaymemory.NewStore()
+	registry := newTestRegistry()
+
+	must(t, durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1", AgentID: "agent-1", TailNumber: "N100AA", CreatedAt: now, UpdatedAt: now}))
+	must(t, registry.SetLiveAircraftState(ctx, domain.LiveAircraftState{
+		AircraftID: "aircraft-1", AgentID: "agent-1", RelayID: "relay-1", Connected: true,
+	}))
+	for i := 1; i <= 3; i++ {
+		must(t, telemetry.AddSample(ctx, domain.TelemetrySample{
+			ID:         fmt.Sprintf("sample-%d", i),
+			AircraftID: "aircraft-1",
+			IntentID:   "intent-1",
+			RecordedAt: now.Add(time.Duration(i) * time.Minute),
+			Latitude:   35 + float64(i)/100,
+			Longitude:  -97 - float64(i)/100,
+			AltitudeM:  50 + float64(i),
+		}))
+	}
+	intent := domain.OperationalIntent{
+		ID:             "intent-1",
+		OperatorID:     "operator-1",
+		AircraftID:     "aircraft-1",
+		Version:        2,
+		Status:         domain.IntentStatusActive,
+		PlannedStartAt: now.Add(-time.Minute),
+		PlannedEndAt:   now.Add(time.Hour),
+		UpdatedAt:      now,
+	}
+	must(t, durable.CreateOperationalIntent(ctx, intent))
+	must(t, durable.RecordOperationalVolume(ctx, domain.OperationalVolume{
+		ID:            "volume-1",
+		OperatorID:    "operator-1",
+		IntentID:      "intent-1",
+		IntentVersion: 2,
+		Sequence:      1,
+		GeoJSON:       `{"type":"Polygon","coordinates":[[[-98,35],[-97,35],[-97,36],[-98,36],[-98,35]]]}`,
+		MinAltitudeM:  10,
+		MaxAltitudeM:  120,
+		StartsAt:      now,
+		EndsAt:        now.Add(time.Hour),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}))
+	must(t, durable.UpsertConformanceSummary(ctx, domain.ConformanceSummary{
+		ID:                  "conformance-1",
+		OperatorID:          "operator-1",
+		IntentID:            "intent-1",
+		IntentVersion:       2,
+		AircraftID:          "aircraft-1",
+		Status:              domain.ConformanceStatusConforming,
+		AlertCount:          1,
+		ReportabilityStatus: domain.ReportabilityStatusReview,
+		UpdatedAt:           now,
+	}))
+	must(t, durable.RecordConformanceEvent(ctx, domain.ConformanceEvent{
+		ID:            "event-1",
+		OperatorID:    "operator-1",
+		IntentID:      "intent-1",
+		IntentVersion: 2,
+		AircraftID:    "aircraft-1",
+		EventCode:     domain.ConformanceEventIntentExit,
+		OccurredAt:    now.Add(10 * time.Minute),
+	}))
+
+	svc := NewFleetService(durable, telemetry, replay, registry)
+	view, err := svc.GetAircraftMapView(ctx, "aircraft-1", 2)
+	if err != nil {
+		t.Fatalf("GetAircraftMapView returned error: %v", err)
+	}
+	if view.Aircraft.ID != "aircraft-1" {
+		t.Fatalf("aircraft ID = %q, want aircraft-1", view.Aircraft.ID)
+	}
+	if !view.LiveStateAvailable || view.LiveState == nil || view.LiveState.RelayID != "relay-1" {
+		t.Fatalf("live state = %#v available=%v, want relay-1 available", view.LiveState, view.LiveStateAvailable)
+	}
+	if view.LatestTelemetry == nil || view.LatestTelemetry.ID != "sample-3" {
+		t.Fatalf("latest telemetry = %#v, want sample-3", view.LatestTelemetry)
+	}
+	if len(view.ReplaySamples) != 2 || view.ReplaySamples[0].ID != "sample-2" || view.ReplaySamples[1].ID != "sample-3" {
+		t.Fatalf("replay samples = %#v, want sample-2/sample-3", view.ReplaySamples)
+	}
+	if view.ActiveIntent == nil || view.ActiveIntent.ID != "intent-1" {
+		t.Fatalf("active intent = %#v, want intent-1", view.ActiveIntent)
+	}
+	if len(view.OperationalVolumes) != 1 || view.OperationalVolumes[0].ID != "volume-1" {
+		t.Fatalf("volumes = %#v, want volume-1", view.OperationalVolumes)
+	}
+	if view.ConformanceSummary == nil || view.ConformanceSummary.Status != domain.ConformanceStatusConforming {
+		t.Fatalf("summary = %#v, want conforming", view.ConformanceSummary)
+	}
+	if len(view.ConformanceEvents) != 1 || view.ConformanceEvents[0].ID != "event-1" {
+		t.Fatalf("events = %#v, want event-1", view.ConformanceEvents)
+	}
+}
+
+func TestFleetServiceAircraftMapViewDegradesWhenRegistryUnavailable(t *testing.T) {
+	ctx := context.Background()
+	durable := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	replay := replaymemory.NewStore()
+
+	must(t, durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1"}))
+
+	svc := NewFleetService(durable, telemetry, replay, failingRegistry{})
+	view, err := svc.GetAircraftMapView(ctx, "aircraft-1", 100)
+	if err != nil {
+		t.Fatalf("GetAircraftMapView returned error: %v", err)
+	}
+	if view.LiveStateAvailable {
+		t.Fatal("live state should not be available")
+	}
+}
+
+func TestFleetServiceAircraftMapViewWithoutActiveIntent(t *testing.T) {
+	ctx := context.Background()
+	durable := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	replay := replaymemory.NewStore()
+	registry := newTestRegistry()
+
+	must(t, durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1"}))
+
+	svc := NewFleetService(durable, telemetry, replay, registry)
+	view, err := svc.GetAircraftMapView(ctx, "aircraft-1", 100)
+	if err != nil {
+		t.Fatalf("GetAircraftMapView returned error: %v", err)
+	}
+	if view.ActiveIntent != nil {
+		t.Fatalf("active intent = %#v, want nil", view.ActiveIntent)
+	}
+	if view.ConformanceSummary != nil {
+		t.Fatalf("summary = %#v, want nil", view.ConformanceSummary)
+	}
+	if len(view.OperationalVolumes) != 0 {
+		t.Fatalf("volumes = %#v, want empty", view.OperationalVolumes)
+	}
+	if len(view.ConformanceEvents) != 0 {
+		t.Fatalf("events = %#v, want empty", view.ConformanceEvents)
 	}
 }
 
