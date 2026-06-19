@@ -72,6 +72,9 @@ type Store interface {
 	RecordComplianceFinding(ctx context.Context, finding domain.ComplianceFinding) error
 	ListComplianceFindings(ctx context.Context, subjectType string, subjectID string) ([]domain.ComplianceFinding, error)
 	ListComplianceFindingsForIntent(ctx context.Context, intentID string) ([]domain.ComplianceFinding, error)
+	RecordConflictFinding(ctx context.Context, finding domain.ConflictFinding) error
+	ListConflictFindings(ctx context.Context, intentID string, intentVersion int) ([]domain.ConflictFinding, error)
+	ReplaceConflictFindings(ctx context.Context, intentID string, intentVersion int, ruleVersion string, findings []domain.ConflictFinding) error
 
 	UpsertOperationsPersonnel(ctx context.Context, person domain.OperationsPersonnel) error
 	GetOperationsPersonnel(ctx context.Context, personID string) (domain.OperationsPersonnel, error)

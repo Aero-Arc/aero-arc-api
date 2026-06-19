@@ -284,8 +284,8 @@ func TestPreflightBlockedWhenOperationalVolumeMissingInlineGeoJSON(t *testing.T)
 		ID:           "volume-uri-only",
 		Sequence:     1,
 		GeometryURI:  "s3://demo/volume.geojson",
-		MinAltitudeM: 10,
-		MaxAltitudeM: 120,
+		MinAltitudeM: float64Ptr(10),
+		MaxAltitudeM: float64Ptr(120),
 		AltitudeRef:  domain.AltitudeReferenceAGL,
 		StartsAt:     now,
 		EndsAt:       now.Add(time.Hour),
@@ -301,6 +301,72 @@ func TestPreflightBlockedWhenOperationalVolumeMissingInlineGeoJSON(t *testing.T)
 	}
 	if !hasFinding(evaluation.Findings, "VOLUME-GEOJSON") {
 		t.Fatalf("findings = %#v, want VOLUME-GEOJSON", evaluation.Findings)
+	}
+}
+
+func TestPreflightIgnoresOperationalVolumesFromOldIntentVersion(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+	must(t, store.CreateOperationalIntent(ctx, domain.OperationalIntent{
+		ID:                  "intent-versioned-preflight",
+		OperatorID:          "operator-1",
+		AircraftID:          "aircraft-1",
+		Version:             2,
+		Name:                "versioned preflight",
+		Summary:             "preflight should only use current volume version",
+		AuthorizationPath:   domain.AuthorizationPathDemo,
+		PopulationCategory:  domain.PopulationCategoryOne,
+		Status:              domain.IntentStatusSubmitted,
+		ConformanceRequired: true,
+		PlannedStartAt:      now,
+		PlannedEndAt:        now.Add(time.Hour),
+		UpdatedAt:           now,
+	}))
+	must(t, store.RecordOperationalVolume(ctx, domain.OperationalVolume{
+		ID:            "volume-old-invalid",
+		OperatorID:    "operator-1",
+		IntentID:      "intent-versioned-preflight",
+		IntentVersion: 1,
+		Sequence:      1,
+		MinAltitudeM:  120,
+		MaxAltitudeM:  10,
+		AltitudeRef:   domain.AltitudeReferenceAGL,
+		StartsAt:      now.Add(2 * time.Hour),
+		EndsAt:        now.Add(time.Hour),
+		VolumeType:    domain.OperationalVolumeLoiter,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}))
+	must(t, store.RecordOperationalVolume(ctx, domain.OperationalVolume{
+		ID:            "volume-current-valid",
+		OperatorID:    "operator-1",
+		IntentID:      "intent-versioned-preflight",
+		IntentVersion: 2,
+		Sequence:      1,
+		GeoJSON:       squareGeoJSON(),
+		MinAltitudeM:  10,
+		MaxAltitudeM:  120,
+		AltitudeRef:   domain.AltitudeReferenceAGL,
+		StartsAt:      now,
+		EndsAt:        now.Add(time.Hour),
+		VolumeType:    domain.OperationalVolumeLoiter,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}))
+
+	evaluation, err := NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, "intent-versioned-preflight")
+	if err != nil {
+		t.Fatalf("EvaluateIntent returned error: %v", err)
+	}
+	if evaluation.Blocked {
+		t.Fatalf("preflight blocked on stale volume unexpectedly: %#v", evaluation.Findings)
+	}
+	for _, check := range evaluation.Checks {
+		if check.IntentVersion != 2 {
+			t.Fatalf("check version = %d, want current version 2: %#v", check.IntentVersion, check)
+		}
 	}
 }
 
@@ -338,6 +404,80 @@ func TestConformanceTelemetryInsideVolumeConforming(t *testing.T) {
 	}
 	if len(events) != 0 {
 		t.Fatalf("stored events = %#v, want none", events)
+	}
+}
+
+func TestConformanceTelemetryIgnoresOperationalVolumesFromOldIntentVersion(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+	must(t, store.CreateOperationalIntent(ctx, domain.OperationalIntent{
+		ID:                  "intent-versioned-conformance",
+		OperatorID:          "operator-1",
+		AircraftID:          "aircraft-1",
+		Version:             2,
+		Name:                "versioned conformance",
+		Summary:             "conformance should only use current volume version",
+		AuthorizationPath:   domain.AuthorizationPathDemo,
+		PopulationCategory:  domain.PopulationCategoryOne,
+		Status:              domain.IntentStatusActive,
+		ConformanceRequired: true,
+		PlannedStartAt:      now,
+		PlannedEndAt:        now.Add(time.Hour),
+		UpdatedAt:           now,
+	}))
+	must(t, store.RecordOperationalVolume(ctx, domain.OperationalVolume{
+		ID:            "volume-old-matching",
+		OperatorID:    "operator-1",
+		IntentID:      "intent-versioned-conformance",
+		IntentVersion: 1,
+		Sequence:      1,
+		GeoJSON:       squareGeoJSON(),
+		MinAltitudeM:  10,
+		MaxAltitudeM:  120,
+		AltitudeRef:   domain.AltitudeReferenceAGL,
+		StartsAt:      now,
+		EndsAt:        now.Add(time.Hour),
+		VolumeType:    domain.OperationalVolumeLoiter,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}))
+	must(t, store.RecordOperationalVolume(ctx, domain.OperationalVolume{
+		ID:            "volume-current-east",
+		OperatorID:    "operator-1",
+		IntentID:      "intent-versioned-conformance",
+		IntentVersion: 2,
+		Sequence:      1,
+		GeoJSON:       eastSquareGeoJSON(),
+		MinAltitudeM:  10,
+		MaxAltitudeM:  120,
+		AltitudeRef:   domain.AltitudeReferenceAGL,
+		StartsAt:      now,
+		EndsAt:        now.Add(time.Hour),
+		VolumeType:    domain.OperationalVolumeLoiter,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}))
+
+	evaluation, err := NewConformanceServiceWithClock(store, telemetry, fixedClock(now)).EvaluateTelemetry(ctx, domain.TelemetrySample{
+		ID:         "sample-in-old-volume-only",
+		IntentID:   "intent-versioned-conformance",
+		AircraftID: "aircraft-1",
+		RecordedAt: now.Add(30 * time.Minute),
+		Latitude:   35.5,
+		Longitude:  -97.5,
+		AltitudeM:  60,
+	})
+	if err != nil {
+		t.Fatalf("EvaluateTelemetry returned error: %v", err)
+	}
+	if evaluation.Summary.Status != domain.ConformanceStatusNonConforming {
+		t.Fatalf("summary status = %q, want non_conforming from current v2 volume", evaluation.Summary.Status)
+	}
+	if len(evaluation.Events) != 1 || evaluation.Events[0].ExpectedVolumeID != "volume-current-east" {
+		t.Fatalf("events = %#v, want intent_exit against current v2 volume", evaluation.Events)
 	}
 }
 
@@ -453,6 +593,86 @@ func TestConformanceTelemetryActiveIntentWithoutVolumesProducesUnknownNoEvent(t 
 	}
 }
 
+func TestConformanceTelemetryDoesNotCarryOldVersionSummaryState(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+	must(t, store.CreateOperationalIntent(ctx, domain.OperationalIntent{
+		ID:                  "intent-versioned-summary",
+		OperatorID:          "operator-1",
+		AircraftID:          "aircraft-1",
+		Version:             2,
+		Name:                "versioned summary",
+		Summary:             "conformance summaries are version scoped",
+		AuthorizationPath:   domain.AuthorizationPathDemo,
+		PopulationCategory:  domain.PopulationCategoryOne,
+		Status:              domain.IntentStatusActive,
+		ConformanceRequired: true,
+		PlannedStartAt:      now,
+		PlannedEndAt:        now.Add(time.Hour),
+		UpdatedAt:           now,
+	}))
+	must(t, store.RecordOperationalVolume(ctx, domain.OperationalVolume{
+		ID:            "volume-current",
+		OperatorID:    "operator-1",
+		IntentID:      "intent-versioned-summary",
+		IntentVersion: 2,
+		Sequence:      1,
+		GeoJSON:       squareGeoJSON(),
+		MinAltitudeM:  10,
+		MaxAltitudeM:  120,
+		AltitudeRef:   domain.AltitudeReferenceAGL,
+		StartsAt:      now,
+		EndsAt:        now.Add(time.Hour),
+		VolumeType:    domain.OperationalVolumeLoiter,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}))
+	must(t, store.UpsertConformanceSummary(ctx, domain.ConformanceSummary{
+		ID:                  "conformance-intent-versioned-summary",
+		OperatorID:          "operator-1",
+		IntentID:            "intent-versioned-summary",
+		IntentVersion:       1,
+		AircraftID:          "aircraft-1",
+		Status:              domain.ConformanceStatusNonConforming,
+		AlertCount:          7,
+		ReportabilityStatus: domain.ReportabilityStatusReview,
+		UpdatedAt:           now.Add(-time.Hour),
+	}))
+	conformance := NewConformanceServiceWithClock(store, telemetry, fixedClock(now))
+	before, err := conformance.GetIntentConformance(ctx, "intent-versioned-summary")
+	if err != nil {
+		t.Fatalf("GetIntentConformance returned error: %v", err)
+	}
+	if before.Summary.IntentVersion != 0 {
+		t.Fatalf("summary before current evaluation = %#v, want no v2 summary", before.Summary)
+	}
+
+	evaluation, err := conformance.EvaluateTelemetry(ctx, domain.TelemetrySample{
+		ID:         "sample-current-version-inside",
+		IntentID:   "intent-versioned-summary",
+		AircraftID: "aircraft-1",
+		RecordedAt: now.Add(30 * time.Minute),
+		Latitude:   35.5,
+		Longitude:  -97.5,
+		AltitudeM:  60,
+	})
+	if err != nil {
+		t.Fatalf("EvaluateTelemetry returned error: %v", err)
+	}
+	if evaluation.Summary.IntentVersion != 2 {
+		t.Fatalf("summary version = %d, want 2", evaluation.Summary.IntentVersion)
+	}
+	if evaluation.Summary.AlertCount != 0 {
+		t.Fatalf("alert count = %d, want old v1 alerts ignored", evaluation.Summary.AlertCount)
+	}
+	if evaluation.Summary.ReportabilityStatus != domain.ReportabilityStatusNo {
+		t.Fatalf("reportability = %q, want no old v1 review state", evaluation.Summary.ReportabilityStatus)
+	}
+}
+
 func TestConformanceTelemetryRespectsPolygonInteriorRing(t *testing.T) {
 	ctx := context.Background()
 	store := durablememory.NewStore()
@@ -463,8 +683,8 @@ func TestConformanceTelemetryRespectsPolygonInteriorRing(t *testing.T) {
 		ID:           "volume-with-hole",
 		Sequence:     1,
 		GeoJSON:      polygonWithHoleGeoJSON(),
-		MinAltitudeM: 10,
-		MaxAltitudeM: 120,
+		MinAltitudeM: float64Ptr(10),
+		MaxAltitudeM: float64Ptr(120),
 		AltitudeRef:  domain.AltitudeReferenceAGL,
 		StartsAt:     now,
 		EndsAt:       now.Add(time.Hour),
@@ -627,6 +847,89 @@ func TestConformanceTelemetryInsideAfterExitPreservesPriorAlerts(t *testing.T) {
 	}
 }
 
+func TestActivationReadinessIgnoresPreflightAndFindingsFromOldIntentVersion(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+	must(t, store.CreateOperationalIntent(ctx, domain.OperationalIntent{
+		ID:                  "intent-versioned-activation",
+		OperatorID:          "operator-1",
+		AircraftID:          "aircraft-1",
+		Version:             2,
+		Name:                "versioned activation",
+		Summary:             "activation should ignore stale old-version blockers",
+		AuthorizationPath:   domain.AuthorizationPathDemo,
+		PopulationCategory:  domain.PopulationCategoryOne,
+		Status:              domain.IntentStatusAccepted,
+		ConformanceRequired: true,
+		PlannedStartAt:      now,
+		PlannedEndAt:        now.Add(time.Hour),
+		UpdatedAt:           now,
+	}))
+	must(t, store.RecordOperationalVolume(ctx, domain.OperationalVolume{
+		ID:            "volume-current",
+		OperatorID:    "operator-1",
+		IntentID:      "intent-versioned-activation",
+		IntentVersion: 2,
+		Sequence:      1,
+		GeoJSON:       squareGeoJSON(),
+		MinAltitudeM:  10,
+		MaxAltitudeM:  120,
+		AltitudeRef:   domain.AltitudeReferenceAGL,
+		StartsAt:      now,
+		EndsAt:        now.Add(time.Hour),
+		VolumeType:    domain.OperationalVolumeLoiter,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}))
+	must(t, store.RecordPreflightCheck(ctx, domain.PreflightCheck{
+		ID:              "preflight-intent-versioned-activation-v1-stale",
+		OperatorID:      "operator-1",
+		IntentID:        "intent-versioned-activation",
+		IntentVersion:   1,
+		AircraftID:      "aircraft-1",
+		Category:        domain.PreflightCheckBattery,
+		Source:          "test",
+		Status:          domain.PreflightStatusBlocked,
+		Summary:         "old version block",
+		RequirementCode: "OLD-BLOCK",
+		RuleVersion:     "test.v1",
+		Blocking:        true,
+		CapturedAt:      now,
+	}))
+	must(t, store.RecordComplianceFinding(ctx, domain.ComplianceFinding{
+		ID:              "finding-intent-versioned-activation-v1-stale",
+		OperatorID:      "operator-1",
+		IntentID:        "intent-versioned-activation",
+		IntentVersion:   1,
+		SubjectType:     "operational_intent",
+		SubjectID:       "intent-versioned-activation",
+		RequirementCode: "OLD-BLOCK",
+		Status:          domain.ComplianceFindingFail,
+		Severity:        domain.SeverityCritical,
+		Blocking:        true,
+		RuleVersion:     "test.v1",
+		Message:         "old version block",
+		EvaluatedAt:     now,
+	}))
+	evaluation, err := NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, "intent-versioned-activation")
+	if err != nil {
+		t.Fatalf("EvaluateIntent returned error: %v", err)
+	}
+	if evaluation.Blocked {
+		t.Fatalf("current preflight blocked unexpectedly: %#v", evaluation.Findings)
+	}
+
+	intent, err := NewIntentServiceWithClock(store, fixedClock(now)).ActivateIntent(ctx, "intent-versioned-activation")
+	if err != nil {
+		t.Fatalf("ActivateIntent returned error with only stale old-version blockers: %v", err)
+	}
+	if intent.Status != domain.IntentStatusActive {
+		t.Fatalf("status = %q, want active", intent.Status)
+	}
+}
+
 func fixedWorkflowTime() time.Time {
 	return time.Date(2026, 6, 15, 15, 0, 0, 0, time.UTC)
 }
@@ -734,8 +1037,8 @@ func createActiveIntentWithVolume(t *testing.T, ctx context.Context, store durab
 		ID:           volumeID,
 		Sequence:     1,
 		GeoJSON:      geoJSON,
-		MinAltitudeM: 10,
-		MaxAltitudeM: 120,
+		MinAltitudeM: float64Ptr(10),
+		MaxAltitudeM: float64Ptr(120),
 		AltitudeRef:  domain.AltitudeReferenceAGL,
 		StartsAt:     plannedStart,
 		EndsAt:       plannedStart.Add(time.Hour),
@@ -780,8 +1083,8 @@ func workflowVolumeRequest(now time.Time) AddOperationalVolumeRequest {
 		ID:           "volume-1",
 		Sequence:     1,
 		GeoJSON:      squareGeoJSON(),
-		MinAltitudeM: 10,
-		MaxAltitudeM: 120,
+		MinAltitudeM: float64Ptr(10),
+		MaxAltitudeM: float64Ptr(120),
 		AltitudeRef:  domain.AltitudeReferenceAGL,
 		StartsAt:     now,
 		EndsAt:       now.Add(time.Hour),

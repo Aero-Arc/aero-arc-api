@@ -56,6 +56,7 @@ func (s *ConformanceService) EvaluateTelemetry(ctx context.Context, sample domai
 	if err != nil {
 		return ConformanceEvaluation{}, fmt.Errorf("list operational volumes: %w", err)
 	}
+	volumes = volumesForVersion(volumes, intent.Version)
 	if len(volumes) == 0 {
 		summary, err := s.unknownSummary(ctx, intent, sample)
 		if err != nil {
@@ -81,9 +82,9 @@ func (s *ConformanceService) EvaluateTelemetry(ctx context.Context, sample domai
 	status := domain.ConformanceStatusConforming
 	reportability := domain.ReportabilityStatusNo
 	events := make([]domain.ConformanceEvent, 0)
-	existing, err := s.durable.GetConformanceSummary(ctx, intent.ID)
+	existing, err := conformanceSummaryForVersion(ctx, s.durable, intent)
 	if err != nil {
-		return ConformanceEvaluation{}, fmt.Errorf("get conformance summary: %w", err)
+		return ConformanceEvaluation{}, err
 	}
 	if existing != nil && existing.ReportabilityStatus != domain.ReportabilityStatusNo {
 		reportability = existing.ReportabilityStatus
@@ -165,8 +166,8 @@ func (s *ConformanceService) resolveIntentForTelemetry(ctx context.Context, samp
 func (s *ConformanceService) unknownSummary(ctx context.Context, intent domain.OperationalIntent, sample domain.TelemetrySample) (domain.ConformanceSummary, error) {
 	reportability := domain.ReportabilityStatusNo
 	alertCount := 0
-	if existing, err := s.durable.GetConformanceSummary(ctx, intent.ID); err != nil {
-		return domain.ConformanceSummary{}, fmt.Errorf("get conformance summary: %w", err)
+	if existing, err := conformanceSummaryForVersion(ctx, s.durable, intent); err != nil {
+		return domain.ConformanceSummary{}, err
 	} else if existing != nil {
 		reportability = existing.ReportabilityStatus
 		alertCount = existing.AlertCount
@@ -209,9 +210,9 @@ func (s *ConformanceService) GetIntentConformance(ctx context.Context, intentID 
 	if err != nil {
 		return ConformanceEvaluation{}, fmt.Errorf("get operational intent: %w", err)
 	}
-	summary, err := s.durable.GetConformanceSummary(ctx, intent.ID)
+	summary, err := conformanceSummaryForVersion(ctx, s.durable, intent)
 	if err != nil {
-		return ConformanceEvaluation{}, fmt.Errorf("get conformance summary: %w", err)
+		return ConformanceEvaluation{}, err
 	}
 	events, err := s.durable.ListConformanceEvents(ctx, "")
 	if err != nil {
@@ -219,7 +220,7 @@ func (s *ConformanceService) GetIntentConformance(ctx context.Context, intentID 
 	}
 	filtered := make([]domain.ConformanceEvent, 0)
 	for _, event := range events {
-		if event.IntentID == intent.ID {
+		if event.IntentID == intent.ID && event.IntentVersion == intent.Version {
 			filtered = append(filtered, event)
 		}
 	}

@@ -18,8 +18,13 @@ var (
 )
 
 type IntentService struct {
-	durable durable.Store
-	now     func() time.Time
+	durable       durable.Store
+	now           func() time.Time
+	deconfliction DeconflictionChecker
+}
+
+type DeconflictionChecker interface {
+	CheckIntent(ctx context.Context, intentID string) (domain.DeconflictionResult, error)
 }
 
 type CreateIntentRequest struct {
@@ -48,8 +53,8 @@ type AddOperationalVolumeRequest struct {
 	Sequence     int                          `json:"sequence"`
 	GeometryURI  string                       `json:"geometry_uri,omitempty"`
 	GeoJSON      string                       `json:"geojson,omitempty"`
-	MinAltitudeM float64                      `json:"min_altitude_m"`
-	MaxAltitudeM float64                      `json:"max_altitude_m"`
+	MinAltitudeM *float64                     `json:"min_altitude_m"`
+	MaxAltitudeM *float64                     `json:"max_altitude_m"`
 	AltitudeRef  domain.AltitudeReference     `json:"altitude_ref,omitempty"`
 	StartsAt     time.Time                    `json:"starts_at"`
 	EndsAt       time.Time                    `json:"ends_at"`
@@ -57,15 +62,23 @@ type AddOperationalVolumeRequest struct {
 	VolumeType   domain.OperationalVolumeType `json:"volume_type,omitempty"`
 }
 
-func NewIntentService(durableStore durable.Store) *IntentService {
-	return NewIntentServiceWithClock(durableStore, nil)
+func NewIntentService(durableStore durable.Store, deconfliction ...DeconflictionChecker) *IntentService {
+	return NewIntentServiceWithClock(durableStore, nil, deconfliction...)
 }
 
-func NewIntentServiceWithClock(durableStore durable.Store, now func() time.Time) *IntentService {
+func NewIntentServiceWithClock(durableStore durable.Store, now func() time.Time, deconfliction ...DeconflictionChecker) *IntentService {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &IntentService{durable: durableStore, now: now}
+	service := &IntentService{
+		durable:       durableStore,
+		now:           now,
+		deconfliction: NewDeconflictionServiceWithClock(durableStore, now),
+	}
+	if len(deconfliction) > 0 {
+		service.deconfliction = deconfliction[0]
+	}
+	return service
 }
 
 func (s *IntentService) CreateIntent(ctx context.Context, req CreateIntentRequest) (domain.OperationalIntent, error) {
@@ -117,6 +130,14 @@ func (s *IntentService) CreateIntent(ctx context.Context, req CreateIntentReques
 	return intent, nil
 }
 
+func (s *IntentService) GetIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error) {
+	intent, err := s.durable.GetOperationalIntent(ctx, intentID)
+	if err != nil {
+		return domain.OperationalIntent{}, fmt.Errorf("get operational intent: %w", err)
+	}
+	return intent, nil
+}
+
 func (s *IntentService) AddOperationalVolume(ctx context.Context, intentID string, req AddOperationalVolumeRequest) (domain.OperationalVolume, error) {
 	intent, err := s.durable.GetOperationalIntent(ctx, intentID)
 	if err != nil {
@@ -131,6 +152,12 @@ func (s *IntentService) AddOperationalVolume(ctx context.Context, intentID strin
 	if id == "" {
 		id = fmt.Sprintf("%s-volume-%d", intent.ID, now.UnixNano())
 	}
+	if req.MinAltitudeM == nil || req.MaxAltitudeM == nil {
+		return domain.OperationalVolume{}, fmt.Errorf("%w: min_altitude_m and max_altitude_m are required", ErrValidation)
+	}
+	if req.AltitudeRef == "" {
+		return domain.OperationalVolume{}, fmt.Errorf("%w: altitude_ref is required", ErrValidation)
+	}
 	volume := domain.OperationalVolume{
 		ID:            id,
 		OperatorID:    intent.OperatorID,
@@ -139,8 +166,8 @@ func (s *IntentService) AddOperationalVolume(ctx context.Context, intentID strin
 		Sequence:      req.Sequence,
 		GeometryURI:   req.GeometryURI,
 		GeoJSON:       req.GeoJSON,
-		MinAltitudeM:  req.MinAltitudeM,
-		MaxAltitudeM:  req.MaxAltitudeM,
+		MinAltitudeM:  *req.MinAltitudeM,
+		MaxAltitudeM:  *req.MaxAltitudeM,
 		AltitudeRef:   req.AltitudeRef,
 		StartsAt:      req.StartsAt.UTC(),
 		EndsAt:        req.EndsAt.UTC(),
@@ -148,9 +175,6 @@ func (s *IntentService) AddOperationalVolume(ctx context.Context, intentID strin
 		VolumeType:    req.VolumeType,
 		CreatedAt:     now,
 		UpdatedAt:     now,
-	}
-	if volume.AltitudeRef == "" {
-		volume.AltitudeRef = domain.AltitudeReferenceAGL
 	}
 	if err := s.durable.RecordOperationalVolume(ctx, volume); err != nil {
 		return domain.OperationalVolume{}, fmt.Errorf("record operational volume: %w", err)
@@ -182,6 +206,15 @@ func (s *IntentService) ActivateIntent(ctx context.Context, intentID string) (do
 	}
 	if intent.Status != domain.IntentStatusAccepted {
 		return domain.OperationalIntent{}, fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, intent.Status, domain.IntentStatusActive)
+	}
+	if s.deconfliction != nil {
+		result, err := s.deconfliction.CheckIntent(ctx, intent.ID)
+		if err != nil {
+			return domain.OperationalIntent{}, fmt.Errorf("check deconfliction: %w", err)
+		}
+		if result.Posture != domain.DeconflictionPostureClear {
+			return domain.OperationalIntent{}, fmt.Errorf("%w: deconfliction posture is %s", ErrActivationBlocked, result.Posture)
+		}
 	}
 	if err := s.activationReadiness(ctx, intent); err != nil {
 		return domain.OperationalIntent{}, err
@@ -243,6 +276,7 @@ func (s *IntentService) activationReadiness(ctx context.Context, intent domain.O
 	if err != nil {
 		return fmt.Errorf("list operational volumes: %w", err)
 	}
+	volumes = volumesForVersion(volumes, intent.Version)
 	if len(volumes) == 0 {
 		return fmt.Errorf("%w: at least one operational volume is required", ErrActivationBlocked)
 	}
@@ -251,6 +285,7 @@ func (s *IntentService) activationReadiness(ctx context.Context, intent domain.O
 	if err != nil {
 		return fmt.Errorf("list preflight checks: %w", err)
 	}
+	checks = preflightChecksForVersion(checks, intent.Version)
 	if len(checks) == 0 {
 		return fmt.Errorf("%w: current preflight checks are required", ErrActivationBlocked)
 	}
@@ -264,6 +299,7 @@ func (s *IntentService) activationReadiness(ctx context.Context, intent domain.O
 	if err != nil {
 		return fmt.Errorf("list compliance findings: %w", err)
 	}
+	findings = complianceFindingsForVersion(findings, intent.Version)
 	for _, finding := range findings {
 		if finding.Blocking && (finding.Status == domain.ComplianceFindingFail || finding.Status == domain.ComplianceFindingReview) {
 			return fmt.Errorf("%w: blocking compliance finding %s", ErrActivationBlocked, finding.ID)

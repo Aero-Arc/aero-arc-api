@@ -151,13 +151,14 @@ func run(ctx context.Context, cfg *config.Config) error {
 		slog.Info("seeded demo data")
 	}
 	fleetService := service.NewFleetService(durableStore, telemetryStore, replayStore, registryClient)
-	intentService := service.NewIntentService(durableStore)
+	deconflictionService := service.NewDeconflictionService(durableStore)
+	intentService := service.NewIntentService(durableStore, deconflictionService)
 	preflightService := service.NewPreflightService(durableStore)
 	conformanceService := service.NewConformanceService(durableStore, telemetryStore)
 
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.NewWithWorkflows(fleetService, intentService, preflightService, conformanceService, cfg.RequestTimeout).Handler(),
+		Handler:           httpapi.NewWithWorkflows(fleetService, intentService, preflightService, conformanceService, cfg.RequestTimeout, deconflictionService).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

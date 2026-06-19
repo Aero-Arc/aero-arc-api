@@ -22,6 +22,9 @@ type AltitudeReference string
 type OperationalVolumeType string
 type ConformanceEventCode string
 type ComplianceFindingStatus string
+type DeconflictionPosture string
+type ConflictFindingStatus string
+type ConflictFindingSourceType string
 
 const (
 	AircraftStatusActive      AircraftStatus = "active"
@@ -203,4 +206,22 @@ const (
 	ComplianceFindingReview ComplianceFindingStatus = "review"
 	ComplianceFindingFail   ComplianceFindingStatus = "fail"
 	ComplianceFindingWaived ComplianceFindingStatus = "waived"
+)
+
+const (
+	DeconflictionPostureClear             DeconflictionPosture = "clear"
+	DeconflictionPostureConflict          DeconflictionPosture = "conflict"
+	DeconflictionPosturePotentialConflict DeconflictionPosture = "potential_conflict"
+	DeconflictionPostureIndeterminate     DeconflictionPosture = "indeterminate"
+)
+
+const (
+	ConflictFindingStatusClear             ConflictFindingStatus = "clear"
+	ConflictFindingStatusConflict          ConflictFindingStatus = "conflict"
+	ConflictFindingStatusPotentialConflict ConflictFindingStatus = "potential_conflict"
+	ConflictFindingStatusIndeterminate     ConflictFindingStatus = "indeterminate"
+)
+
+const (
+	ConflictFindingSourceLocal ConflictFindingSourceType = "local"
 )

@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"sort"
+	"strconv"
 	"sync"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
@@ -28,6 +29,7 @@ type Store struct {
 	evidenceRecords      map[string]domain.EvidenceRecord
 	reportabilityReviews []domain.ReportabilityReview
 	complianceFindings   []domain.ComplianceFinding
+	conflictFindings     []domain.ConflictFinding
 	personnel            map[string]domain.OperationsPersonnel
 	personnelAssignments []domain.PersonnelAssignment
 }
@@ -256,7 +258,7 @@ func (s *Store) ListOperationalIntents(_ context.Context, aircraftID string) ([]
 func (s *Store) RecordOperationalVolume(_ context.Context, volume domain.OperationalVolume) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.operationalVolumes[volume.ID] = volume
+	s.operationalVolumes[operationalVolumeKey(volume)] = volume
 	return nil
 }
 
@@ -276,6 +278,14 @@ func (s *Store) ListOperationalVolumes(_ context.Context, intentID string) ([]do
 		return volumes[i].Sequence < volumes[j].Sequence
 	})
 	return volumes, nil
+}
+
+func operationalVolumeKey(volume domain.OperationalVolume) string {
+	return volume.IntentID + ":" + strconv.Itoa(volume.IntentVersion) + ":" + volume.ID
+}
+
+func conformanceSummaryKey(summary domain.ConformanceSummary) string {
+	return summary.IntentID + ":" + strconv.Itoa(summary.IntentVersion)
 }
 
 func (s *Store) UpsertRegulatoryAuthorization(_ context.Context, authorization domain.RegulatoryAuthorization) error {
@@ -395,18 +405,26 @@ func (s *Store) ListConformanceEvents(_ context.Context, flightID string) ([]dom
 func (s *Store) UpsertConformanceSummary(_ context.Context, summary domain.ConformanceSummary) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.conformanceSummaries[summary.IntentID] = summary
+	s.conformanceSummaries[conformanceSummaryKey(summary)] = summary
 	return nil
 }
 
 func (s *Store) GetConformanceSummary(_ context.Context, intentID string) (*domain.ConformanceSummary, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	summary, ok := s.conformanceSummaries[intentID]
-	if !ok {
-		return nil, nil
+	var selected *domain.ConformanceSummary
+	for _, summary := range s.conformanceSummaries {
+		if summary.IntentID != intentID {
+			continue
+		}
+		candidate := summary
+		if selected == nil ||
+			candidate.IntentVersion > selected.IntentVersion ||
+			(candidate.IntentVersion == selected.IntentVersion && candidate.UpdatedAt.After(selected.UpdatedAt)) {
+			selected = &candidate
+		}
 	}
-	return &summary, nil
+	return selected, nil
 }
 
 func (s *Store) ListConformanceSummaries(_ context.Context, intentID string) ([]domain.ConformanceSummary, error) {
@@ -503,6 +521,55 @@ func (s *Store) ListComplianceFindingsForIntent(_ context.Context, intentID stri
 	}
 	sort.Slice(findings, func(i, j int) bool { return findings[i].EvaluatedAt.After(findings[j].EvaluatedAt) })
 	return findings, nil
+}
+
+func (s *Store) RecordConflictFinding(_ context.Context, finding domain.ConflictFinding) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, existing := range s.conflictFindings {
+		if existing.ID == finding.ID {
+			s.conflictFindings[i] = finding
+			return nil
+		}
+	}
+	s.conflictFindings = append(s.conflictFindings, finding)
+	return nil
+}
+
+func (s *Store) ListConflictFindings(_ context.Context, intentID string, intentVersion int) ([]domain.ConflictFinding, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	findings := make([]domain.ConflictFinding, 0)
+	for _, finding := range s.conflictFindings {
+		if intentID != "" && finding.IntentID != intentID {
+			continue
+		}
+		if intentVersion != 0 && finding.IntentVersion != intentVersion {
+			continue
+		}
+		findings = append(findings, finding)
+	}
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].EvaluatedAt.Equal(findings[j].EvaluatedAt) {
+			return findings[i].ID < findings[j].ID
+		}
+		return findings[i].EvaluatedAt.After(findings[j].EvaluatedAt)
+	})
+	return findings, nil
+}
+
+func (s *Store) ReplaceConflictFindings(_ context.Context, intentID string, intentVersion int, ruleVersion string, findings []domain.ConflictFinding) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := make([]domain.ConflictFinding, 0, len(s.conflictFindings)+len(findings))
+	for _, existing := range s.conflictFindings {
+		if existing.IntentID != intentID || existing.IntentVersion != intentVersion || existing.RuleVersion != ruleVersion {
+			next = append(next, existing)
+		}
+	}
+	next = append(next, findings...)
+	s.conflictFindings = next
+	return nil
 }
 
 func (s *Store) UpsertOperationsPersonnel(_ context.Context, person domain.OperationsPersonnel) error {
