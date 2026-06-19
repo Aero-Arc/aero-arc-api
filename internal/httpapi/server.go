@@ -13,6 +13,7 @@ type Server struct {
 	intents        *service.IntentService
 	preflight      *service.PreflightService
 	conformance    *service.ConformanceService
+	deconfliction  *service.DeconflictionService
 	requestTimeout time.Duration
 }
 
@@ -20,14 +21,18 @@ func New(fleet *service.FleetService, requestTimeout time.Duration) *Server {
 	return &Server{fleet: fleet, requestTimeout: requestTimeout}
 }
 
-func NewWithWorkflows(fleet *service.FleetService, intents *service.IntentService, preflight *service.PreflightService, conformance *service.ConformanceService, requestTimeout time.Duration) *Server {
-	return &Server{
+func NewWithWorkflows(fleet *service.FleetService, intents *service.IntentService, preflight *service.PreflightService, conformance *service.ConformanceService, requestTimeout time.Duration, deconfliction ...*service.DeconflictionService) *Server {
+	server := &Server{
 		fleet:          fleet,
 		intents:        intents,
 		preflight:      preflight,
 		conformance:    conformance,
 		requestTimeout: requestTimeout,
 	}
+	if len(deconfliction) > 0 {
+		server.deconfliction = deconfliction[0]
+	}
+	return server
 }
 
 func (s *Server) Handler() http.Handler {
@@ -62,6 +67,10 @@ func (s *Server) Handler() http.Handler {
 		api.POST("/operational-intents/{intent_id}/volumes", s.handleAddOperationalVolume)
 		api.POST("/operational-intents/{intent_id}/submit", s.handleSubmitOperationalIntent)
 		api.POST("/operational-intents/{intent_id}/preflight/evaluate", s.handleEvaluateOperationalIntentPreflight)
+		if s.deconfliction != nil {
+			api.POST("/operational-intents/{intent_id}/deconfliction/check", s.handleCheckOperationalIntentDeconfliction)
+			api.GET("/operational-intents/{intent_id}/conflicts", s.handleListOperationalIntentConflicts)
+		}
 		api.POST("/operational-intents/{intent_id}/accept", s.handleAcceptOperationalIntent)
 		api.POST("/operational-intents/{intent_id}/activate", s.handleActivateOperationalIntent)
 		api.GET("/operational-intents/{intent_id}/conformance", s.handleGetOperationalIntentConformance)

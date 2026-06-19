@@ -43,6 +43,7 @@ func (s *PreflightService) EvaluateIntent(ctx context.Context, intentID string) 
 	if err != nil {
 		return PreflightEvaluation{}, fmt.Errorf("list operational volumes: %w", err)
 	}
+	volumes = volumesForVersion(volumes, intent.Version)
 
 	now := s.now().UTC()
 	builder := preflightBuilder{intent: intent, now: now}
@@ -180,7 +181,7 @@ func (b *preflightBuilder) block(category domain.PreflightCheckCategory, key, so
 
 func (b *preflightBuilder) check(category domain.PreflightCheckCategory, key, source, requirementCode, summary, remediation string, status domain.PreflightStatus, blocking bool) {
 	check := domain.PreflightCheck{
-		ID:              fmt.Sprintf("preflight-%s-%s", b.intent.ID, key),
+		ID:              fmt.Sprintf("preflight-%s-v%d-%s", b.intent.ID, b.intent.Version, key),
 		OperatorID:      b.intent.OperatorID,
 		IntentID:        b.intent.ID,
 		IntentVersion:   b.intent.Version,
@@ -197,7 +198,7 @@ func (b *preflightBuilder) check(category domain.PreflightCheckCategory, key, so
 	b.checks = append(b.checks, check)
 	if !blocking {
 		b.findings = append(b.findings, domain.ComplianceFinding{
-			ID:              fmt.Sprintf("finding-%s-%s", b.intent.ID, key),
+			ID:              fmt.Sprintf("finding-%s-v%d-%s", b.intent.ID, b.intent.Version, key),
 			OperatorID:      b.intent.OperatorID,
 			IntentID:        b.intent.ID,
 			IntentVersion:   b.intent.Version,
@@ -214,7 +215,7 @@ func (b *preflightBuilder) check(category domain.PreflightCheckCategory, key, so
 		return
 	}
 	b.findings = append(b.findings, domain.ComplianceFinding{
-		ID:              fmt.Sprintf("finding-%s-%s", b.intent.ID, key),
+		ID:              fmt.Sprintf("finding-%s-v%d-%s", b.intent.ID, b.intent.Version, key),
 		OperatorID:      b.intent.OperatorID,
 		IntentID:        b.intent.ID,
 		IntentVersion:   b.intent.Version,

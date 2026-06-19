@@ -222,11 +222,11 @@ func (s *FleetService) GetAircraftMapView(ctx context.Context, aircraftID string
 	if err != nil {
 		return readmodel.AircraftMapView{}, fmt.Errorf("list operational volumes: %w", err)
 	}
-	view.OperationalVolumes = volumes
+	view.OperationalVolumes = volumesForVersion(volumes, intent.Version)
 
-	summary, err := s.durable.GetConformanceSummary(ctx, intent.ID)
+	summary, err := conformanceSummaryForVersion(ctx, s.durable, *intent)
 	if err != nil {
-		return readmodel.AircraftMapView{}, fmt.Errorf("get conformance summary: %w", err)
+		return readmodel.AircraftMapView{}, err
 	}
 	view.ConformanceSummary = summary
 
@@ -235,7 +235,7 @@ func (s *FleetService) GetAircraftMapView(ctx context.Context, aircraftID string
 		return readmodel.AircraftMapView{}, fmt.Errorf("list conformance events: %w", err)
 	}
 	for _, event := range events {
-		if event.IntentID == intent.ID {
+		if event.IntentID == intent.ID && event.IntentVersion == intent.Version {
 			view.ConformanceEvents = append(view.ConformanceEvents, event)
 		}
 	}

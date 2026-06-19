@@ -312,6 +312,28 @@ func (s *Server) handleEvaluateOperationalIntentPreflight(c *mach.Context) {
 	writeJSON(c, http.StatusOK, evaluation)
 }
 
+func (s *Server) handleCheckOperationalIntentDeconfliction(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	result, err := s.deconfliction.CheckIntent(ctx, c.Param("intent_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, result)
+}
+
+func (s *Server) handleListOperationalIntentConflicts(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	findings, err := s.deconfliction.ListConflictFindings(ctx, c.Param("intent_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, map[string]any{"findings": findings})
+}
+
 func (s *Server) handleAcceptOperationalIntent(c *mach.Context) {
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
@@ -326,6 +348,15 @@ func (s *Server) handleAcceptOperationalIntent(c *mach.Context) {
 func (s *Server) handleActivateOperationalIntent(c *mach.Context) {
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
+	intent, err := s.intents.GetIntent(ctx, c.Param("intent_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	if intent.Status != domain.IntentStatusAccepted {
+		writeServiceError(c, fmt.Errorf("%w: %s -> %s", service.ErrInvalidTransition, intent.Status, domain.IntentStatusActive))
+		return
+	}
 	evaluation, err := s.preflight.EvaluateIntent(ctx, c.Param("intent_id"))
 	if err != nil {
 		writeServiceError(c, err)
@@ -335,7 +366,7 @@ func (s *Server) handleActivateOperationalIntent(c *mach.Context) {
 		writeServiceError(c, fmt.Errorf("%w: preflight evaluation blocked", service.ErrActivationBlocked))
 		return
 	}
-	intent, err := s.intents.ActivateIntent(ctx, c.Param("intent_id"))
+	intent, err = s.intents.ActivateIntent(ctx, c.Param("intent_id"))
 	if err != nil {
 		writeServiceError(c, err)
 		return
