@@ -97,6 +97,12 @@ func newCommand() *cli.Command {
 						Usage:   "optional startup fixture seed mode: demo",
 						Sources: cli.EnvVars("AERO_API_SEED"),
 					},
+					&cli.BoolFlag{
+						Name:    "debug",
+						Value:   defaults.Debug,
+						Usage:   "enable debug operation logging",
+						Sources: cli.EnvVars("AERO_API_DEBUG"),
+					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					cfg := &config.Config{
@@ -109,6 +115,7 @@ func newCommand() *cli.Command {
 						RegistryDialTimeout: cmd.Duration("registry-dial-timeout"),
 						RequestTimeout:      cmd.Duration("request-timeout"),
 						Seed:                cmd.String("seed"),
+						Debug:               cmd.Bool("debug"),
 					}
 					if err := cfg.Validate(); err != nil {
 						return err
@@ -122,6 +129,10 @@ func newCommand() *cli.Command {
 }
 
 func run(ctx context.Context, cfg *config.Config) error {
+	if cfg.Debug {
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	}
+
 	registryClient, closeRegistry, err := registry.New(ctx, cfg.RegistryMode, cfg.RegistryAddress, cfg.RegistryDialTimeout)
 	if err != nil {
 		return err
@@ -158,7 +169,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.NewWithWorkflows(fleetService, intentService, preflightService, conformanceService, cfg.RequestTimeout, deconflictionService).Handler(),
+		Handler:           httpapi.NewWithWorkflows(fleetService, intentService, preflightService, conformanceService, cfg.RequestTimeout, deconflictionService).WithDebug(cfg.Debug).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -172,6 +183,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 			slog.String("registry_mode", cfg.RegistryMode),
 			slog.String("registry_addr", cfg.RegistryAddress),
 			slog.String("seed", cfg.Seed),
+			slog.Bool("debug", cfg.Debug),
 		)
 
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {

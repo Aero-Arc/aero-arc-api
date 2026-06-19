@@ -262,6 +262,20 @@ func (s *Store) RecordOperationalVolume(_ context.Context, volume domain.Operati
 	return nil
 }
 
+func (s *Store) ReplaceOperationalVolumes(_ context.Context, intentID string, intentVersion int, volumes []domain.OperationalVolume) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, volume := range s.operationalVolumes {
+		if volume.IntentID == intentID && volume.IntentVersion == intentVersion {
+			delete(s.operationalVolumes, key)
+		}
+	}
+	for _, volume := range volumes {
+		s.operationalVolumes[operationalVolumeKey(volume)] = volume
+	}
+	return nil
+}
+
 func (s *Store) ListOperationalVolumes(_ context.Context, intentID string) ([]domain.OperationalVolume, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

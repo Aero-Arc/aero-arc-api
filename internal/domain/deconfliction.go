@@ -2,6 +2,13 @@ package domain
 
 import "time"
 
+type GeoBounds struct {
+	MinLat float64 `json:"min_lat"`
+	MinLon float64 `json:"min_lon"`
+	MaxLat float64 `json:"max_lat"`
+	MaxLon float64 `json:"max_lon"`
+}
+
 type ConflictFinding struct {
 	ID                  string                    `json:"id"`
 	OperatorID          string                    `json:"operator_id,omitempty"`
@@ -22,6 +29,8 @@ type ConflictFinding struct {
 	TimeOverlapEnd      *time.Time                `json:"time_overlap_end,omitempty"`
 	AltitudeOverlapMin  *float64                  `json:"altitude_overlap_min,omitempty"`
 	AltitudeOverlapMax  *float64                  `json:"altitude_overlap_max,omitempty"`
+	OwnBounds           *GeoBounds                `json:"own_bounds,omitempty"`
+	ConflictingBounds   *GeoBounds                `json:"conflicting_bounds,omitempty"`
 	RuleVersion         string                    `json:"rule_version,omitempty"`
 	Provenance          string                    `json:"provenance,omitempty"`
 	EvaluatedAt         time.Time                 `json:"evaluated_at"`

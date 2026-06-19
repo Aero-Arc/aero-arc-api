@@ -180,6 +180,185 @@ func TestAddOperationalVolumeFailsAfterActivate(t *testing.T) {
 	}
 }
 
+func TestModifyDraftIntentReplacesEditableVersionVolumes(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+
+	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intent, err := intents.CreateIntent(ctx, workflowIntentRequest(now))
+	if err != nil {
+		t.Fatalf("CreateIntent returned error: %v", err)
+	}
+	if _, err = intents.AddOperationalVolume(ctx, intent.ID, workflowVolumeRequest(now)); err != nil {
+		t.Fatalf("AddOperationalVolume returned error: %v", err)
+	}
+
+	result, err := intents.ModifyIntent(ctx, intent.ID, ModifyIntentRequest{
+		Reason:          "operator_adjustment",
+		ExpectedVersion: 1,
+		Intent: ModifyIntentFields{
+			Name: stringPtr("Adjusted mission"),
+		},
+		Volumes: []AddOperationalVolumeRequest{{
+			ID:           "volume-adjusted",
+			Sequence:     1,
+			GeoJSON:      eastSquareGeoJSON(),
+			MinAltitudeM: float64Ptr(30.48),
+			MaxAltitudeM: float64Ptr(76.2),
+			AltitudeRef:  domain.AltitudeReferenceAGL,
+			StartsAt:     now,
+			EndsAt:       now.Add(time.Hour),
+			VolumeType:   domain.OperationalVolumeLoiter,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ModifyIntent returned error: %v", err)
+	}
+	if result.Intent.Version != 1 || result.Intent.Status != domain.IntentStatusDraft {
+		t.Fatalf("intent = version %d status %q, want v1 draft", result.Intent.Version, result.Intent.Status)
+	}
+	if result.Intent.Name != "Adjusted mission" {
+		t.Fatalf("intent name = %q, want adjusted", result.Intent.Name)
+	}
+	volumes, err := store.ListOperationalVolumes(ctx, intent.ID)
+	if err != nil {
+		t.Fatalf("ListOperationalVolumes returned error: %v", err)
+	}
+	current := volumesForVersion(volumes, 1)
+	if len(current) != 1 || current[0].ID != "volume-adjusted" {
+		t.Fatalf("current volumes = %#v, want only adjusted volume", current)
+	}
+}
+
+func TestModifySubmittedIntentRequiresFreshPreflightForReplacementVolumes(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+	intent := seedSubmittedIntentWithVolume(t, ctx, store, now)
+	if evaluation, err := NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID); err != nil {
+		t.Fatalf("EvaluateIntent returned error: %v", err)
+	} else if evaluation.Blocked {
+		t.Fatalf("preflight blocked unexpectedly: %#v", evaluation.Findings)
+	}
+
+	modifyAt := now.Add(10 * time.Minute)
+	intents := NewIntentServiceWithClock(store, fixedClock(modifyAt))
+	if _, err := intents.ModifyIntent(ctx, intent.ID, ModifyIntentRequest{
+		Reason:          "operator_adjustment",
+		ExpectedVersion: 1,
+		Intent: ModifyIntentFields{
+			RouteSummary: stringPtr("Adjusted local operational volume"),
+		},
+		Volumes: []AddOperationalVolumeRequest{{
+			ID:           "volume-adjusted",
+			Sequence:     1,
+			GeoJSON:      eastSquareGeoJSON(),
+			MinAltitudeM: float64Ptr(30.48),
+			MaxAltitudeM: float64Ptr(76.2),
+			AltitudeRef:  domain.AltitudeReferenceAGL,
+			StartsAt:     now,
+			EndsAt:       now.Add(time.Hour),
+			VolumeType:   domain.OperationalVolumeLoiter,
+		}},
+	}); err != nil {
+		t.Fatalf("ModifyIntent returned error: %v", err)
+	}
+	if _, err := intents.AcceptIntent(ctx, intent.ID); err != nil {
+		t.Fatalf("AcceptIntent returned error: %v", err)
+	}
+	if _, err := intents.ActivateIntent(ctx, intent.ID); !errors.Is(err, ErrActivationBlocked) {
+		t.Fatalf("ActivateIntent stale preflight error = %v, want ErrActivationBlocked", err)
+	}
+
+	if evaluation, err := NewPreflightServiceWithClock(store, fixedClock(modifyAt.Add(time.Minute))).EvaluateIntent(ctx, intent.ID); err != nil {
+		t.Fatalf("EvaluateIntent after modify returned error: %v", err)
+	} else if evaluation.Blocked {
+		t.Fatalf("preflight after modify blocked unexpectedly: %#v", evaluation.Findings)
+	}
+	activated, err := intents.ActivateIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatalf("ActivateIntent after fresh preflight returned error: %v", err)
+	}
+	if activated.Status != domain.IntentStatusActive {
+		t.Fatalf("status = %q, want active", activated.Status)
+	}
+}
+
+func TestModifyAcceptedIntentCreatesDraftNextVersion(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+
+	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intent := seedSubmittedIntentWithVolume(t, ctx, store, now)
+	intent, err := intents.AcceptIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatalf("AcceptIntent returned error: %v", err)
+	}
+
+	result, err := intents.ModifyIntent(ctx, intent.ID, ModifyIntentRequest{
+		Reason:          "operator_adjustment",
+		ExpectedVersion: 1,
+		Intent: ModifyIntentFields{
+			Summary: stringPtr("Adjusted inspection area"),
+		},
+		Volumes: []AddOperationalVolumeRequest{{
+			ID:           "volume-v2",
+			Sequence:     1,
+			GeoJSON:      eastSquareGeoJSON(),
+			MinAltitudeM: float64Ptr(30.48),
+			MaxAltitudeM: float64Ptr(76.2),
+			AltitudeRef:  domain.AltitudeReferenceAGL,
+			StartsAt:     now,
+			EndsAt:       now.Add(time.Hour),
+			VolumeType:   domain.OperationalVolumeLoiter,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ModifyIntent returned error: %v", err)
+	}
+	if result.Intent.Version != 2 || result.Intent.Status != domain.IntentStatusDraft {
+		t.Fatalf("intent = version %d status %q, want v2 draft", result.Intent.Version, result.Intent.Status)
+	}
+	if result.SupersedesIntentID != intent.ID || result.SupersedesVersion != 1 {
+		t.Fatalf("supersedes = %q/%d, want %q/1", result.SupersedesIntentID, result.SupersedesVersion, intent.ID)
+	}
+	volumes, err := store.ListOperationalVolumes(ctx, intent.ID)
+	if err != nil {
+		t.Fatalf("ListOperationalVolumes returned error: %v", err)
+	}
+	if len(volumesForVersion(volumes, 1)) != 1 || len(volumesForVersion(volumes, 2)) != 1 {
+		t.Fatalf("volumes by version = %#v, want v1 preserved and v2 created", volumes)
+	}
+}
+
+func TestModifyActiveIntentBlocked(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+	intent := seedActiveIntentWithVolume(t, ctx, store, now)
+
+	_, err := NewIntentServiceWithClock(store, fixedClock(now)).ModifyIntent(ctx, intent.ID, ModifyIntentRequest{
+		Reason:          "operator_adjustment",
+		ExpectedVersion: intent.Version,
+		Intent: ModifyIntentFields{
+			Summary: stringPtr("blocked active adjustment"),
+		},
+	})
+	var activeErr ActiveIntentModificationError
+	if !errors.As(err, &activeErr) {
+		t.Fatalf("ModifyIntent error = %v, want ActiveIntentModificationError", err)
+	}
+	if activeErr.IntentID != intent.ID || activeErr.Status != domain.IntentStatusActive || activeErr.Version != intent.Version {
+		t.Fatalf("active error = %#v, want active intent identity", activeErr)
+	}
+}
+
 func TestPreflightBlockedWhenBatterySOHMissing(t *testing.T) {
 	ctx := context.Background()
 	store := durablememory.NewStore()
@@ -1102,6 +1281,10 @@ func polygonWithHoleGeoJSON() string {
 
 func eastSquareGeoJSON() string {
 	return `{"type":"Polygon","coordinates":[[[-96.5,35],[-96,35],[-96,36],[-96.5,36],[-96.5,35]]]}`
+}
+
+func stringPtr(value string) *string {
+	return &value
 }
 
 func hasFinding(findings []domain.ComplianceFinding, requirementCode string) bool {

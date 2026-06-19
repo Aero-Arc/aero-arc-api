@@ -17,6 +17,7 @@ const (
 	defaultRegistryDialTimeout = 5 * time.Second
 	defaultRequestTimeout      = 3 * time.Second
 	defaultSeed                = ""
+	defaultDebug               = false
 )
 
 type Config struct {
@@ -29,6 +30,7 @@ type Config struct {
 	RegistryDialTimeout time.Duration
 	RequestTimeout      time.Duration
 	Seed                string
+	Debug               bool
 }
 
 func Defaults() *Config {
@@ -42,6 +44,7 @@ func Defaults() *Config {
 		RegistryDialTimeout: defaultRegistryDialTimeout,
 		RequestTimeout:      defaultRequestTimeout,
 		Seed:                defaultSeed,
+		Debug:               defaultDebug,
 	}
 }
 
@@ -55,6 +58,9 @@ func Load() (*Config, error) {
 	applyStringEnv("AERO_API_REGISTRY_MODE", &cfg.RegistryMode)
 	applyStringEnv("AERO_API_REGISTRY_ADDR", &cfg.RegistryAddress)
 	applyStringEnv("AERO_API_SEED", &cfg.Seed)
+	if err := applyBoolEnv("AERO_API_DEBUG", &cfg.Debug); err != nil {
+		return nil, err
+	}
 	if err := applyDurationEnv("AERO_API_REGISTRY_DIAL_TIMEOUT", &cfg.RegistryDialTimeout); err != nil {
 		return nil, err
 	}
@@ -126,6 +132,21 @@ func applyDurationEnv(key string, dst *time.Duration) error {
 	}
 
 	*dst = d
+	return nil
+}
+
+func applyBoolEnv(key string, dst *bool) error {
+	v := os.Getenv(key)
+	if v == "" {
+		return nil
+	}
+
+	parsed, err := strconv.ParseBool(v)
+	if err != nil {
+		return fmt.Errorf("invalid boolean for %s: %w", key, err)
+	}
+
+	*dst = parsed
 	return nil
 }
 

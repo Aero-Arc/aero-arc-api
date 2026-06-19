@@ -62,6 +62,20 @@ func TestDeconflictionPotentialConflictWhenBBoxTimeAndAltitudeOverlap(t *testing
 	if stored[0].ConflictingIntentID != "intent-peer" || stored[0].ConflictingVolumeID != "volume-peer" {
 		t.Fatalf("stored finding conflict target = %#v, want peer/volume IDs", stored[0])
 	}
+	if stored[0].ConflictingBounds == nil {
+		t.Fatalf("stored finding missing conflicting bounds: %#v", stored[0])
+	}
+	if stored[0].ConflictingBounds.MinLat != 35 || stored[0].ConflictingBounds.MinLon != -98 ||
+		stored[0].ConflictingBounds.MaxLat != 36 || stored[0].ConflictingBounds.MaxLon != -97 {
+		t.Fatalf("conflicting bounds = %#v, want peer bbox", stored[0].ConflictingBounds)
+	}
+	if stored[0].OwnBounds == nil {
+		t.Fatalf("stored finding missing own bounds: %#v", stored[0])
+	}
+	if stored[0].OwnBounds.MinLat != 35 || stored[0].OwnBounds.MinLon != -98 ||
+		stored[0].OwnBounds.MaxLat != 36 || stored[0].OwnBounds.MaxLon != -97 {
+		t.Fatalf("own bounds = %#v, want target bbox", stored[0].OwnBounds)
+	}
 }
 
 func TestDeconflictionReplacesStaleFindingsAfterRemediation(t *testing.T) {

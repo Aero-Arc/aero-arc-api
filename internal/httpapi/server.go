@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -15,6 +16,7 @@ type Server struct {
 	conformance    *service.ConformanceService
 	deconfliction  *service.DeconflictionService
 	requestTimeout time.Duration
+	debug          bool
 }
 
 func New(fleet *service.FleetService, requestTimeout time.Duration) *Server {
@@ -35,6 +37,11 @@ func NewWithWorkflows(fleet *service.FleetService, intents *service.IntentServic
 	return server
 }
 
+func (s *Server) WithDebug(debug bool) *Server {
+	s.debug = debug
+	return s
+}
+
 func (s *Server) Handler() http.Handler {
 	app := mach.New()
 	app.Use(mach.CORSWithConfig(mach.CORSConfig{
@@ -42,6 +49,9 @@ func (s *Server) Handler() http.Handler {
 		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodOptions},
 		AllowHeaders: []string{"Content-Type", "Authorization"},
 	}))
+	if s.debug {
+		app.Use(debugRequestLogger())
+	}
 
 	app.GET("/healthz", s.handleHealthz)
 	app.GET("/readyz", s.handleReadyz)
@@ -64,6 +74,7 @@ func (s *Server) Handler() http.Handler {
 
 	if s.workflowsAvailable() {
 		api.POST("/operational-intents", s.handleCreateOperationalIntent)
+		api.POST("/operational-intents/{intent_id}/modify", s.handleModifyOperationalIntent)
 		api.POST("/operational-intents/{intent_id}/volumes", s.handleAddOperationalVolume)
 		api.POST("/operational-intents/{intent_id}/submit", s.handleSubmitOperationalIntent)
 		api.POST("/operational-intents/{intent_id}/preflight/evaluate", s.handleEvaluateOperationalIntentPreflight)
@@ -81,6 +92,33 @@ func (s *Server) Handler() http.Handler {
 	api.POST("/maintenance-events", s.handleCreateMaintenanceEvent)
 
 	return app
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(status int) {
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
+}
+
+func debugRequestLogger() mach.MiddlewareFunc {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+			next.ServeHTTP(recorder, r)
+			slog.Debug("api operation",
+				slog.String("method", r.Method),
+				slog.String("path", r.URL.Path),
+				slog.String("query", r.URL.RawQuery),
+				slog.Int("status", recorder.status),
+				slog.Duration("duration", time.Since(start)),
+			)
+		})
+	}
 }
 
 func (s *Server) workflowsAvailable() bool {
