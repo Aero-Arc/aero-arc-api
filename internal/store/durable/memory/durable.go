@@ -218,24 +218,34 @@ func (s *Store) ListMaintenanceEvents(_ context.Context, aircraftID string) ([]d
 func (s *Store) CreateOperationalIntent(_ context.Context, intent domain.OperationalIntent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.operationalIntents[intent.ID] = intent
+	s.operationalIntents[operationalIntentKey(intent.ID, intent.Version)] = intent
 	return nil
 }
 
 func (s *Store) UpdateOperationalIntent(_ context.Context, intent domain.OperationalIntent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.operationalIntents[intent.ID]; !ok {
+	if !s.operationalIntentExists(intent.ID) {
 		return durable.ErrNotFound
 	}
-	s.operationalIntents[intent.ID] = intent
+	s.operationalIntents[operationalIntentKey(intent.ID, intent.Version)] = intent
 	return nil
 }
 
 func (s *Store) GetOperationalIntent(_ context.Context, intentID string) (domain.OperationalIntent, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	intent, ok := s.operationalIntents[intentID]
+	intent, ok := s.latestOperationalIntent(intentID)
+	if !ok {
+		return domain.OperationalIntent{}, durable.ErrNotFound
+	}
+	return intent, nil
+}
+
+func (s *Store) GetOperationalIntentVersion(_ context.Context, intentID string, version int) (domain.OperationalIntent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	intent, ok := s.operationalIntents[operationalIntentKey(intentID, version)]
 	if !ok {
 		return domain.OperationalIntent{}, durable.ErrNotFound
 	}
@@ -246,12 +256,37 @@ func (s *Store) ListOperationalIntents(_ context.Context, aircraftID string) ([]
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	intents := make([]domain.OperationalIntent, 0)
+	latestByID := make(map[string]domain.OperationalIntent)
 	for _, intent := range s.operationalIntents {
+		current, ok := latestByID[intent.ID]
+		if !ok || intent.Version > current.Version || (intent.Version == current.Version && intent.UpdatedAt.After(current.UpdatedAt)) {
+			latestByID[intent.ID] = intent
+		}
+	}
+	for _, intent := range latestByID {
 		if aircraftID == "" || intent.AircraftID == aircraftID {
 			intents = append(intents, intent)
 		}
 	}
 	sort.Slice(intents, func(i, j int) bool { return intents[i].PlannedStartAt.Before(intents[j].PlannedStartAt) })
+	return intents, nil
+}
+
+func (s *Store) ListOperationalIntentVersions(_ context.Context, intentID string) ([]domain.OperationalIntent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	intents := make([]domain.OperationalIntent, 0)
+	for _, intent := range s.operationalIntents {
+		if intent.ID == intentID {
+			intents = append(intents, intent)
+		}
+	}
+	sort.Slice(intents, func(i, j int) bool {
+		if intents[i].Version == intents[j].Version {
+			return intents[i].UpdatedAt.Before(intents[j].UpdatedAt)
+		}
+		return intents[i].Version < intents[j].Version
+	})
 	return intents, nil
 }
 
@@ -298,8 +333,36 @@ func operationalVolumeKey(volume domain.OperationalVolume) string {
 	return volume.IntentID + ":" + strconv.Itoa(volume.IntentVersion) + ":" + volume.ID
 }
 
+func operationalIntentKey(intentID string, version int) string {
+	return intentID + ":" + strconv.Itoa(version)
+}
+
 func conformanceSummaryKey(summary domain.ConformanceSummary) string {
 	return summary.IntentID + ":" + strconv.Itoa(summary.IntentVersion)
+}
+
+func (s *Store) operationalIntentExists(intentID string) bool {
+	for _, intent := range s.operationalIntents {
+		if intent.ID == intentID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Store) latestOperationalIntent(intentID string) (domain.OperationalIntent, bool) {
+	var latest domain.OperationalIntent
+	ok := false
+	for _, intent := range s.operationalIntents {
+		if intent.ID != intentID {
+			continue
+		}
+		if !ok || intent.Version > latest.Version || (intent.Version == latest.Version && intent.UpdatedAt.After(latest.UpdatedAt)) {
+			latest = intent
+			ok = true
+		}
+	}
+	return latest, ok
 }
 
 func (s *Store) UpsertRegulatoryAuthorization(_ context.Context, authorization domain.RegulatoryAuthorization) error {

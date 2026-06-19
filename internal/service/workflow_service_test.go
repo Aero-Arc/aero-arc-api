@@ -327,6 +327,27 @@ func TestModifyAcceptedIntentCreatesDraftNextVersion(t *testing.T) {
 	if result.SupersedesIntentID != intent.ID || result.SupersedesVersion != 1 {
 		t.Fatalf("supersedes = %q/%d, want %q/1", result.SupersedesIntentID, result.SupersedesVersion, intent.ID)
 	}
+	v1, err := store.GetOperationalIntentVersion(ctx, intent.ID, 1)
+	if err != nil {
+		t.Fatalf("GetOperationalIntentVersion v1 returned error: %v", err)
+	}
+	if v1.Status != domain.IntentStatusAccepted {
+		t.Fatalf("v1 status = %q, want accepted", v1.Status)
+	}
+	latest, err := store.GetOperationalIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatalf("GetOperationalIntent returned error: %v", err)
+	}
+	if latest.Version != 2 || latest.Status != domain.IntentStatusDraft {
+		t.Fatalf("latest = v%d %q, want v2 draft", latest.Version, latest.Status)
+	}
+	versions, err := store.ListOperationalIntentVersions(ctx, intent.ID)
+	if err != nil {
+		t.Fatalf("ListOperationalIntentVersions returned error: %v", err)
+	}
+	if len(versions) != 2 || versions[0].Version != 1 || versions[1].Version != 2 {
+		t.Fatalf("versions = %#v, want v1 and v2 history", versions)
+	}
 	volumes, err := store.ListOperationalVolumes(ctx, intent.ID)
 	if err != nil {
 		t.Fatalf("ListOperationalVolumes returned error: %v", err)

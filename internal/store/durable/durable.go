@@ -44,7 +44,9 @@ type Store interface {
 	CreateOperationalIntent(ctx context.Context, intent domain.OperationalIntent) error
 	UpdateOperationalIntent(ctx context.Context, intent domain.OperationalIntent) error
 	GetOperationalIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error)
+	GetOperationalIntentVersion(ctx context.Context, intentID string, version int) (domain.OperationalIntent, error)
 	ListOperationalIntents(ctx context.Context, aircraftID string) ([]domain.OperationalIntent, error)
+	ListOperationalIntentVersions(ctx context.Context, intentID string) ([]domain.OperationalIntent, error)
 	RecordOperationalVolume(ctx context.Context, volume domain.OperationalVolume) error
 	ReplaceOperationalVolumes(ctx context.Context, intentID string, intentVersion int, volumes []domain.OperationalVolume) error
 	ListOperationalVolumes(ctx context.Context, intentID string) ([]domain.OperationalVolume, error)
