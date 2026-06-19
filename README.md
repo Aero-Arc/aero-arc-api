@@ -48,7 +48,8 @@ go run ./cmd/aero-arc-api start \
   --telemetry-store memory \
   --replay-store memory \
   --registry-mode memory \
-  --seed demo
+  --seed demo \
+  --debug
 ```
 
 ```bash
@@ -59,11 +60,18 @@ AERO_API_REPLAY_STORE=memory
 AERO_API_REGISTRY_MODE=memory
 AERO_API_REGISTRY_ADDR=localhost:50051
 AERO_API_SEED=demo
+AERO_API_DEBUG=true
 ```
 
 `AERO_API_REGISTRY_MODE=grpc` connects to the real `aero-arc-registry` gRPC
 service. Durable, telemetry, and replay stores still run in `memory` mode in
 this scaffold.
+
+Set `--debug` or `AERO_API_DEBUG=true` to enable debug-level operation logs.
+Debug mode logs each HTTP request with method, path, status, and duration, plus
+named workflow operations such as `create_intent`, `modify_intent`,
+`evaluate_preflight`, `check_deconfliction`, `activate_intent`, and
+`ingest_telemetry`.
 
 ## Endpoints
 

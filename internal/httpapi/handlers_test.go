@@ -341,6 +341,73 @@ func TestHandleAddOperationalVolumeRejectsSubmittedIntent(t *testing.T) {
 	}
 }
 
+func TestHandleModifyOperationalIntentBlocksActiveIntent(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 6, 15, 15, 0, 0, 0, time.UTC)
+	durable := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	replay := replaymemory.NewStore()
+	reg := registry.NewMemoryClient()
+
+	if err := durable.CreateAircraft(ctx, domain.Aircraft{
+		ID:               "aircraft-1",
+		OperatorID:       "operator-1",
+		Status:           domain.AircraftStatusActive,
+		AcceptanceStatus: domain.AcceptanceStatusAccepted,
+		RemoteIDStatus:   domain.RemoteIDStatusBroadcasting,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := durable.CreateOperationalIntent(ctx, domain.OperationalIntent{
+		ID:                  "intent-1",
+		OperatorID:          "operator-1",
+		AircraftID:          "aircraft-1",
+		Version:             1,
+		Name:                "Mission aircraft-1",
+		Summary:             "Active mission",
+		AuthorizationPath:   domain.AuthorizationPathDemo,
+		PopulationCategory:  domain.PopulationCategoryOne,
+		Status:              domain.IntentStatusActive,
+		ConformanceRequired: true,
+		PlannedStartAt:      now,
+		PlannedEndAt:        now.Add(time.Hour),
+		ActivatedAt:         timePtr(now),
+		UpdatedAt:           now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	fleet := service.NewFleetService(durable, telemetry, replay, reg)
+	server := NewWithWorkflows(
+		fleet,
+		service.NewIntentService(durable),
+		service.NewPreflightService(durable),
+		service.NewConformanceService(durable, telemetry),
+		time.Second,
+	)
+	body := []byte(`{"reason":"operator_adjustment","expected_version":1,"intent":{"summary":"Adjusted inspection area"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/operational-intents/intent-1/modify", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	var response map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response["code"] != "active_intent_modification_blocked" {
+		t.Fatalf("code = %#v, want active_intent_modification_blocked; body=%#v", response["code"], response)
+	}
+	if response["intent_id"] != "intent-1" || response["status"] != string(domain.IntentStatusActive) {
+		t.Fatalf("response = %#v, want active intent identity", response)
+	}
+}
+
 func TestHandleAddOperationalVolumeRejectsMissingAltitudeFields(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 6, 15, 15, 0, 0, 0, time.UTC)

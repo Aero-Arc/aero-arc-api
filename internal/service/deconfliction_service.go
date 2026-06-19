@@ -121,6 +121,8 @@ func (s *DeconflictionService) CheckIntent(ctx context.Context, intentID string)
 				finding.TimeOverlapEnd = &end
 				finding.AltitudeOverlapMin = &minAlt
 				finding.AltitudeOverlapMax = &maxAlt
+				finding.OwnBounds = ownBounds.domainBounds()
+				finding.ConflictingBounds = peerBounds.domainBounds()
 				result.Findings = append(result.Findings, finding)
 				result.Posture = maxPosture(result.Posture, finding.Status)
 			}
@@ -336,6 +338,15 @@ type geoBounds struct {
 
 func (b geoBounds) overlaps(other geoBounds) bool {
 	return b.minLat <= other.maxLat && other.minLat <= b.maxLat && b.minLon <= other.maxLon && other.minLon <= b.maxLon
+}
+
+func (b geoBounds) domainBounds() *domain.GeoBounds {
+	return &domain.GeoBounds{
+		MinLat: b.minLat,
+		MinLon: b.minLon,
+		MaxLat: b.maxLat,
+		MaxLon: b.maxLon,
+	}
 }
 
 func geoJSONBounds(raw string) (geoBounds, error) {

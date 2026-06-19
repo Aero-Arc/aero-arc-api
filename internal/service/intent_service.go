@@ -17,6 +17,20 @@ var (
 	ErrValidation        = errors.New("validation failed")
 )
 
+type ActiveIntentModificationError struct {
+	IntentID string
+	Status   domain.IntentStatus
+	Version  int
+}
+
+func (e ActiveIntentModificationError) Error() string {
+	return fmt.Sprintf("%s: active intent modification blocked", ErrInvalidTransition)
+}
+
+func (e ActiveIntentModificationError) Unwrap() error {
+	return ErrInvalidTransition
+}
+
 type IntentService struct {
 	durable       durable.Store
 	now           func() time.Time
@@ -60,6 +74,37 @@ type AddOperationalVolumeRequest struct {
 	EndsAt       time.Time                    `json:"ends_at"`
 	BufferMeters *float64                     `json:"buffer_meters,omitempty"`
 	VolumeType   domain.OperationalVolumeType `json:"volume_type,omitempty"`
+}
+
+type ModifyIntentRequest struct {
+	Reason          string                        `json:"reason,omitempty"`
+	ExpectedVersion int                           `json:"expected_version"`
+	Intent          ModifyIntentFields            `json:"intent"`
+	Volumes         []AddOperationalVolumeRequest `json:"volumes,omitempty"`
+}
+
+type ModifyIntentFields struct {
+	Name                *string                    `json:"name,omitempty"`
+	Summary             *string                    `json:"summary,omitempty"`
+	UseCase             *string                    `json:"use_case,omitempty"`
+	AuthorizationPath   *domain.AuthorizationPath  `json:"authorization_path,omitempty"`
+	PopulationCategory  *domain.PopulationCategory `json:"population_category,omitempty"`
+	ConformanceRequired *bool                      `json:"conformance_required,omitempty"`
+	OperatingAreaID     *string                    `json:"operating_area_id,omitempty"`
+	RouteSummary        *string                    `json:"route_summary,omitempty"`
+	PlannedStartAt      *time.Time                 `json:"planned_start_at,omitempty"`
+	PlannedEndAt        *time.Time                 `json:"planned_end_at,omitempty"`
+	MinAltitudeFtAGL    *float64                   `json:"min_altitude_ft_agl,omitempty"`
+	MaxAltitudeFtAGL    *float64                   `json:"max_altitude_ft_agl,omitempty"`
+	SupervisorID        *string                    `json:"supervisor_id,omitempty"`
+	FlightCoordinatorID *string                    `json:"flight_coordinator_id,omitempty"`
+}
+
+type ModifyIntentResult struct {
+	Intent             domain.OperationalIntent   `json:"intent"`
+	Volumes            []domain.OperationalVolume `json:"volumes"`
+	SupersedesIntentID string                     `json:"supersedes_intent_id,omitempty"`
+	SupersedesVersion  int                        `json:"supersedes_version,omitempty"`
 }
 
 func NewIntentService(durableStore durable.Store, deconfliction ...DeconflictionChecker) *IntentService {
@@ -182,6 +227,67 @@ func (s *IntentService) AddOperationalVolume(ctx context.Context, intentID strin
 	return volume, nil
 }
 
+func (s *IntentService) ModifyIntent(ctx context.Context, intentID string, req ModifyIntentRequest) (ModifyIntentResult, error) {
+	intent, err := s.durable.GetOperationalIntent(ctx, intentID)
+	if err != nil {
+		return ModifyIntentResult{}, fmt.Errorf("get operational intent: %w", err)
+	}
+	if req.ExpectedVersion == 0 {
+		return ModifyIntentResult{}, fmt.Errorf("%w: expected_version is required", ErrValidation)
+	}
+	if req.ExpectedVersion != intent.Version {
+		return ModifyIntentResult{}, fmt.Errorf("%w: expected_version %d does not match current version %d", ErrInvalidTransition, req.ExpectedVersion, intent.Version)
+	}
+	if intent.Status == domain.IntentStatusActive {
+		return ModifyIntentResult{}, ActiveIntentModificationError{IntentID: intent.ID, Status: intent.Status, Version: intent.Version}
+	}
+	if intent.Status != domain.IntentStatusDraft && intent.Status != domain.IntentStatusSubmitted && intent.Status != domain.IntentStatusAccepted {
+		return ModifyIntentResult{}, fmt.Errorf("%w: cannot modify intent with status %s", ErrInvalidTransition, intent.Status)
+	}
+
+	now := s.now().UTC()
+	result := ModifyIntentResult{}
+	sourceVersion := intent.Version
+	if intent.Status == domain.IntentStatusAccepted {
+		result.SupersedesIntentID = intent.ID
+		result.SupersedesVersion = intent.Version
+		intent.Version++
+		intent.Status = domain.IntentStatusDraft
+		intent.SubmittedAt = nil
+		intent.AcceptedAt = nil
+		intent.ActivatedAt = nil
+	}
+
+	applyIntentModification(&intent, req.Intent)
+	intent.UpdatedAt = now
+	if err := validateIntentWindow(intent); err != nil {
+		return ModifyIntentResult{}, err
+	}
+
+	volumeReqs, err := s.modifyVolumeRequests(ctx, intent.ID, sourceVersion, req.Volumes)
+	if err != nil {
+		return ModifyIntentResult{}, err
+	}
+	volumes := make([]domain.OperationalVolume, 0, len(volumeReqs))
+	for i, volumeReq := range volumeReqs {
+		volume, err := buildOperationalVolumeFromRequest(intent, volumeReq, now, i)
+		if err != nil {
+			return ModifyIntentResult{}, err
+		}
+		volumes = append(volumes, volume)
+	}
+
+	if err := s.durable.UpdateOperationalIntent(ctx, intent); err != nil {
+		return ModifyIntentResult{}, fmt.Errorf("update operational intent: %w", err)
+	}
+	if err := s.durable.ReplaceOperationalVolumes(ctx, intent.ID, intent.Version, volumes); err != nil {
+		return ModifyIntentResult{}, fmt.Errorf("replace operational volumes: %w", err)
+	}
+	result.Intent = intent
+	result.Volumes = volumes
+	return result, nil
+}
+
 func (s *IntentService) SubmitIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error) {
 	return s.transitionIntent(ctx, intentID, domain.IntentStatusSubmitted, map[domain.IntentStatus]bool{
 		domain.IntentStatusDraft: true,
@@ -280,6 +386,7 @@ func (s *IntentService) activationReadiness(ctx context.Context, intent domain.O
 	if len(volumes) == 0 {
 		return fmt.Errorf("%w: at least one operational volume is required", ErrActivationBlocked)
 	}
+	latestVolumeUpdatedAt := latestOperationalVolumeUpdatedAt(volumes)
 
 	checks, err := s.durable.ListPreflightChecks(ctx, intent.ID)
 	if err != nil {
@@ -289,10 +396,17 @@ func (s *IntentService) activationReadiness(ctx context.Context, intent domain.O
 	if len(checks) == 0 {
 		return fmt.Errorf("%w: current preflight checks are required", ErrActivationBlocked)
 	}
+	hasFreshCheck := false
 	for _, check := range checks {
+		if !check.CapturedAt.Before(latestVolumeUpdatedAt) {
+			hasFreshCheck = true
+		}
 		if check.Blocking && (check.Status == domain.PreflightStatusBlocked || check.Status == domain.PreflightStatusAction) {
 			return fmt.Errorf("%w: blocking preflight check %s", ErrActivationBlocked, check.ID)
 		}
+	}
+	if !hasFreshCheck {
+		return fmt.Errorf("%w: preflight checks are stale for current operational volumes", ErrActivationBlocked)
 	}
 
 	findings, err := s.durable.ListComplianceFindingsForIntent(ctx, intent.ID)
@@ -306,4 +420,136 @@ func (s *IntentService) activationReadiness(ctx context.Context, intent domain.O
 		}
 	}
 	return nil
+}
+
+func (s *IntentService) modifyVolumeRequests(ctx context.Context, intentID string, sourceVersion int, requested []AddOperationalVolumeRequest) ([]AddOperationalVolumeRequest, error) {
+	if requested != nil {
+		return requested, nil
+	}
+	existing, err := s.durable.ListOperationalVolumes(ctx, intentID)
+	if err != nil {
+		return nil, fmt.Errorf("list operational volumes: %w", err)
+	}
+	existing = volumesForVersion(existing, sourceVersion)
+	requests := make([]AddOperationalVolumeRequest, 0, len(existing))
+	for _, volume := range existing {
+		requests = append(requests, AddOperationalVolumeRequest{
+			ID:           volume.ID,
+			Sequence:     volume.Sequence,
+			GeometryURI:  volume.GeometryURI,
+			GeoJSON:      volume.GeoJSON,
+			MinAltitudeM: float64PtrValue(volume.MinAltitudeM),
+			MaxAltitudeM: float64PtrValue(volume.MaxAltitudeM),
+			AltitudeRef:  volume.AltitudeRef,
+			StartsAt:     volume.StartsAt,
+			EndsAt:       volume.EndsAt,
+			BufferMeters: volume.BufferMeters,
+			VolumeType:   volume.VolumeType,
+		})
+	}
+	return requests, nil
+}
+
+func buildOperationalVolumeFromRequest(intent domain.OperationalIntent, req AddOperationalVolumeRequest, now time.Time, index int) (domain.OperationalVolume, error) {
+	id := strings.TrimSpace(req.ID)
+	if id == "" {
+		sequence := req.Sequence
+		if sequence == 0 {
+			sequence = index + 1
+		}
+		id = fmt.Sprintf("%s-v%d-volume-%d", intent.ID, intent.Version, sequence)
+	}
+	if req.MinAltitudeM == nil || req.MaxAltitudeM == nil {
+		return domain.OperationalVolume{}, fmt.Errorf("%w: min_altitude_m and max_altitude_m are required", ErrValidation)
+	}
+	if req.AltitudeRef == "" {
+		return domain.OperationalVolume{}, fmt.Errorf("%w: altitude_ref is required", ErrValidation)
+	}
+	return domain.OperationalVolume{
+		ID:            id,
+		OperatorID:    intent.OperatorID,
+		IntentID:      intent.ID,
+		IntentVersion: intent.Version,
+		Sequence:      req.Sequence,
+		GeometryURI:   req.GeometryURI,
+		GeoJSON:       req.GeoJSON,
+		MinAltitudeM:  *req.MinAltitudeM,
+		MaxAltitudeM:  *req.MaxAltitudeM,
+		AltitudeRef:   req.AltitudeRef,
+		StartsAt:      req.StartsAt.UTC(),
+		EndsAt:        req.EndsAt.UTC(),
+		BufferMeters:  req.BufferMeters,
+		VolumeType:    req.VolumeType,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}, nil
+}
+
+func applyIntentModification(intent *domain.OperationalIntent, fields ModifyIntentFields) {
+	if fields.Name != nil {
+		intent.Name = *fields.Name
+	}
+	if fields.Summary != nil {
+		intent.Summary = *fields.Summary
+	}
+	if fields.UseCase != nil {
+		intent.UseCase = *fields.UseCase
+	}
+	if fields.AuthorizationPath != nil {
+		intent.AuthorizationPath = *fields.AuthorizationPath
+	}
+	if fields.PopulationCategory != nil {
+		intent.PopulationCategory = *fields.PopulationCategory
+	}
+	if fields.ConformanceRequired != nil {
+		intent.ConformanceRequired = *fields.ConformanceRequired
+	}
+	if fields.OperatingAreaID != nil {
+		intent.OperatingAreaID = *fields.OperatingAreaID
+	}
+	if fields.RouteSummary != nil {
+		intent.RouteSummary = *fields.RouteSummary
+	}
+	if fields.PlannedStartAt != nil {
+		intent.PlannedStartAt = fields.PlannedStartAt.UTC()
+	}
+	if fields.PlannedEndAt != nil {
+		intent.PlannedEndAt = fields.PlannedEndAt.UTC()
+	}
+	if fields.MinAltitudeFtAGL != nil {
+		intent.MinAltitudeFtAGL = fields.MinAltitudeFtAGL
+	}
+	if fields.MaxAltitudeFtAGL != nil {
+		intent.MaxAltitudeFtAGL = fields.MaxAltitudeFtAGL
+	}
+	if fields.SupervisorID != nil {
+		intent.SupervisorID = *fields.SupervisorID
+	}
+	if fields.FlightCoordinatorID != nil {
+		intent.FlightCoordinatorID = *fields.FlightCoordinatorID
+	}
+}
+
+func validateIntentWindow(intent domain.OperationalIntent) error {
+	if intent.PlannedStartAt.IsZero() || intent.PlannedEndAt.IsZero() {
+		return fmt.Errorf("%w: planned start and end are required", ErrValidation)
+	}
+	if !intent.PlannedStartAt.Before(intent.PlannedEndAt) {
+		return fmt.Errorf("%w: planned_start_at must be before planned_end_at", ErrValidation)
+	}
+	return nil
+}
+
+func float64PtrValue(value float64) *float64 {
+	return &value
+}
+
+func latestOperationalVolumeUpdatedAt(volumes []domain.OperationalVolume) time.Time {
+	var latest time.Time
+	for _, volume := range volumes {
+		if volume.UpdatedAt.After(latest) {
+			latest = volume.UpdatedAt
+		}
+	}
+	return latest
 }

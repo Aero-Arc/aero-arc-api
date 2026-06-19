@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -265,6 +266,7 @@ func (s *Server) handleCreateOperationalIntent(c *mach.Context) {
 
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
+	s.debugOperation(ctx, "create_intent", slog.String("aircraft_id", req.AircraftID), slog.String("requested_intent_id", req.ID))
 	intent, err := s.intents.CreateIntent(ctx, req)
 	if err != nil {
 		writeServiceError(c, err)
@@ -282,6 +284,7 @@ func (s *Server) handleAddOperationalVolume(c *mach.Context) {
 
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
+	s.debugOperation(ctx, "add_operational_volume", slog.String("intent_id", c.Param("intent_id")), slog.String("requested_volume_id", req.ID))
 	volume, err := s.intents.AddOperationalVolume(ctx, c.Param("intent_id"), req)
 	if err != nil {
 		writeServiceError(c, err)
@@ -290,9 +293,40 @@ func (s *Server) handleAddOperationalVolume(c *mach.Context) {
 	writeJSON(c, http.StatusCreated, volume)
 }
 
+func (s *Server) handleModifyOperationalIntent(c *mach.Context) {
+	var req service.ModifyIntentRequest
+	if err := decodeJSON(c, &req); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	s.debugOperation(ctx, "modify_intent", slog.String("intent_id", c.Param("intent_id")), slog.Int("expected_version", req.ExpectedVersion), slog.String("reason", req.Reason))
+	result, err := s.intents.ModifyIntent(ctx, c.Param("intent_id"), req)
+	if err != nil {
+		var activeErr service.ActiveIntentModificationError
+		if errors.As(err, &activeErr) {
+			writeJSON(c, http.StatusConflict, map[string]any{
+				"error":     "intent modification blocked",
+				"code":      "active_intent_modification_blocked",
+				"message":   fmt.Sprintf("Intent %s is active. End or supersede the active plan before modifying it.", activeErr.IntentID),
+				"intent_id": activeErr.IntentID,
+				"status":    activeErr.Status,
+				"version":   activeErr.Version,
+			})
+			return
+		}
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, result)
+}
+
 func (s *Server) handleSubmitOperationalIntent(c *mach.Context) {
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
+	s.debugOperation(ctx, "submit_intent", slog.String("intent_id", c.Param("intent_id")))
 	intent, err := s.intents.SubmitIntent(ctx, c.Param("intent_id"))
 	if err != nil {
 		writeServiceError(c, err)
@@ -304,6 +338,7 @@ func (s *Server) handleSubmitOperationalIntent(c *mach.Context) {
 func (s *Server) handleEvaluateOperationalIntentPreflight(c *mach.Context) {
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
+	s.debugOperation(ctx, "evaluate_preflight", slog.String("intent_id", c.Param("intent_id")))
 	evaluation, err := s.preflight.EvaluateIntent(ctx, c.Param("intent_id"))
 	if err != nil {
 		writeServiceError(c, err)
@@ -315,6 +350,7 @@ func (s *Server) handleEvaluateOperationalIntentPreflight(c *mach.Context) {
 func (s *Server) handleCheckOperationalIntentDeconfliction(c *mach.Context) {
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
+	s.debugOperation(ctx, "check_deconfliction", slog.String("intent_id", c.Param("intent_id")))
 	result, err := s.deconfliction.CheckIntent(ctx, c.Param("intent_id"))
 	if err != nil {
 		writeServiceError(c, err)
@@ -326,6 +362,7 @@ func (s *Server) handleCheckOperationalIntentDeconfliction(c *mach.Context) {
 func (s *Server) handleListOperationalIntentConflicts(c *mach.Context) {
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
+	s.debugOperation(ctx, "list_conflicts", slog.String("intent_id", c.Param("intent_id")))
 	findings, err := s.deconfliction.ListConflictFindings(ctx, c.Param("intent_id"))
 	if err != nil {
 		writeServiceError(c, err)
@@ -337,6 +374,7 @@ func (s *Server) handleListOperationalIntentConflicts(c *mach.Context) {
 func (s *Server) handleAcceptOperationalIntent(c *mach.Context) {
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
+	s.debugOperation(ctx, "accept_intent", slog.String("intent_id", c.Param("intent_id")))
 	intent, err := s.intents.AcceptIntent(ctx, c.Param("intent_id"))
 	if err != nil {
 		writeServiceError(c, err)
@@ -348,6 +386,7 @@ func (s *Server) handleAcceptOperationalIntent(c *mach.Context) {
 func (s *Server) handleActivateOperationalIntent(c *mach.Context) {
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
+	s.debugOperation(ctx, "activate_intent", slog.String("intent_id", c.Param("intent_id")))
 	intent, err := s.intents.GetIntent(ctx, c.Param("intent_id"))
 	if err != nil {
 		writeServiceError(c, err)
@@ -387,6 +426,7 @@ func (s *Server) handleTelemetry(c *mach.Context) {
 
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
+	s.debugOperation(ctx, "ingest_telemetry", slog.String("aircraft_id", sample.AircraftID), slog.String("intent_id", sample.IntentID), slog.String("sample_id", sample.ID))
 	evaluation, err := s.conformance.EvaluateTelemetry(ctx, sample)
 	if err != nil {
 		writeServiceError(c, err)
@@ -398,6 +438,7 @@ func (s *Server) handleTelemetry(c *mach.Context) {
 func (s *Server) handleGetOperationalIntentConformance(c *mach.Context) {
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
+	s.debugOperation(ctx, "get_intent_conformance", slog.String("intent_id", c.Param("intent_id")))
 	evaluation, err := s.conformance.GetIntentConformance(ctx, c.Param("intent_id"))
 	if err != nil {
 		writeServiceError(c, err)
@@ -408,6 +449,14 @@ func (s *Server) handleGetOperationalIntentConformance(c *mach.Context) {
 
 func (s *Server) contextWithTimeout(c *mach.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(c.Context(), s.requestTimeout)
+}
+
+func (s *Server) debugOperation(ctx context.Context, operation string, attrs ...slog.Attr) {
+	if !s.debug {
+		return
+	}
+	attrs = append([]slog.Attr{slog.String("operation", operation)}, attrs...)
+	slog.LogAttrs(ctx, slog.LevelDebug, "workflow operation", attrs...)
 }
 
 func parseLimit(c *mach.Context) (int, error) {
