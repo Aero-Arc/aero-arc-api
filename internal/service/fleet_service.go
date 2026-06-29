@@ -304,6 +304,10 @@ func (s *FleetService) buildDashboard(ctx context.Context, aircraft domain.Aircr
 
 	latestTelemetry, _ := s.telemetry.GetLatestSample(ctx, aircraft.ID)
 	liveState, liveAvailable := s.liveState(ctx, aircraft)
+	currentIntent, err := s.currentIntent(ctx, aircraft.ID)
+	if err != nil {
+		return readmodel.AircraftDashboard{}, err
+	}
 
 	return readmodel.AircraftDashboard{
 		Aircraft:           aircraft,
@@ -313,6 +317,7 @@ func (s *FleetService) buildDashboard(ctx context.Context, aircraft domain.Aircr
 		LiveState:          liveState,
 		LiveStateAvailable: liveAvailable,
 		Readiness:          CalculateReadiness(battery, maintenanceEvents, liveAvailable),
+		CurrentIntent:      currentIntent,
 	}, nil
 }
 
@@ -336,26 +341,38 @@ func (s *FleetService) activeBattery(ctx context.Context, aircraftID string) (*d
 }
 
 func (s *FleetService) activeIntent(ctx context.Context, aircraftID string) (*domain.OperationalIntent, error) {
+	return s.intentByStatus(ctx, aircraftID, domain.IntentStatusActive)
+}
+
+func (s *FleetService) currentIntent(ctx context.Context, aircraftID string) (*domain.OperationalIntent, error) {
+	intent, err := s.intentByStatus(ctx, aircraftID, domain.IntentStatusActive)
+	if err != nil || intent != nil {
+		return intent, err
+	}
+	return s.intentByStatus(ctx, aircraftID, domain.IntentStatusAccepted)
+}
+
+func (s *FleetService) intentByStatus(ctx context.Context, aircraftID string, status domain.IntentStatus) (*domain.OperationalIntent, error) {
 	intents, err := s.durable.ListOperationalIntents(ctx, aircraftID)
 	if err != nil {
 		return nil, fmt.Errorf("list operational intents: %w", err)
 	}
-	active := make([]domain.OperationalIntent, 0)
+	matching := make([]domain.OperationalIntent, 0)
 	for _, intent := range intents {
-		if intent.Status == domain.IntentStatusActive {
-			active = append(active, intent)
+		if intent.Status == status {
+			matching = append(matching, intent)
 		}
 	}
-	if len(active) == 0 {
+	if len(matching) == 0 {
 		return nil, nil
 	}
-	sort.Slice(active, func(i, j int) bool {
-		if active[i].PlannedStartAt.Equal(active[j].PlannedStartAt) {
-			return active[i].UpdatedAt.After(active[j].UpdatedAt)
+	sort.Slice(matching, func(i, j int) bool {
+		if matching[i].PlannedStartAt.Equal(matching[j].PlannedStartAt) {
+			return matching[i].UpdatedAt.After(matching[j].UpdatedAt)
 		}
-		return active[i].PlannedStartAt.After(active[j].PlannedStartAt)
+		return matching[i].PlannedStartAt.After(matching[j].PlannedStartAt)
 	})
-	return &active[0], nil
+	return &matching[0], nil
 }
 
 func (s *FleetService) liveState(ctx context.Context, aircraft domain.Aircraft) (*domain.LiveAircraftState, bool) {

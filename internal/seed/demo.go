@@ -100,6 +100,26 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 			CreatedAt:        now.AddDate(0, -5, 0),
 			UpdatedAt:        now.Add(-26 * time.Hour),
 		},
+		{
+			ID:               "aircraft-hawk-2",
+			OperatorID:       "operator-demo",
+			AgentID:          "agent-hawk-2",
+			TailNumber:       "N302AA",
+			Registration:     "N302AA",
+			SerialNumber:     "ARX4-2402",
+			Name:             "HAWK-2",
+			Model:            "ArcRunner X4",
+			Manufacturer:     "Aero Arc",
+			Status:           domain.AircraftStatusActive,
+			AcceptanceStatus: domain.AcceptanceStatusAccepted,
+			RemoteIDSerial:   "RID-HAWK-2",
+			RemoteIDStatus:   domain.RemoteIDStatusBroadcasting,
+			ConfigVersion:    "cfg-2026.06-ready",
+			SoftwareVersion:  "2.4.1",
+			HardwareVersion:  "x4.2",
+			CreatedAt:        now.AddDate(0, -3, 0),
+			UpdatedAt:        now.Add(-20 * time.Minute),
+		},
 	}
 	for _, item := range aircraft {
 		if err := durableStore.CreateAircraft(ctx, item); err != nil {
@@ -123,10 +143,44 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 		{ID: "install-eagle-7", OperatorID: "operator-demo", AircraftID: "aircraft-eagle-7", BatteryID: "battery-b118", InstalledAt: now.Add(-6 * time.Hour)},
 		{ID: "install-falcon-3", OperatorID: "operator-demo", AircraftID: "aircraft-falcon-3", BatteryID: "battery-b104", InstalledAt: now.Add(-30 * time.Hour)},
 		{ID: "install-raven-5", OperatorID: "operator-demo", AircraftID: "aircraft-raven-5", BatteryID: "battery-b177", InstalledAt: now.Add(-48 * time.Hour)},
+		{ID: "install-hawk-2", OperatorID: "operator-demo", AircraftID: "aircraft-hawk-2", BatteryID: "battery-b221", InstalledAt: now.Add(-2 * time.Hour)},
 	}
 	for _, item := range installations {
 		if err := durableStore.RecordBatteryInstallation(ctx, item); err != nil {
 			return fmt.Errorf("seed battery installation %s: %w", item.ID, err)
+		}
+	}
+
+	operatingProfiles := []domain.AircraftOperatingProfile{
+		{
+			AircraftID:            "aircraft-hawk-2",
+			OperatorID:            "operator-demo",
+			MaxGroundspeedKt:      float64Ptr(42),
+			MaxTakeoffWeightLb:    float64Ptr(54.5),
+			MaxAltitudeFtAGL:      float64Ptr(400),
+			WeatherEnvelope:       "VFR, surface winds <= 18 kt, gust spread <= 8 kt",
+			DAACapability:         "visual observer",
+			LightingStatus:        "day/night anti-collision lights operational",
+			PNTIntegrity:          "GNSS nominal with barometric altitude cross-check",
+			ManufacturerLimitsURI: "memory://manuals/arcrunner-x4/limits",
+			UpdatedAt:             now.Add(-20 * time.Minute),
+		},
+	}
+	for _, item := range operatingProfiles {
+		if err := durableStore.UpsertAircraftOperatingProfile(ctx, item); err != nil {
+			return fmt.Errorf("seed operating profile %s: %w", item.AircraftID, err)
+		}
+	}
+
+	operatingLimits := []domain.OperatingLimit{
+		{ID: "limit-hawk-2-max-altitude", OperatorID: "operator-demo", AircraftID: "aircraft-hawk-2", Name: "Max altitude AGL", Unit: "ft", Maximum: float64Ptr(400)},
+		{ID: "limit-hawk-2-max-groundspeed", OperatorID: "operator-demo", AircraftID: "aircraft-hawk-2", Name: "Max groundspeed", Unit: "kt", Maximum: float64Ptr(42)},
+		{ID: "limit-hawk-2-max-wind", OperatorID: "operator-demo", AircraftID: "aircraft-hawk-2", Name: "Max surface wind", Unit: "kt", Maximum: float64Ptr(18)},
+		{ID: "limit-hawk-2-max-tow", OperatorID: "operator-demo", AircraftID: "aircraft-hawk-2", Name: "Max takeoff weight", Unit: "lb", Maximum: float64Ptr(54.5)},
+	}
+	for _, item := range operatingLimits {
+		if err := durableStore.UpsertOperatingLimit(ctx, item); err != nil {
+			return fmt.Errorf("seed operating limit %s: %w", item.ID, err)
 		}
 	}
 
@@ -365,6 +419,9 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 	if err := telemetry.AddSample(ctx, domain.TelemetrySample{ID: "sample-raven-last-known", OperatorID: "operator-demo", AircraftID: "aircraft-raven-5", IntentID: "intent-2043", IntentVersion: 2, RecordedAt: now.Add(-38 * time.Minute), Latitude: 35.48820, Longitude: -97.49040, AltitudeM: 0, VelocityMPS: 0, HeadingDeg: 0, BatteryPct: float64Ptr(42)}); err != nil {
 		return fmt.Errorf("seed raven telemetry: %w", err)
 	}
+	if err := telemetry.AddSample(ctx, domain.TelemetrySample{ID: "sample-hawk-ready", OperatorID: "operator-demo", AircraftID: "aircraft-hawk-2", RecordedAt: now.Add(-2 * time.Minute), Latitude: 35.50640, Longitude: -97.47215, AltitudeM: 0, VelocityMPS: 0, HeadingDeg: 180, BatteryPct: float64Ptr(96)}); err != nil {
+		return fmt.Errorf("seed hawk telemetry: %w", err)
+	}
 
 	if err := replay.PutReplayManifest(ctx, domain.ReplayManifest{
 		OperatorID:    "operator-demo",
@@ -382,6 +439,7 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 	liveStates := []domain.LiveAircraftState{
 		{AircraftID: "aircraft-eagle-7", OperatorID: "operator-demo", AgentID: "agent-eagle-7", RelayID: "relay-west-1", Connected: true, LastConnectedAt: now.Add(-30 * time.Minute), LastHeartbeatAt: now.Add(-10 * time.Second), PlacementLastUpdatedAt: now.Add(-45 * time.Minute)},
 		{AircraftID: "aircraft-falcon-3", OperatorID: "operator-demo", AgentID: "agent-falcon-3", RelayID: "relay-north-2", Connected: true, LastConnectedAt: now.Add(-5 * time.Hour), LastHeartbeatAt: now.Add(-12 * time.Minute), PlacementLastUpdatedAt: now.Add(-5 * time.Hour)},
+		{AircraftID: "aircraft-hawk-2", OperatorID: "operator-demo", AgentID: "agent-hawk-2", RelayID: "relay-west-1", Connected: true, LastConnectedAt: now.Add(-2 * time.Hour), LastHeartbeatAt: now.Add(-5 * time.Second), PlacementLastUpdatedAt: now.Add(-2 * time.Hour)},
 	}
 	for _, item := range liveStates {
 		if err := live.SetLiveAircraftState(ctx, item); err != nil {

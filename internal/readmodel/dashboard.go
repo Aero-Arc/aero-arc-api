@@ -11,6 +11,7 @@ type AircraftDashboard struct {
 	LiveState          *domain.LiveAircraftState        `json:"live_state,omitempty"`
 	LiveStateAvailable bool                             `json:"live_state_available"`
 	Readiness          domain.Readiness                 `json:"readiness"`
+	CurrentIntent      *domain.OperationalIntent        `json:"current_intent,omitempty"`
 }
 
 type DashboardMetric struct {
