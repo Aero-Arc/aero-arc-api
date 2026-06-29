@@ -4,8 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/registry"
 	"github.com/Aero-Arc/aero-arc-api/internal/seed"
+	"github.com/Aero-Arc/aero-arc-api/internal/service"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 	replaymemory "github.com/Aero-Arc/aero-arc-api/internal/store/replay/memory"
 	telemetrymemory "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/memory"
@@ -26,8 +28,8 @@ func TestDemoPopulatesDashboardStores(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAircraft returned error: %v", err)
 	}
-	if len(aircraft) != 3 {
-		t.Fatalf("aircraft count = %d, want 3", len(aircraft))
+	if len(aircraft) != 4 {
+		t.Fatalf("aircraft count = %d, want 4", len(aircraft))
 	}
 
 	intents, err := durable.ListOperationalIntents(ctx, "")
@@ -36,6 +38,39 @@ func TestDemoPopulatesDashboardStores(t *testing.T) {
 	}
 	if len(intents) != 3 {
 		t.Fatalf("intent count = %d, want 3", len(intents))
+	}
+	hawkIntents, err := durable.ListOperationalIntents(ctx, "aircraft-hawk-2")
+	if err != nil {
+		t.Fatalf("ListOperationalIntents hawk returned error: %v", err)
+	}
+	if len(hawkIntents) != 0 {
+		t.Fatalf("hawk intent count = %d, want 0", len(hawkIntents))
+	}
+
+	hawk, err := durable.GetAircraft(ctx, "aircraft-hawk-2")
+	if err != nil {
+		t.Fatalf("GetAircraft hawk returned error: %v", err)
+	}
+	if hawk.AcceptanceStatus != domain.AcceptanceStatusAccepted {
+		t.Fatalf("hawk acceptance = %q, want %q", hawk.AcceptanceStatus, domain.AcceptanceStatusAccepted)
+	}
+	if hawk.Status != domain.AircraftStatusActive {
+		t.Fatalf("hawk status = %q, want %q", hawk.Status, domain.AircraftStatusActive)
+	}
+
+	hawkProfile, err := durable.GetAircraftOperatingProfile(ctx, "aircraft-hawk-2")
+	if err != nil {
+		t.Fatalf("GetAircraftOperatingProfile hawk returned error: %v", err)
+	}
+	if hawkProfile == nil || hawkProfile.MaxAltitudeFtAGL == nil || *hawkProfile.MaxAltitudeFtAGL != 400 {
+		t.Fatalf("hawk profile = %#v, want max altitude 400 ft AGL", hawkProfile)
+	}
+	hawkLimits, err := durable.ListOperatingLimits(ctx, "aircraft-hawk-2")
+	if err != nil {
+		t.Fatalf("ListOperatingLimits hawk returned error: %v", err)
+	}
+	if len(hawkLimits) != 4 {
+		t.Fatalf("hawk operating limit count = %d, want 4", len(hawkLimits))
 	}
 
 	volumes, err := durable.ListOperationalVolumes(ctx, "intent-2041")
@@ -70,6 +105,40 @@ func TestDemoPopulatesDashboardStores(t *testing.T) {
 	}
 	if ravenSample == nil {
 		t.Fatal("expected raven last-known telemetry sample")
+	}
+	hawkSample, err := telemetry.GetLatestSample(ctx, "aircraft-hawk-2")
+	if err != nil {
+		t.Fatalf("GetLatestSample hawk returned error: %v", err)
+	}
+	if hawkSample == nil {
+		t.Fatal("expected hawk ready telemetry sample")
+	}
+
+	fleet := service.NewFleetService(durable, telemetry, replay, registryClient)
+	hawkDashboard, err := fleet.GetAircraftDashboard(ctx, "aircraft-hawk-2")
+	if err != nil {
+		t.Fatalf("GetAircraftDashboard hawk returned error: %v", err)
+	}
+	if hawkDashboard.Readiness.Status != domain.ReadinessStatusReady {
+		t.Fatalf("hawk readiness = %q, want %q (%v)", hawkDashboard.Readiness.Status, domain.ReadinessStatusReady, hawkDashboard.Readiness.Reasons)
+	}
+	if hawkDashboard.CurrentIntent != nil {
+		t.Fatalf("hawk current intent = %#v, want nil", hawkDashboard.CurrentIntent)
+	}
+
+	eagleDashboard, err := fleet.GetAircraftDashboard(ctx, "aircraft-eagle-7")
+	if err != nil {
+		t.Fatalf("GetAircraftDashboard eagle returned error: %v", err)
+	}
+	if eagleDashboard.CurrentIntent == nil || eagleDashboard.CurrentIntent.ID != "intent-2041" {
+		t.Fatalf("eagle current intent = %#v, want intent-2041", eagleDashboard.CurrentIntent)
+	}
+	falconDashboard, err := fleet.GetAircraftDashboard(ctx, "aircraft-falcon-3")
+	if err != nil {
+		t.Fatalf("GetAircraftDashboard falcon returned error: %v", err)
+	}
+	if falconDashboard.CurrentIntent == nil || falconDashboard.CurrentIntent.ID != "intent-2042" {
+		t.Fatalf("falcon current intent = %#v, want intent-2042", falconDashboard.CurrentIntent)
 	}
 
 	manifest, err := replay.GetReplayManifest(ctx, "flight-2041-a")
