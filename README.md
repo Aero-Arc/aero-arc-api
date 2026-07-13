@@ -63,9 +63,14 @@ AERO_API_SEED=demo
 AERO_API_DEBUG=true
 ```
 
+To read normalized position telemetry from InfluxDB 3 Core, set
+`AERO_API_TELEMETRY_STORE=influxdb` together with
+`AERO_API_INFLUXDB_HOST`, `AERO_API_INFLUXDB_TOKEN`, and
+`AERO_API_INFLUXDB_DATABASE`. Demo seeding remains available only with the
+memory telemetry store.
+
 `AERO_API_REGISTRY_MODE=grpc` connects to the real `aero-arc-registry` gRPC
-service. Durable, telemetry, and replay stores still run in `memory` mode in
-this scaffold.
+service. Durable and replay stores still run in `memory` mode in this scaffold.
 
 Set `--debug` or `AERO_API_DEBUG=true` to enable debug-level operation logs.
 Debug mode logs each HTTP request with method, path, status, and duration, plus

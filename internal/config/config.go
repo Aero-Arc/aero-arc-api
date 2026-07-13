@@ -24,6 +24,9 @@ type Config struct {
 	Addr                string
 	DurableStore        string
 	TelemetryStore      string
+	InfluxDBHost        string
+	InfluxDBToken       string
+	InfluxDBDatabase    string
 	ReplayStore         string
 	RegistryMode        string
 	RegistryAddress     string
@@ -54,6 +57,9 @@ func Load() (*Config, error) {
 	applyStringEnv("AERO_API_ADDR", &cfg.Addr)
 	applyStringEnv("AERO_API_DURABLE_STORE", &cfg.DurableStore)
 	applyStringEnv("AERO_API_TELEMETRY_STORE", &cfg.TelemetryStore)
+	applyStringEnv("AERO_API_INFLUXDB_HOST", &cfg.InfluxDBHost)
+	applyStringEnv("AERO_API_INFLUXDB_TOKEN", &cfg.InfluxDBToken)
+	applyStringEnv("AERO_API_INFLUXDB_DATABASE", &cfg.InfluxDBDatabase)
 	applyStringEnv("AERO_API_REPLAY_STORE", &cfg.ReplayStore)
 	applyStringEnv("AERO_API_REGISTRY_MODE", &cfg.RegistryMode)
 	applyStringEnv("AERO_API_REGISTRY_ADDR", &cfg.RegistryAddress)
@@ -83,9 +89,19 @@ func (cfg *Config) Validate() error {
 		// TODO: support tidb and postgres durable stores.
 		return fmt.Errorf("unsupported durable store %q", cfg.DurableStore)
 	}
-	if cfg.TelemetryStore != "memory" {
-		// TODO: support influxdb telemetry stores.
+	if cfg.TelemetryStore != "memory" && cfg.TelemetryStore != "influxdb" {
 		return fmt.Errorf("unsupported telemetry store %q", cfg.TelemetryStore)
+	}
+	if cfg.TelemetryStore == "influxdb" {
+		if cfg.InfluxDBHost == "" {
+			return fmt.Errorf("AERO_API_INFLUXDB_HOST cannot be empty when telemetry store is influxdb")
+		}
+		if cfg.InfluxDBToken == "" {
+			return fmt.Errorf("AERO_API_INFLUXDB_TOKEN cannot be empty when telemetry store is influxdb")
+		}
+		if cfg.InfluxDBDatabase == "" {
+			return fmt.Errorf("AERO_API_INFLUXDB_DATABASE cannot be empty when telemetry store is influxdb")
+		}
 	}
 	if cfg.ReplayStore != "memory" {
 		// TODO: support s3 replay stores.
