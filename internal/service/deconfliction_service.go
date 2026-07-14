@@ -15,19 +15,28 @@ import (
 const deconflictionRuleVersion = "local-dss-shaped-v1"
 
 type DeconflictionService struct {
-	durable durable.Store
-	now     func() time.Time
+	durable  durable.Store
+	airspace AirspaceAwarenessProvider
+	now      func() time.Time
 }
 
-func NewDeconflictionService(durableStore durable.Store) *DeconflictionService {
-	return NewDeconflictionServiceWithClock(durableStore, nil)
+func NewDeconflictionService(durableStore durable.Store, airspace ...AirspaceAwarenessProvider) *DeconflictionService {
+	return NewDeconflictionServiceWithClock(durableStore, nil, airspace...)
 }
 
-func NewDeconflictionServiceWithClock(durableStore durable.Store, now func() time.Time) *DeconflictionService {
+func NewDeconflictionServiceWithClock(durableStore durable.Store, now func() time.Time, airspace ...AirspaceAwarenessProvider) *DeconflictionService {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &DeconflictionService{durable: durableStore, now: now}
+	service := &DeconflictionService{
+		durable:  durableStore,
+		airspace: NewLocalStoreAirspaceProvider(durableStore),
+		now:      now,
+	}
+	if len(airspace) > 0 && airspace[0] != nil {
+		service.airspace = airspace[0]
+	}
+	return service
 }
 
 func (s *DeconflictionService) CheckIntent(ctx context.Context, intentID string) (domain.DeconflictionResult, error) {
@@ -60,18 +69,15 @@ func (s *DeconflictionService) CheckIntent(ctx context.Context, intentID string)
 		return result, nil
 	}
 
-	intents, err := s.durable.ListOperationalIntents(ctx, "")
+	candidates, err := s.airspace.QueryConflictCandidates(ctx, intent, volumes)
 	if err != nil {
-		return domain.DeconflictionResult{}, fmt.Errorf("list operational intents: %w", err)
+		return domain.DeconflictionResult{}, fmt.Errorf("query conflict candidates: %w", err)
 	}
-	allVolumes, err := s.durable.ListOperationalVolumes(ctx, "")
-	if err != nil {
-		return domain.DeconflictionResult{}, fmt.Errorf("list candidate operational volumes: %w", err)
-	}
-	volumesByIntent := make(map[string][]domain.OperationalVolume)
-	for _, volume := range allVolumes {
-		volumesByIntent[volume.IntentID] = append(volumesByIntent[volume.IntentID], volume)
-	}
+
+	// Validate and parse each unique peer volume once before the cross-product
+	// loop. GeoJSON parsing is the expensive step; doing it here avoids repeated
+	// map lookups and string-key allocation in the hot path.
+	peerEvaluations := preparePeerEvaluations(candidates)
 
 	for _, volume := range volumes {
 		ownBounds, finding, ok := s.evaluableVolume(intent, volume, checkedAt)
@@ -81,14 +87,12 @@ func (s *DeconflictionService) CheckIntent(ctx context.Context, intentID string)
 			continue
 		}
 
-		for _, candidate := range intents {
-			if candidate.ID == intent.ID || !candidateConflictEligible(candidate.Status) {
-				continue
-			}
-			for _, candidateVolume := range volumesForVersion(volumesByIntent[candidate.ID], candidate.Version) {
-				peerBounds, peerFinding, ok := s.evaluableVolumeForPeer(intent, volume.ID, candidate, candidateVolume, checkedAt)
-				if !ok {
-					if peerFinding.Status == domain.ConflictFindingStatusIndeterminate && !peerVolumeDimensionsUsable(candidateVolume) {
+		for _, candidate := range candidates {
+			for _, candidateVolume := range candidate.Volumes {
+				peer := peerEvaluations[peerVolumeKeyFrom(candidateVolume)]
+				if !peer.ok {
+					peerFinding := s.finding(intent, peer.status, volume.ID, candidate.Intent.ID, candidate.Intent.Version, candidateVolume.ID, peer.message, checkedAt)
+					if peerFinding.Status == domain.ConflictFindingStatusIndeterminate && !peer.dimensionsUsable {
 						result.Findings = append(result.Findings, peerFinding)
 						result.Posture = maxPosture(result.Posture, peerFinding.Status)
 						continue
@@ -101,11 +105,11 @@ func (s *DeconflictionService) CheckIntent(ctx context.Context, intentID string)
 					continue
 				}
 				if !timeWindowsOverlap(volume.StartsAt, volume.EndsAt, candidateVolume.StartsAt, candidateVolume.EndsAt) ||
-					!ownBounds.overlaps(peerBounds) {
+					!ownBounds.overlaps(peer.bounds) {
 					continue
 				}
 				if volume.AltitudeRef != candidateVolume.AltitudeRef {
-					finding := s.finding(intent, domain.ConflictFindingStatusIndeterminate, volume.ID, candidate.ID, candidate.Version, candidateVolume.ID, "operational volume altitude references differ and cannot be compared locally", checkedAt)
+					finding := s.finding(intent, domain.ConflictFindingStatusIndeterminate, volume.ID, candidate.Intent.ID, candidate.Intent.Version, candidateVolume.ID, "operational volume altitude references differ and cannot be compared locally", checkedAt)
 					result.Findings = append(result.Findings, finding)
 					result.Posture = maxPosture(result.Posture, finding.Status)
 					continue
@@ -116,13 +120,13 @@ func (s *DeconflictionService) CheckIntent(ctx context.Context, intentID string)
 
 				start, end := timeOverlap(volume.StartsAt, volume.EndsAt, candidateVolume.StartsAt, candidateVolume.EndsAt)
 				minAlt, maxAlt := altitudeOverlap(volume.MinAltitudeM, volume.MaxAltitudeM, candidateVolume.MinAltitudeM, candidateVolume.MaxAltitudeM)
-				finding := s.finding(intent, domain.ConflictFindingStatusPotentialConflict, volume.ID, candidate.ID, candidate.Version, candidateVolume.ID, "local 4D operational volume bounding boxes overlap; exact polygon intersection is not evaluated in v1", checkedAt)
+				finding := s.finding(intent, domain.ConflictFindingStatusPotentialConflict, volume.ID, candidate.Intent.ID, candidate.Intent.Version, candidateVolume.ID, "local 4D operational volume bounding boxes overlap; exact polygon intersection is not evaluated in v1", checkedAt)
 				finding.TimeOverlapStart = &start
 				finding.TimeOverlapEnd = &end
 				finding.AltitudeOverlapMin = &minAlt
 				finding.AltitudeOverlapMax = &maxAlt
 				finding.OwnBounds = ownBounds.domainBounds()
-				finding.ConflictingBounds = peerBounds.domainBounds()
+				finding.ConflictingBounds = peer.bounds.domainBounds()
 				result.Findings = append(result.Findings, finding)
 				result.Posture = maxPosture(result.Posture, finding.Status)
 			}
@@ -168,18 +172,71 @@ func (s *DeconflictionService) evaluableVolume(intent domain.OperationalIntent, 
 	return bounds, domain.ConflictFinding{}, true
 }
 
-func (s *DeconflictionService) evaluableVolumeForPeer(target domain.OperationalIntent, volumeID string, peer domain.OperationalIntent, peerVolume domain.OperationalVolume, checkedAt time.Time) (geoBounds, domain.ConflictFinding, bool) {
-	status, message := validateVolume(peerVolume)
-	if status != domain.ConflictFindingStatusClear {
-		finding := s.finding(target, status, volumeID, peer.ID, peer.Version, peerVolume.ID, message, checkedAt)
-		return geoBounds{}, finding, false
+// peerVolumeKey identifies a peer operational volume without string allocation.
+type peerVolumeKey struct {
+	intentID string
+	version  int
+	volumeID string
+}
+
+func peerVolumeKeyFrom(volume domain.OperationalVolume) peerVolumeKey {
+	return peerVolumeKey{
+		intentID: volume.IntentID,
+		version:  volume.IntentVersion,
+		volumeID: volume.ID,
 	}
-	bounds, err := geoJSONBounds(peerVolume.GeoJSON)
+}
+
+// peerVolumeEvaluation is the outcome of validating and parsing a peer
+// operational volume. When ok is false, status and message describe the
+// finding the failure should produce.
+type peerVolumeEvaluation struct {
+	bounds           geoBounds
+	status           domain.ConflictFindingStatus
+	message          string
+	ok               bool
+	dimensionsUsable bool
+}
+
+func preparePeerEvaluations(candidates []domain.OperationalIntentConflictCandidate) map[peerVolumeKey]peerVolumeEvaluation {
+	evaluations := make(map[peerVolumeKey]peerVolumeEvaluation)
+	for _, candidate := range candidates {
+		for _, volume := range candidate.Volumes {
+			key := peerVolumeKeyFrom(volume)
+			if _, seen := evaluations[key]; seen {
+				continue
+			}
+			evaluations[key] = evaluatePeerVolume(volume)
+		}
+	}
+	return evaluations
+}
+
+func evaluatePeerVolume(volume domain.OperationalVolume) peerVolumeEvaluation {
+	issue := classifyVolumeDimensions(volume)
+	if issue != volumeDimensionsOK {
+		return peerVolumeEvaluation{
+			status:           domain.ConflictFindingStatusIndeterminate,
+			message:          volumeDimensionMessage(issue),
+			dimensionsUsable: false,
+		}
+	}
+	if status, message := validateVolumeGeometry(volume); status != domain.ConflictFindingStatusClear {
+		return peerVolumeEvaluation{
+			status:           status,
+			message:          message,
+			dimensionsUsable: true,
+		}
+	}
+	bounds, err := geoJSONBounds(volume.GeoJSON)
 	if err != nil {
-		finding := s.finding(target, domain.ConflictFindingStatusIndeterminate, volumeID, peer.ID, peer.Version, peerVolume.ID, err.Error(), checkedAt)
-		return geoBounds{}, finding, false
+		return peerVolumeEvaluation{
+			status:           domain.ConflictFindingStatusIndeterminate,
+			message:          err.Error(),
+			dimensionsUsable: true,
+		}
 	}
-	return bounds, domain.ConflictFinding{}, true
+	return peerVolumeEvaluation{bounds: bounds, ok: true, dimensionsUsable: true}
 }
 
 func (s *DeconflictionService) finding(intent domain.OperationalIntent, status domain.ConflictFindingStatus, volumeID, conflictingIntentID string, conflictingVersion int, conflictingVolumeID, message string, checkedAt time.Time) domain.ConflictFinding {
@@ -206,50 +263,70 @@ func (s *DeconflictionService) finding(intent domain.OperationalIntent, status d
 	}
 }
 
-func validateVolume(volume domain.OperationalVolume) (domain.ConflictFindingStatus, string) {
+type volumeDimensionIssue int
+
+const (
+	volumeDimensionsOK volumeDimensionIssue = iota
+	volumeDimensionInvalidTimeWindow
+	volumeDimensionMissingOrInvalidAltitudeBand
+	volumeDimensionInvalidAltitudeBand
+	volumeDimensionMissingAltitudeRef
+)
+
+func classifyVolumeDimensions(volume domain.OperationalVolume) volumeDimensionIssue {
 	if volume.StartsAt.IsZero() || volume.EndsAt.IsZero() || !volume.StartsAt.Before(volume.EndsAt) {
-		return domain.ConflictFindingStatusIndeterminate, "operational volume has an invalid time window"
+		return volumeDimensionInvalidTimeWindow
 	}
 	if volume.MinAltitudeM < 0 || volume.MaxAltitudeM <= 0 {
-		return domain.ConflictFindingStatusIndeterminate, "operational volume has a missing or invalid altitude band"
+		return volumeDimensionMissingOrInvalidAltitudeBand
 	}
 	if volume.MinAltitudeM > volume.MaxAltitudeM {
-		return domain.ConflictFindingStatusIndeterminate, "operational volume has an invalid altitude band"
+		return volumeDimensionInvalidAltitudeBand
 	}
 	if volume.AltitudeRef == "" {
-		return domain.ConflictFindingStatusIndeterminate, "operational volume has no altitude reference"
+		return volumeDimensionMissingAltitudeRef
 	}
-	if strings.TrimSpace(volume.GeoJSON) == "" {
-		if strings.TrimSpace(volume.GeometryURI) != "" {
-			return domain.ConflictFindingStatusPotentialConflict, "operational volume references external geometry that is not resolved locally"
-		}
-		return domain.ConflictFindingStatusIndeterminate, "operational volume has no inline GeoJSON geometry"
+	return volumeDimensionsOK
+}
+
+func volumeDimensionMessage(issue volumeDimensionIssue) string {
+	switch issue {
+	case volumeDimensionInvalidTimeWindow:
+		return "operational volume has an invalid time window"
+	case volumeDimensionMissingOrInvalidAltitudeBand:
+		return "operational volume has a missing or invalid altitude band"
+	case volumeDimensionInvalidAltitudeBand:
+		return "operational volume has an invalid altitude band"
+	case volumeDimensionMissingAltitudeRef:
+		return "operational volume has no altitude reference"
+	default:
+		return ""
 	}
-	return domain.ConflictFindingStatusClear, ""
+}
+
+func volumeDimensionsUsable(volume domain.OperationalVolume) bool {
+	return classifyVolumeDimensions(volume) == volumeDimensionsOK
+}
+
+func validateVolume(volume domain.OperationalVolume) (domain.ConflictFindingStatus, string) {
+	if issue := classifyVolumeDimensions(volume); issue != volumeDimensionsOK {
+		return domain.ConflictFindingStatusIndeterminate, volumeDimensionMessage(issue)
+	}
+	return validateVolumeGeometry(volume)
+}
+
+func validateVolumeGeometry(volume domain.OperationalVolume) (domain.ConflictFindingStatus, string) {
+	if strings.TrimSpace(volume.GeoJSON) != "" {
+		return domain.ConflictFindingStatusClear, ""
+	}
+	if strings.TrimSpace(volume.GeometryURI) != "" {
+		return domain.ConflictFindingStatusPotentialConflict, "operational volume references external geometry that is not resolved locally"
+	}
+	return domain.ConflictFindingStatusIndeterminate, "operational volume has no inline GeoJSON geometry"
 }
 
 func peerVolumeDimensionsUsable(volume domain.OperationalVolume) bool {
-	return !volume.StartsAt.IsZero() &&
-		!volume.EndsAt.IsZero() &&
-		volume.StartsAt.Before(volume.EndsAt) &&
-		volume.MinAltitudeM >= 0 &&
-		volume.MaxAltitudeM > 0 &&
-		volume.MinAltitudeM <= volume.MaxAltitudeM &&
-		volume.AltitudeRef != ""
-}
-
-func candidateConflictEligible(status domain.IntentStatus) bool {
-	return status == domain.IntentStatusAccepted || status == domain.IntentStatusActive
-}
-
-func volumesForVersion(volumes []domain.OperationalVolume, version int) []domain.OperationalVolume {
-	filtered := make([]domain.OperationalVolume, 0, len(volumes))
-	for _, volume := range volumes {
-		if volume.IntentVersion == version {
-			filtered = append(filtered, volume)
-		}
-	}
-	return filtered
+	return volumeDimensionsUsable(volume)
 }
 
 func conflictSeverity(status domain.ConflictFindingStatus) domain.Severity {
