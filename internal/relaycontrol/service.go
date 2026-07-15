@@ -15,6 +15,7 @@ import (
 	registryv1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/registry/v1"
 	relayv1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/relay/v1"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 )
 
@@ -44,14 +45,17 @@ type cachedPlacement struct {
 	expiresAt        time.Time
 }
 
-func New(registry registryClient, timeout, placementTTL time.Duration) *Service {
+func New(registry registryClient, transportCredentials credentials.TransportCredentials, timeout, placementTTL time.Duration) (*Service, error) {
+	if transportCredentials == nil {
+		return nil, fmt.Errorf("relay transport credentials are required")
+	}
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
 	if placementTTL <= 0 {
 		placementTTL = 30 * time.Second
 	}
-	return newWithPool(registry, newGRPCPool(), timeout, placementTTL)
+	return newWithPool(registry, newGRPCPool(transportCredentials), timeout, placementTTL), nil
 }
 
 func newWithPool(registry registryClient, pool clientPool, timeout, ttl time.Duration) *Service {
