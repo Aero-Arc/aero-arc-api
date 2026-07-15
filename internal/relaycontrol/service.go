@@ -14,24 +14,11 @@ import (
 	agentv1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/agent/v1"
 	registryv1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/registry/v1"
 	relayv1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/relay/v1"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
 
 const defaultTimeout = 5 * time.Second
-
-type registryClient interface {
-	GetAgentPlacement(context.Context, *registryv1.GetAgentPlacementRequest, ...grpc.CallOption) (*registryv1.GetAgentPlacementResponse, error)
-	ListRelays(context.Context, *registryv1.ListRelaysRequest, ...grpc.CallOption) (*registryv1.ListRelaysResponse, error)
-}
-
-type clientPool interface {
-	Client(context.Context, string, string) (relayv1.RelayControlClient, error)
-	Invalidate(string)
-	Close() error
-}
 
 type SetRequest struct {
 	AgentID       string
@@ -193,6 +180,7 @@ func validateAck(ack *agentv1.OperationContextCommandAck, commandID string) erro
 		return fmt.Errorf("agent rejected operation context: %s: %s", ack.GetStatus(), ack.GetError())
 	}
 }
+
 func ensureCommandID(id string) (string, error) {
 	if id != "" {
 		return id, nil
@@ -203,6 +191,7 @@ func ensureCommandID(id string) (string, error) {
 	}
 	return hex.EncodeToString(b), nil
 }
+
 func relayAddress(relay *registryv1.Relay) string {
 	address := strings.TrimSpace(relay.GetAddress())
 	if address == "" {
@@ -214,44 +203,4 @@ func relayAddress(relay *registryv1.Relay) string {
 		}
 	}
 	return address
-}
-
-type grpcPool struct {
-	mu    sync.Mutex
-	conns map[string]*grpc.ClientConn
-}
-
-func newGRPCPool() *grpcPool { return &grpcPool{conns: map[string]*grpc.ClientConn{}} }
-func (p *grpcPool) Client(ctx context.Context, relayID, address string) (relayv1.RelayControlClient, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if conn := p.conns[relayID]; conn != nil {
-		return relayv1.NewRelayControlClient(conn), nil
-	}
-	conn, err := grpc.DialContext(ctx, address, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		return nil, err
-	}
-	p.conns[relayID] = conn
-	return relayv1.NewRelayControlClient(conn), nil
-}
-func (p *grpcPool) Invalidate(relayID string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if conn := p.conns[relayID]; conn != nil {
-		_ = conn.Close()
-		delete(p.conns, relayID)
-	}
-}
-func (p *grpcPool) Close() error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	var first error
-	for id, conn := range p.conns {
-		if err := conn.Close(); err != nil && first == nil {
-			first = err
-		}
-		delete(p.conns, id)
-	}
-	return first
 }
