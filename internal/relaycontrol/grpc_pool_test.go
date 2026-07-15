@@ -3,10 +3,12 @@ package relaycontrol
 import (
 	"context"
 	"testing"
+
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func TestGRPCPoolReusesConnectionOnlyWhileRelayAddressMatches(t *testing.T) {
-	pool := newGRPCPool()
+	pool := newGRPCPool(insecure.NewCredentials())
 	t.Cleanup(func() {
 		if err := pool.Close(); err != nil {
 			t.Errorf("close pool: %v", err)

@@ -6,14 +6,15 @@ import (
 
 	relayv1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/relay/v1"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 )
 
 // grpcPool owns and reuses the API's connections to relay instances discovered
 // through the Registry service.
 type grpcPool struct {
-	mu    sync.Mutex
-	conns map[string]pooledConnection
+	mu                   sync.Mutex
+	transportCredentials credentials.TransportCredentials
+	conns                map[string]pooledConnection
 }
 
 type pooledConnection struct {
@@ -21,8 +22,11 @@ type pooledConnection struct {
 	conn    *grpc.ClientConn
 }
 
-func newGRPCPool() *grpcPool {
-	return &grpcPool{conns: map[string]pooledConnection{}}
+func newGRPCPool(transportCredentials credentials.TransportCredentials) *grpcPool {
+	return &grpcPool{
+		transportCredentials: transportCredentials,
+		conns:                map[string]pooledConnection{},
+	}
 }
 
 func (p *grpcPool) Client(ctx context.Context, relayID, address string) (relayv1.RelayControlClient, error) {
@@ -35,7 +39,7 @@ func (p *grpcPool) Client(ctx context.Context, relayID, address string) (relayv1
 		_ = existing.conn.Close()
 		delete(p.conns, relayID)
 	}
-	conn, err := grpc.DialContext(ctx, address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.DialContext(ctx, address, grpc.WithTransportCredentials(p.transportCredentials))
 	if err != nil {
 		return nil, err
 	}

@@ -11,6 +11,7 @@ import (
 	relayv1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/relay/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
 
@@ -47,6 +48,19 @@ type fakeRelayClient struct {
 	clearRequests []*relayv1.ClearOperationContextRequest
 	setErrors     []error
 	block         bool
+}
+
+func TestNewRequiresRelayTransportCredentials(t *testing.T) {
+	if _, err := New(&fakeRegistry{relayIDs: []string{"relay-1"}}, nil, time.Second, time.Minute); err == nil {
+		t.Fatal("New returned nil error without relay transport credentials")
+	}
+	service, err := New(&fakeRegistry{relayIDs: []string{"relay-1"}}, insecure.NewCredentials(), time.Second, time.Minute)
+	if err != nil {
+		t.Fatalf("New returned error with relay transport credentials: %v", err)
+	}
+	if err := service.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
 }
 
 func (f *fakeRelayClient) ListActiveDrones(context.Context, *relayv1.ListActiveDronesRequest, ...grpc.CallOption) (*relayv1.ListActiveDronesResponse, error) {
