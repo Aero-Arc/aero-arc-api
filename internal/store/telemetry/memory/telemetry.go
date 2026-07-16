@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
+	"github.com/Aero-Arc/aero-arc-api/internal/store/telemetry"
 )
 
 type Store struct {
@@ -41,6 +42,9 @@ func (s *Store) GetLatestSample(_ context.Context, aircraftID string) (*domain.T
 }
 
 func (s *Store) QueryAircraftSamples(_ context.Context, aircraftID string, limit int) ([]domain.TelemetrySample, error) {
+	if limit <= 0 {
+		limit = telemetry.DefaultSampleLimit
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	samples := make([]domain.TelemetrySample, 0)
@@ -57,6 +61,9 @@ func (s *Store) QueryAircraftSamples(_ context.Context, aircraftID string, limit
 }
 
 func (s *Store) QueryFlightSamples(_ context.Context, flightID string, limit int) ([]domain.TelemetrySample, error) {
+	if limit <= 0 {
+		limit = telemetry.DefaultSampleLimit
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	samples := make([]domain.TelemetrySample, 0)

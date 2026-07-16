@@ -55,7 +55,7 @@ func TestQueryFlightSamplesReturnsChronologicalOrder(t *testing.T) {
 	row := func(at time.Time, id string, latitude float64) map[string]any {
 		return map[string]any{"time": at, "frame_id": id, "aircraft_id": "aircraft-1", "flight_id": "flight-1", "latitude_deg": latitude, "longitude_deg": -87.0}
 	}
-	runner := &fakeRunner{rows: []map[string]any{row(newer, "new", 42), row(older, "old", 41)}}
+	runner := &fakeRunner{rows: []map[string]any{row(older, "old", 41), row(newer, "new", 42)}}
 	samples, err := newWithRunner(runner).QueryFlightSamples(context.Background(), "flight-1", 25)
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +63,48 @@ func TestQueryFlightSamplesReturnsChronologicalOrder(t *testing.T) {
 	if len(samples) != 2 || samples[0].ID != "old" || samples[1].ID != "new" {
 		t.Fatalf("unexpected order: %#v", samples)
 	}
-	if !strings.Contains(runner.query, "flight_id = $flight_id") || !strings.Contains(runner.query, "LIMIT 25") {
+	if !strings.Contains(runner.query, "flight_id = $flight_id") || !strings.Contains(runner.query, "ORDER BY time ASC LIMIT 25") {
+		t.Fatalf("unexpected query: %s", runner.query)
+	}
+}
+
+func TestQueryAircraftSamplesReturnsLatestWindowChronologically(t *testing.T) {
+	older := time.Date(2026, 7, 12, 19, 0, 0, 0, time.UTC)
+	newer := older.Add(time.Minute)
+	row := func(at time.Time, id string, latitude float64) map[string]any {
+		return map[string]any{"time": at, "frame_id": id, "aircraft_id": "aircraft-1", "latitude_deg": latitude, "longitude_deg": -87.0}
+	}
+	runner := &fakeRunner{rows: []map[string]any{row(newer, "new", 42), row(older, "old", 41)}}
+	samples, err := newWithRunner(runner).QueryAircraftSamples(context.Background(), "aircraft-1", 25)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(samples) != 2 || samples[0].ID != "old" || samples[1].ID != "new" {
+		t.Fatalf("unexpected order: %#v", samples)
+	}
+	if !strings.Contains(runner.query, "aircraft_id = $aircraft_id") || !strings.Contains(runner.query, "ORDER BY time DESC LIMIT 25") {
+		t.Fatalf("unexpected query: %s", runner.query)
+	}
+}
+
+func TestSamplesChronologicalRejectsInvalidWindow(t *testing.T) {
+	runner := &fakeRunner{}
+	_, err := newWithRunner(runner).samplesChronological(context.Background(), "1 = 1", map[string]any{}, 1, 0)
+	if err == nil || !strings.Contains(err.Error(), "invalid sample window") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if runner.query != "" {
+		t.Fatalf("query executed for invalid window: %s", runner.query)
+	}
+}
+
+func TestZeroLimitUsesDefaultSampleLimit(t *testing.T) {
+	runner := &fakeRunner{}
+	_, err := newWithRunner(runner).QueryAircraftSamples(context.Background(), "aircraft-1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(runner.query, "LIMIT 1000") {
 		t.Fatalf("unexpected query: %s", runner.query)
 	}
 }
