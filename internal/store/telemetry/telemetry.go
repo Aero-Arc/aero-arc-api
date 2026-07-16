@@ -12,9 +12,17 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 )
 
+// DefaultSampleLimit is the first-tier bounded query size used when callers
+// pass zero rather than an explicit positive limit.
+const DefaultSampleLimit = 1000
+
 // Store defines the telemetry read model used by the API.
 type Store interface {
 	GetLatestSample(ctx context.Context, aircraftID string) (*domain.TelemetrySample, error)
+	// QueryAircraftSamples selects the latest limited window and returns it
+	// chronologically from oldest to newest. A zero limit uses DefaultSampleLimit.
 	QueryAircraftSamples(ctx context.Context, aircraftID string, limit int) ([]domain.TelemetrySample, error)
+	// QueryFlightSamples selects the earliest limited window and returns it
+	// chronologically from oldest to newest. A zero limit uses DefaultSampleLimit.
 	QueryFlightSamples(ctx context.Context, flightID string, limit int) ([]domain.TelemetrySample, error)
 }

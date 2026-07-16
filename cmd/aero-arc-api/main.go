@@ -20,6 +20,7 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/store/replay"
 	replaymemory "github.com/Aero-Arc/aero-arc-api/internal/store/replay/memory"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/telemetry"
+	telemetryinfluxdb "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/influxdb"
 	telemetrymemory "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/memory"
 	"github.com/urfave/cli/v3"
 )
@@ -61,6 +62,9 @@ func newCommand() *cli.Command {
 						Usage:   "telemetry store mode",
 						Sources: cli.EnvVars("AERO_API_TELEMETRY_STORE"),
 					},
+					&cli.StringFlag{Name: "influxdb-host", Usage: "InfluxDB 3 host URL", Sources: cli.EnvVars("AERO_API_INFLUXDB_HOST")},
+					&cli.StringFlag{Name: "influxdb-token", Usage: "InfluxDB 3 access token", Sources: cli.EnvVars("AERO_API_INFLUXDB_TOKEN")},
+					&cli.StringFlag{Name: "influxdb-database", Usage: "InfluxDB 3 database", Sources: cli.EnvVars("AERO_API_INFLUXDB_DATABASE")},
 					&cli.StringFlag{
 						Name:    "replay-store",
 						Value:   defaults.ReplayStore,
@@ -109,6 +113,9 @@ func newCommand() *cli.Command {
 						Addr:                cmd.String("addr"),
 						DurableStore:        cmd.String("durable-store"),
 						TelemetryStore:      cmd.String("telemetry-store"),
+						InfluxDBHost:        cmd.String("influxdb-host"),
+						InfluxDBToken:       cmd.String("influxdb-token"),
+						InfluxDBDatabase:    cmd.String("influxdb-database"),
 						ReplayStore:         cmd.String("replay-store"),
 						RegistryMode:        cmd.String("registry-mode"),
 						RegistryAddress:     cmd.String("registry-addr"),
@@ -147,9 +154,16 @@ func run(ctx context.Context, cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	telemetryStore, err := newTelemetryStore(cfg.TelemetryStore)
+	telemetryStore, err := newTelemetryStore(cfg)
 	if err != nil {
 		return err
+	}
+	if closer, ok := telemetryStore.(interface{ Close() error }); ok {
+		defer func() {
+			if err := closer.Close(); err != nil {
+				slog.Warn("failed to close telemetry store", slog.String("error", err.Error()))
+			}
+		}()
 	}
 	replayStore, err := newReplayStore(cfg.ReplayStore)
 	if err != nil {
@@ -220,12 +234,14 @@ func newDurableStore(mode string) (durable.Store, error) {
 	}
 }
 
-func newTelemetryStore(mode string) (telemetry.Store, error) {
-	switch mode {
+func newTelemetryStore(cfg *config.Config) (telemetry.Store, error) {
+	switch cfg.TelemetryStore {
 	case "memory":
 		return telemetrymemory.NewStore(), nil
+	case "influxdb":
+		return telemetryinfluxdb.New(cfg.InfluxDBHost, cfg.InfluxDBToken, cfg.InfluxDBDatabase)
 	default:
-		return nil, fmt.Errorf("unsupported telemetry store %q", mode)
+		return nil, fmt.Errorf("unsupported telemetry store %q", cfg.TelemetryStore)
 	}
 }
 
