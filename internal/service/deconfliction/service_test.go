@@ -1,4 +1,4 @@
-package service
+package deconfliction_test
 
 import (
 	"context"
@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
+	"github.com/Aero-Arc/aero-arc-api/internal/service"
+	"github.com/Aero-Arc/aero-arc-api/internal/service/deconfliction"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 )
 
@@ -17,7 +19,7 @@ func TestDeconflictionClearWhenNoLocalVolumeOverlap(t *testing.T) {
 	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
 	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", eastSquareGeoJSON(), 10, 120, now)
 
-	result, err := NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
+	result, err := deconfliction.NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
 	if err != nil {
 		t.Fatalf("CheckIntent returned error: %v", err)
 	}
@@ -36,13 +38,13 @@ func TestDeconflictionPotentialConflictWhenBBoxTimeAndAltitudeOverlap(t *testing
 	seedDeconflictionAircraft(t, ctx, store, now)
 	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
 	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", squareGeoJSON(), 20, 100, now)
-	deconfliction := NewDeconflictionServiceWithClock(store, fixedClock(now))
+	deconflictionService := deconfliction.NewDeconflictionServiceWithClock(store, fixedClock(now))
 
-	first, err := deconfliction.CheckIntent(ctx, target.ID)
+	first, err := deconflictionService.CheckIntent(ctx, target.ID)
 	if err != nil {
 		t.Fatalf("first CheckIntent returned error: %v", err)
 	}
-	second, err := deconfliction.CheckIntent(ctx, target.ID)
+	second, err := deconflictionService.CheckIntent(ctx, target.ID)
 	if err != nil {
 		t.Fatalf("second CheckIntent returned error: %v", err)
 	}
@@ -85,9 +87,9 @@ func TestDeconflictionReplacesStaleFindingsAfterRemediation(t *testing.T) {
 	seedDeconflictionAircraft(t, ctx, store, now)
 	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
 	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", squareGeoJSON(), 20, 100, now)
-	deconfliction := NewDeconflictionServiceWithClock(store, fixedClock(now))
+	deconflictionService := deconfliction.NewDeconflictionServiceWithClock(store, fixedClock(now))
 
-	first, err := deconfliction.CheckIntent(ctx, target.ID)
+	first, err := deconflictionService.CheckIntent(ctx, target.ID)
 	if err != nil {
 		t.Fatalf("first CheckIntent returned error: %v", err)
 	}
@@ -111,7 +113,7 @@ func TestDeconflictionReplacesStaleFindingsAfterRemediation(t *testing.T) {
 		UpdatedAt:     now,
 	}))
 
-	second, err := deconfliction.CheckIntent(ctx, target.ID)
+	second, err := deconflictionService.CheckIntent(ctx, target.ID)
 	if err != nil {
 		t.Fatalf("second CheckIntent returned error: %v", err)
 	}
@@ -135,7 +137,7 @@ func TestDeconflictionClearWhenAltitudeSeparated(t *testing.T) {
 	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 10, 80)
 	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", squareGeoJSON(), 120, 200, now)
 
-	result, err := NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
+	result, err := deconfliction.NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
 	if err != nil {
 		t.Fatalf("CheckIntent returned error: %v", err)
 	}
@@ -183,7 +185,7 @@ func TestDeconflictionIgnoresSelfAndNonCoordinatedStatuses(t *testing.T) {
 		must(t, store.UpdateOperationalIntent(ctx, intent))
 	}
 
-	result, err := NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
+	result, err := deconfliction.NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
 	if err != nil {
 		t.Fatalf("CheckIntent returned error: %v", err)
 	}
@@ -200,7 +202,7 @@ func TestDeconflictionBackToBackTimeWindowsDoNotOverlap(t *testing.T) {
 	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
 	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", squareGeoJSON(), 10, 120, now.Add(time.Hour))
 
-	result, err := NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
+	result, err := deconfliction.NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
 	if err != nil {
 		t.Fatalf("CheckIntent returned error: %v", err)
 	}
@@ -217,7 +219,7 @@ func TestDeconflictionOverlappingTimeWindowsProducePotentialConflict(t *testing.
 	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
 	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", squareGeoJSON(), 10, 120, now.Add(59*time.Minute))
 
-	result, err := NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
+	result, err := deconfliction.NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
 	if err != nil {
 		t.Fatalf("CheckIntent returned error: %v", err)
 	}
@@ -233,7 +235,7 @@ func TestDeconflictionMissingAltitudeFailsClosed(t *testing.T) {
 	seedDeconflictionAircraft(t, ctx, store, now)
 	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 0, 0)
 
-	result, err := NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
+	result, err := deconfliction.NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
 	if err != nil {
 		t.Fatalf("CheckIntent returned error: %v", err)
 	}
@@ -250,7 +252,7 @@ func TestDeconflictionPeerMissingAltitudeFailsClosed(t *testing.T) {
 	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
 	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", squareGeoJSON(), 0, 0, now)
 
-	result, err := NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
+	result, err := deconfliction.NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
 	if err != nil {
 		t.Fatalf("CheckIntent returned error: %v", err)
 	}
@@ -283,91 +285,12 @@ func TestDeconflictionAltitudeReferenceMismatchFailsClosed(t *testing.T) {
 		UpdatedAt:     now,
 	}))
 
-	result, err := NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
+	result, err := deconfliction.NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
 	if err != nil {
 		t.Fatalf("CheckIntent returned error: %v", err)
 	}
 	if result.Posture != domain.DeconflictionPostureIndeterminate {
 		t.Fatalf("posture = %q, want indeterminate; findings=%#v", result.Posture, result.Findings)
-	}
-}
-
-func TestIntentServiceActivateRunsDeconflictionChecker(t *testing.T) {
-	ctx := context.Background()
-	store := durablememory.NewStore()
-	now := fixedWorkflowTime()
-	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
-	intent := seedSubmittedIntentWithVolume(t, ctx, store, now)
-	must(t, store.CreateAircraft(ctx, domain.Aircraft{
-		ID:               "aircraft-2",
-		OperatorID:       "operator-1",
-		Status:           domain.AircraftStatusActive,
-		AcceptanceStatus: domain.AcceptanceStatusAccepted,
-		RemoteIDStatus:   domain.RemoteIDStatusBroadcasting,
-		CreatedAt:        now,
-		UpdatedAt:        now,
-	}))
-	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", squareGeoJSON(), 10, 120, now)
-	if evaluation, err := NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID); err != nil {
-		t.Fatalf("EvaluateIntent returned error: %v", err)
-	} else if evaluation.Blocked {
-		t.Fatalf("preflight blocked unexpectedly: %#v", evaluation.Findings)
-	}
-	plainIntents := NewIntentServiceWithClock(store, fixedClock(now))
-	intent, err := plainIntents.AcceptIntent(ctx, intent.ID)
-	if err != nil {
-		t.Fatalf("AcceptIntent returned error: %v", err)
-	}
-
-	guardedIntents := NewIntentServiceWithClock(store, fixedClock(now), NewDeconflictionServiceWithClock(store, fixedClock(now)))
-	if _, err := guardedIntents.ActivateIntent(ctx, intent.ID); err == nil {
-		t.Fatal("ActivateIntent returned nil, want deconfliction block")
-	}
-	findings, err := store.ListConflictFindings(ctx, intent.ID, intent.Version)
-	if err != nil {
-		t.Fatalf("ListConflictFindings returned error: %v", err)
-	}
-	if len(findings) != 1 || findings[0].Status != domain.ConflictFindingStatusPotentialConflict {
-		t.Fatalf("findings = %#v, want stored potential conflict", findings)
-	}
-}
-
-func TestIntentServiceDefaultConstructorRunsDeconflictionChecker(t *testing.T) {
-	ctx := context.Background()
-	store := durablememory.NewStore()
-	now := fixedWorkflowTime()
-	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
-	intent := seedSubmittedIntentWithVolume(t, ctx, store, now)
-	must(t, store.CreateAircraft(ctx, domain.Aircraft{
-		ID:               "aircraft-2",
-		OperatorID:       "operator-1",
-		Status:           domain.AircraftStatusActive,
-		AcceptanceStatus: domain.AcceptanceStatusAccepted,
-		RemoteIDStatus:   domain.RemoteIDStatusBroadcasting,
-		CreatedAt:        now,
-		UpdatedAt:        now,
-	}))
-	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", squareGeoJSON(), 10, 120, now)
-	if evaluation, err := NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID); err != nil {
-		t.Fatalf("EvaluateIntent returned error: %v", err)
-	} else if evaluation.Blocked {
-		t.Fatalf("preflight blocked unexpectedly: %#v", evaluation.Findings)
-	}
-	intents := NewIntentServiceWithClock(store, fixedClock(now))
-	intent, err := intents.AcceptIntent(ctx, intent.ID)
-	if err != nil {
-		t.Fatalf("AcceptIntent returned error: %v", err)
-	}
-
-	if _, err := intents.ActivateIntent(ctx, intent.ID); err == nil {
-		t.Fatal("ActivateIntent returned nil, want default deconfliction block")
-	}
-	findings, err := store.ListConflictFindings(ctx, intent.ID, intent.Version)
-	if err != nil {
-		t.Fatalf("ListConflictFindings returned error: %v", err)
-	}
-	if len(findings) != 1 || findings[0].Status != domain.ConflictFindingStatusPotentialConflict {
-		t.Fatalf("findings = %#v, want stored potential conflict", findings)
 	}
 }
 
@@ -378,9 +301,9 @@ func TestDeconflictionFindingsAreScopedByIntentVersion(t *testing.T) {
 	seedDeconflictionAircraft(t, ctx, store, now)
 	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
 	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", squareGeoJSON(), 10, 120, now)
-	deconfliction := NewDeconflictionServiceWithClock(store, fixedClock(now))
+	deconflictionService := deconfliction.NewDeconflictionServiceWithClock(store, fixedClock(now))
 
-	first, err := deconfliction.CheckIntent(ctx, target.ID)
+	first, err := deconflictionService.CheckIntent(ctx, target.ID)
 	if err != nil {
 		t.Fatalf("first CheckIntent returned error: %v", err)
 	}
@@ -406,7 +329,7 @@ func TestDeconflictionFindingsAreScopedByIntentVersion(t *testing.T) {
 		UpdatedAt:     now,
 	}))
 
-	second, err := deconfliction.CheckIntent(ctx, target.ID)
+	second, err := deconflictionService.CheckIntent(ctx, target.ID)
 	if err != nil {
 		t.Fatalf("second CheckIntent returned error: %v", err)
 	}
@@ -427,7 +350,7 @@ func TestDeconflictionFindingsAreScopedByIntentVersion(t *testing.T) {
 	if len(v2Findings) != 1 || v2Findings[0].Status != domain.ConflictFindingStatusClear {
 		t.Fatalf("v2 findings = %#v, want current v2 clear", v2Findings)
 	}
-	listed, err := deconfliction.ListConflictFindings(ctx, target.ID)
+	listed, err := deconflictionService.ListConflictFindings(ctx, target.ID)
 	if err != nil {
 		t.Fatalf("ListConflictFindings service returned error: %v", err)
 	}
@@ -443,7 +366,7 @@ func TestDeconflictionIndeterminateForMalformedTargetGeometry(t *testing.T) {
 	seedDeconflictionAircraft(t, ctx, store, now)
 	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", `{bad-json`, 10, 120)
 
-	result, err := NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
+	result, err := deconfliction.NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
 	if err != nil {
 		t.Fatalf("CheckIntent returned error: %v", err)
 	}
@@ -462,7 +385,7 @@ func TestDeconflictionIndeterminateForUnclosedPolygon(t *testing.T) {
 	seedDeconflictionAircraft(t, ctx, store, now)
 	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", `{"type":"Polygon","coordinates":[[[-98,35],[-97,35],[-97,36],[-98,36]]]}`, 10, 120)
 
-	result, err := NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
+	result, err := deconfliction.NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
 	if err != nil {
 		t.Fatalf("CheckIntent returned error: %v", err)
 	}
@@ -477,7 +400,7 @@ func TestDeconflictionPotentialConflictForGeometryURIOnlyPeer(t *testing.T) {
 	now := fixedWorkflowTime()
 	seedDeconflictionAircraft(t, ctx, store, now)
 	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
-	createAcceptedIntentWithVolumeRequest(t, ctx, store, now, "intent-peer", "aircraft-2", AddOperationalVolumeRequest{
+	createAcceptedIntentWithVolumeRequest(t, ctx, store, now, "intent-peer", "aircraft-2", service.AddOperationalVolumeRequest{
 		ID:           "volume-peer",
 		Sequence:     1,
 		GeometryURI:  "memory://external-volume",
@@ -489,7 +412,7 @@ func TestDeconflictionPotentialConflictForGeometryURIOnlyPeer(t *testing.T) {
 		VolumeType:   domain.OperationalVolumeLoiter,
 	})
 
-	result, err := NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
+	result, err := deconfliction.NewDeconflictionServiceWithClock(store, fixedClock(now)).CheckIntent(ctx, target.ID)
 	if err != nil {
 		t.Fatalf("CheckIntent returned error: %v", err)
 	}
@@ -522,8 +445,8 @@ func seedDeconflictionAircraft(t *testing.T, ctx context.Context, store *durable
 
 func createDraftIntentWithVolume(t *testing.T, ctx context.Context, store *durablememory.Store, now time.Time, intentID, aircraftID, volumeID, geoJSON string, minAltitudeM, maxAltitudeM float64) domain.OperationalIntent {
 	t.Helper()
-	intents := NewIntentServiceWithClock(store, fixedClock(now))
-	intent, err := intents.CreateIntent(ctx, CreateIntentRequest{
+	intents := service.NewIntentServiceWithClock(store, fixedClock(now))
+	intent, err := intents.CreateIntent(ctx, service.CreateIntentRequest{
 		ID:                  intentID,
 		OperatorID:          "operator-1",
 		AircraftID:          aircraftID,
@@ -538,7 +461,7 @@ func createDraftIntentWithVolume(t *testing.T, ctx context.Context, store *durab
 	if err != nil {
 		t.Fatalf("CreateIntent returned error: %v", err)
 	}
-	if _, err = intents.AddOperationalVolume(ctx, intent.ID, AddOperationalVolumeRequest{
+	if _, err = intents.AddOperationalVolume(ctx, intent.ID, service.AddOperationalVolumeRequest{
 		ID:           volumeID,
 		Sequence:     1,
 		GeoJSON:      geoJSON,
@@ -556,7 +479,7 @@ func createDraftIntentWithVolume(t *testing.T, ctx context.Context, store *durab
 
 func createAcceptedIntentWithVolume(t *testing.T, ctx context.Context, store *durablememory.Store, now time.Time, intentID, aircraftID, volumeID, geoJSON string, minAltitudeM, maxAltitudeM float64, startsAt time.Time) domain.OperationalIntent {
 	t.Helper()
-	return createAcceptedIntentWithVolumeRequest(t, ctx, store, now, intentID, aircraftID, AddOperationalVolumeRequest{
+	return createAcceptedIntentWithVolumeRequest(t, ctx, store, now, intentID, aircraftID, service.AddOperationalVolumeRequest{
 		ID:           volumeID,
 		Sequence:     1,
 		GeoJSON:      geoJSON,
@@ -569,10 +492,10 @@ func createAcceptedIntentWithVolume(t *testing.T, ctx context.Context, store *du
 	})
 }
 
-func createAcceptedIntentWithVolumeRequest(t *testing.T, ctx context.Context, store *durablememory.Store, now time.Time, intentID, aircraftID string, volumeReq AddOperationalVolumeRequest) domain.OperationalIntent {
+func createAcceptedIntentWithVolumeRequest(t *testing.T, ctx context.Context, store *durablememory.Store, now time.Time, intentID, aircraftID string, volumeReq service.AddOperationalVolumeRequest) domain.OperationalIntent {
 	t.Helper()
-	intents := NewIntentServiceWithClock(store, fixedClock(now))
-	intent, err := intents.CreateIntent(ctx, CreateIntentRequest{
+	intents := service.NewIntentServiceWithClock(store, fixedClock(now))
+	intent, err := intents.CreateIntent(ctx, service.CreateIntentRequest{
 		ID:                  intentID,
 		OperatorID:          "operator-1",
 		AircraftID:          aircraftID,
@@ -597,4 +520,41 @@ func createAcceptedIntentWithVolumeRequest(t *testing.T, ctx context.Context, st
 		t.Fatalf("AcceptIntent returned error: %v", err)
 	}
 	return intent
+}
+
+func fixedWorkflowTime() time.Time {
+	return time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+}
+
+func fixedClock(now time.Time) func() time.Time {
+	return func() time.Time { return now }
+}
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func float64Ptr(value float64) *float64 {
+	return &value
+}
+
+func volumesForVersion(volumes []domain.OperationalVolume, version int) []domain.OperationalVolume {
+	filtered := make([]domain.OperationalVolume, 0, len(volumes))
+	for _, volume := range volumes {
+		if volume.IntentVersion == version {
+			filtered = append(filtered, volume)
+		}
+	}
+	return filtered
+}
+
+func squareGeoJSON() string {
+	return `{"type":"Polygon","coordinates":[[[-98,35],[-97,35],[-97,36],[-98,36],[-98,35]]]}`
+}
+
+func eastSquareGeoJSON() string {
+	return `{"type":"Polygon","coordinates":[[[-96,35],[-95,35],[-95,36],[-96,36],[-96,35]]]}`
 }

@@ -1,4 +1,4 @@
-package service
+package deconfliction_test
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
+	"github.com/Aero-Arc/aero-arc-api/internal/service/deconfliction"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 )
 
@@ -35,7 +36,7 @@ func TestAirspaceProviderFiltersCandidatesByLifecycleStatus(t *testing.T) {
 		must(t, store.UpdateOperationalIntent(ctx, intent))
 	}
 
-	candidates, err := NewLocalStoreAirspaceProvider(store).QueryConflictCandidates(ctx, target, targetVolumes)
+	candidates, err := deconfliction.NewLocalStoreAirspaceProvider(store).QueryConflictCandidates(ctx, target, targetVolumes)
 	if err != nil {
 		t.Fatalf("QueryConflictCandidates returned error: %v", err)
 	}
@@ -54,7 +55,7 @@ func TestAirspaceProviderExcludesTargetIntent(t *testing.T) {
 	targetVolumes, err := store.ListOperationalVolumes(ctx, target.ID)
 	must(t, err)
 
-	candidates, err := NewLocalStoreAirspaceProvider(store).QueryConflictCandidates(ctx, target, volumesForVersion(targetVolumes, target.Version))
+	candidates, err := deconfliction.NewLocalStoreAirspaceProvider(store).QueryConflictCandidates(ctx, target, volumesForVersion(targetVolumes, target.Version))
 	if err != nil {
 		t.Fatalf("QueryConflictCandidates returned error: %v", err)
 	}
@@ -89,7 +90,7 @@ func TestAirspaceProviderFiltersPeerVolumesByIntentVersion(t *testing.T) {
 		UpdatedAt:     now,
 	}))
 
-	candidates, err := NewLocalStoreAirspaceProvider(store).QueryConflictCandidates(ctx, target, targetVolumes)
+	candidates, err := deconfliction.NewLocalStoreAirspaceProvider(store).QueryConflictCandidates(ctx, target, targetVolumes)
 	if err != nil {
 		t.Fatalf("QueryConflictCandidates returned error: %v", err)
 	}
@@ -108,7 +109,7 @@ func TestAirspaceProviderFiltersPeerVolumesByTimeWindow(t *testing.T) {
 	// ends, so the half-open windows do not overlap.
 	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", squareGeoJSON(), 10, 120, now.Add(time.Hour))
 
-	candidates, err := NewLocalStoreAirspaceProvider(store).QueryConflictCandidates(ctx, target, targetVolumes)
+	candidates, err := deconfliction.NewLocalStoreAirspaceProvider(store).QueryConflictCandidates(ctx, target, targetVolumes)
 	if err != nil {
 		t.Fatalf("QueryConflictCandidates returned error: %v", err)
 	}
@@ -125,7 +126,7 @@ func TestAirspaceProviderFiltersPeerVolumesByAltitudeBand(t *testing.T) {
 	target, targetVolumes := providerTargetIntent(t, ctx, store, now)
 	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", squareGeoJSON(), 200, 300, now)
 
-	candidates, err := NewLocalStoreAirspaceProvider(store).QueryConflictCandidates(ctx, target, targetVolumes)
+	candidates, err := deconfliction.NewLocalStoreAirspaceProvider(store).QueryConflictCandidates(ctx, target, targetVolumes)
 	if err != nil {
 		t.Fatalf("QueryConflictCandidates returned error: %v", err)
 	}
@@ -150,7 +151,7 @@ func TestAirspaceProviderKeepsPeerVolumesWithMismatchedAltitudeReference(t *test
 	peerVolume.AltitudeRef = domain.AltitudeReferenceMSL
 	must(t, store.RecordOperationalVolume(ctx, peerVolume))
 
-	candidates, err := NewLocalStoreAirspaceProvider(store).QueryConflictCandidates(ctx, target, targetVolumes)
+	candidates, err := deconfliction.NewLocalStoreAirspaceProvider(store).QueryConflictCandidates(ctx, target, targetVolumes)
 	if err != nil {
 		t.Fatalf("QueryConflictCandidates returned error: %v", err)
 	}
@@ -185,7 +186,7 @@ func TestAirspaceProviderKeepsPeerVolumesWithUnusableDimensions(t *testing.T) {
 		UpdatedAt:     now,
 	}))
 
-	candidates, err := NewLocalStoreAirspaceProvider(store).QueryConflictCandidates(ctx, target, targetVolumes)
+	candidates, err := deconfliction.NewLocalStoreAirspaceProvider(store).QueryConflictCandidates(ctx, target, targetVolumes)
 	if err != nil {
 		t.Fatalf("QueryConflictCandidates returned error: %v", err)
 	}
@@ -216,7 +217,7 @@ func TestDeconflictionUsesInjectedAirspaceProvider(t *testing.T) {
 	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", squareGeoJSON(), 10, 120, now)
 	provider := &stubAirspaceProvider{}
 
-	result, err := NewDeconflictionServiceWithClock(store, fixedClock(now), provider).CheckIntent(ctx, target.ID)
+	result, err := deconfliction.NewDeconflictionServiceWithClock(store, fixedClock(now), provider).CheckIntent(ctx, target.ID)
 	if err != nil {
 		t.Fatalf("CheckIntent returned error: %v", err)
 	}
@@ -251,7 +252,7 @@ func TestDeconflictionEvaluatesProviderSuppliedCandidates(t *testing.T) {
 		}},
 	}
 
-	result, err := NewDeconflictionServiceWithClock(store, fixedClock(now), provider).CheckIntent(ctx, target.ID)
+	result, err := deconfliction.NewDeconflictionServiceWithClock(store, fixedClock(now), provider).CheckIntent(ctx, target.ID)
 	if err != nil {
 		t.Fatalf("CheckIntent returned error: %v", err)
 	}
