@@ -21,7 +21,10 @@ type Store struct {
 	maintenanceEvents    []domain.MaintenanceEvent
 	operationalIntents   map[string]domain.OperationalIntent
 	operationalVolumes   map[string]domain.OperationalVolume
-	authorizations       map[string]domain.RegulatoryAuthorization
+	latestIntentByID      map[string]domain.OperationalIntent
+	eligibleConflictPeers map[string]domain.OperationalIntent
+	volumesByIntentID     map[string][]domain.OperationalVolume
+	authorizations        map[string]domain.RegulatoryAuthorization
 	preflightChecks      []domain.PreflightCheck
 	flightRecords        map[string]domain.FlightRecord
 	conformanceEvents    []domain.ConformanceEvent
@@ -41,9 +44,12 @@ func NewStore() *Store {
 		batteries:            make(map[string]domain.Battery),
 		operatingProfiles:    make(map[string]domain.AircraftOperatingProfile),
 		operatingLimits:      make(map[string]domain.OperatingLimit),
-		operationalIntents:   make(map[string]domain.OperationalIntent),
-		operationalVolumes:   make(map[string]domain.OperationalVolume),
-		authorizations:       make(map[string]domain.RegulatoryAuthorization),
+		operationalIntents:    make(map[string]domain.OperationalIntent),
+		operationalVolumes:    make(map[string]domain.OperationalVolume),
+		latestIntentByID:      make(map[string]domain.OperationalIntent),
+		eligibleConflictPeers: make(map[string]domain.OperationalIntent),
+		volumesByIntentID:     make(map[string][]domain.OperationalVolume),
+		authorizations:        make(map[string]domain.RegulatoryAuthorization),
 		flightRecords:        make(map[string]domain.FlightRecord),
 		conformanceSummaries: make(map[string]domain.ConformanceSummary),
 		evidenceRecords:      make(map[string]domain.EvidenceRecord),
@@ -219,6 +225,7 @@ func (s *Store) CreateOperationalIntent(_ context.Context, intent domain.Operati
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.operationalIntents[operationalIntentKey(intent.ID, intent.Version)] = intent
+	s.indexOperationalIntent(intent)
 	return nil
 }
 
@@ -229,6 +236,7 @@ func (s *Store) UpdateOperationalIntent(_ context.Context, intent domain.Operati
 		return durable.ErrNotFound
 	}
 	s.operationalIntents[operationalIntentKey(intent.ID, intent.Version)] = intent
+	s.indexOperationalIntent(intent)
 	return nil
 }
 
@@ -293,20 +301,16 @@ func (s *Store) ListOperationalIntentVersions(_ context.Context, intentID string
 func (s *Store) RecordOperationalVolume(_ context.Context, volume domain.OperationalVolume) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.operationalVolumes[operationalVolumeKey(volume)] = volume
+	s.indexOperationalVolume(volume)
 	return nil
 }
 
 func (s *Store) ReplaceOperationalVolumes(_ context.Context, intentID string, intentVersion int, volumes []domain.OperationalVolume) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for key, volume := range s.operationalVolumes {
-		if volume.IntentID == intentID && volume.IntentVersion == intentVersion {
-			delete(s.operationalVolumes, key)
-		}
-	}
+	s.removeOperationalVolumes(intentID, intentVersion)
 	for _, volume := range volumes {
-		s.operationalVolumes[operationalVolumeKey(volume)] = volume
+		s.indexOperationalVolume(volume)
 	}
 	return nil
 }
