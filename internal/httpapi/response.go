@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
+	"github.com/Aero-Arc/aero-arc-api/internal/service/deconfliction"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	"github.com/mrshabel/mach"
 )
@@ -26,7 +27,7 @@ func writeServiceError(c *mach.Context, err error) {
 		writeError(c, http.StatusNotFound, "resource not found")
 		return
 	}
-	if errors.Is(err, service.ErrValidation) {
+	if errors.Is(err, service.ErrValidation) || errors.Is(err, deconfliction.ErrValidation) {
 		writeError(c, http.StatusBadRequest, strings.TrimSpace(err.Error()))
 		return
 	}
