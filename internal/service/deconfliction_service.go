@@ -73,6 +73,7 @@ func (s *DeconflictionService) CheckIntent(ctx context.Context, intentID string)
 	if err != nil {
 		return domain.DeconflictionResult{}, fmt.Errorf("query conflict candidates: %w", err)
 	}
+	candidates = eligibleProviderCandidates(intent, candidates)
 
 	// Validate and parse each unique peer volume once before the cross-product
 	// loop. GeoJSON parsing is the expensive step; doing it here avoids repeated
@@ -170,6 +171,17 @@ func (s *DeconflictionService) evaluableVolume(intent domain.OperationalIntent, 
 		return geoBounds{}, finding, false
 	}
 	return bounds, domain.ConflictFinding{}, true
+}
+
+func eligibleProviderCandidates(target domain.OperationalIntent, candidates []domain.OperationalIntentConflictCandidate) []domain.OperationalIntentConflictCandidate {
+	filtered := make([]domain.OperationalIntentConflictCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Intent.ID == target.ID || !candidateConflictEligible(candidate.Intent.Status) {
+			continue
+		}
+		filtered = append(filtered, candidate)
+	}
+	return filtered
 }
 
 // peerVolumeKey identifies a peer operational volume without string allocation.

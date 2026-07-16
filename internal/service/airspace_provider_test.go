@@ -263,6 +263,47 @@ func TestDeconflictionEvaluatesProviderSuppliedCandidates(t *testing.T) {
 	}
 }
 
+func TestDeconflictionIgnoresProviderSuppliedIneligibleCandidates(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	now := fixedWorkflowTime()
+	seedDeconflictionAircraft(t, ctx, store, now)
+	target, targetVolumes := providerTargetIntent(t, ctx, store, now)
+	provider := &stubAirspaceProvider{
+		candidates: []domain.OperationalIntentConflictCandidate{
+			{
+				Intent:  domain.OperationalIntent{ID: target.ID, Version: target.Version, Status: domain.IntentStatusDraft},
+				Volumes: targetVolumes,
+			},
+			{
+				Intent: domain.OperationalIntent{ID: "intent-draft-remote", Version: 1, Status: domain.IntentStatusDraft},
+				Volumes: []domain.OperationalVolume{{
+					ID:            "volume-draft-remote",
+					IntentID:      "intent-draft-remote",
+					IntentVersion: 1,
+					GeoJSON:       squareGeoJSON(),
+					MinAltitudeM:  10,
+					MaxAltitudeM:  120,
+					AltitudeRef:   domain.AltitudeReferenceAGL,
+					StartsAt:      now,
+					EndsAt:        now.Add(time.Hour),
+				}},
+			},
+		},
+	}
+
+	result, err := NewDeconflictionServiceWithClock(store, fixedClock(now), provider).CheckIntent(ctx, target.ID)
+	if err != nil {
+		t.Fatalf("CheckIntent returned error: %v", err)
+	}
+	if result.Posture != domain.DeconflictionPostureClear {
+		t.Fatalf("posture = %q, want clear when provider over-includes ineligible candidates; findings=%#v", result.Posture, result.Findings)
+	}
+	if len(result.Findings) != 1 || result.Findings[0].Status != domain.ConflictFindingStatusClear {
+		t.Fatalf("findings = %#v, want only clear finding", result.Findings)
+	}
+}
+
 func providerTargetIntent(t *testing.T, ctx context.Context, store *durablememory.Store, now time.Time) (domain.OperationalIntent, []domain.OperationalVolume) {
 	t.Helper()
 	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
