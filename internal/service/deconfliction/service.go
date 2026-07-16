@@ -176,7 +176,7 @@ func (s *DeconflictionService) evaluableVolume(intent domain.OperationalIntent, 
 func eligibleProviderCandidates(target domain.OperationalIntent, candidates []domain.OperationalIntentConflictCandidate) []domain.OperationalIntentConflictCandidate {
 	filtered := make([]domain.OperationalIntentConflictCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
-		if candidate.Intent.ID == target.ID || !candidateConflictEligible(candidate.Intent.Status) {
+		if candidate.Intent.ID == target.ID || !durable.CandidateConflictEligible(candidate.Intent.Status) {
 			continue
 		}
 		filtered = append(filtered, candidate)
