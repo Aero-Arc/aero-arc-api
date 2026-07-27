@@ -40,67 +40,110 @@ func NewDeconflictionServiceWithClock(store durable.Store, now func() time.Time,
 }
 
 func (s *DeconflictionService) CheckIntent(ctx context.Context, intentID string) (domain.DeconflictionResult, error) {
+	intent, volumes, err := s.loadIntent(ctx, intentID)
+	if err != nil {
+		return domain.DeconflictionResult{}, err
+	}
+
+	checkedAt := s.now().UTC()
+	result := newResult(intent, checkedAt)
+	if len(volumes) == 0 {
+		result.Findings = append(result.Findings, domain.ConflictFinding{
+			SourceType: domain.ConflictFindingSourceLocal,
+			SourceID:   "deconfliction_service",
+			Status:     domain.ConflictFindingStatusIndeterminate,
+			Message:    "intent has no operational volumes to check",
+		})
+		return s.finalize(ctx, result)
+	}
+
+	records, providerFindings := s.discoverOperationalIntents(ctx, intent, volumes)
+	result.Findings = append(result.Findings, providerFindings...)
+	result.Findings = append(result.Findings, evaluateConflicts(intent, volumes, records)...)
+
+	return s.finalize(ctx, result)
+}
+
+func (s *DeconflictionService) loadIntent(ctx context.Context, intentID string) (domain.OperationalIntent, []domain.OperationalVolume, error) {
 	intent, err := s.durable.GetOperationalIntent(ctx, intentID)
 	if err != nil {
-		return domain.DeconflictionResult{}, fmt.Errorf("get operational intent: %w", err)
+		return domain.OperationalIntent{}, nil, fmt.Errorf("get operational intent: %w", err)
 	}
-	checkedAt := s.now().UTC()
-	result := domain.DeconflictionResult{
-		Intent: intent, Posture: domain.DeconflictionPostureClear,
-		Findings: make([]domain.ConflictFinding, 0), CheckedAt: checkedAt,
-		RuleVersion: deconflictionRuleVersion,
-	}
+
 	volumes, err := s.durable.ListOperationalVolumes(ctx, intent.ID)
 	if err != nil {
-		return domain.DeconflictionResult{}, fmt.Errorf("list operational volumes: %w", err)
+		return domain.OperationalIntent{}, nil, fmt.Errorf("list operational volumes: %w", err)
 	}
-	volumes = volumesForVersion(volumes, intent.Version)
-	if len(volumes) == 0 {
-		result.Findings = append(result.Findings, normalizeFinding(intent, domain.ConflictFinding{
-			Status:  domain.ConflictFindingStatusIndeterminate,
-			Message: "intent has no operational volumes to check",
-		}, "deconfliction_service", checkedAt))
-	} else {
-		records := make([]airspaceprovider.OperationalIntent, 0)
-		seen := make(map[string]struct{})
-		for _, provider := range s.providers {
-			discovered, err := provider.FindOperationalIntents(ctx, airspaceprovider.Query{
-				Intent: intent, Volumes: volumes,
+
+	return intent, volumesForVersion(volumes, intent.Version), nil
+}
+
+func newResult(intent domain.OperationalIntent, checkedAt time.Time) domain.DeconflictionResult {
+	return domain.DeconflictionResult{
+		Intent:      intent,
+		Posture:     domain.DeconflictionPostureClear,
+		Findings:    make([]domain.ConflictFinding, 0),
+		CheckedAt:   checkedAt,
+		RuleVersion: deconflictionRuleVersion,
+	}
+}
+
+func (s *DeconflictionService) discoverOperationalIntents(
+	ctx context.Context,
+	intent domain.OperationalIntent,
+	volumes []domain.OperationalVolume,
+) ([]airspaceprovider.OperationalIntent, []domain.ConflictFinding) {
+	records := make([]airspaceprovider.OperationalIntent, 0)
+	findings := make([]domain.ConflictFinding, 0)
+	seen := make(map[string]struct{})
+
+	for _, provider := range s.providers {
+		discovered, err := provider.FindOperationalIntents(ctx, airspaceprovider.Query{
+			Intent: intent, Volumes: volumes,
+		})
+		if err != nil {
+			findings = append(findings, domain.ConflictFinding{
+				Status:   domain.ConflictFindingStatusIndeterminate,
+				Message:  fmt.Sprintf("airspace provider %q could not be queried: %v", provider.ID(), err),
+				SourceID: provider.ID(),
 			})
-			if err != nil {
-				result.Findings = append(result.Findings, normalizeFinding(intent, domain.ConflictFinding{
-					Status:   domain.ConflictFindingStatusIndeterminate,
-					Message:  fmt.Sprintf("airspace provider %q could not be queried: %v", provider.ID(), err),
-					SourceID: provider.ID(),
-				}, provider.ID(), checkedAt))
+			continue
+		}
+
+		for _, record := range discovered {
+			record.Source.ProviderID = provider.ID()
+			key := sourceKey(record.Source)
+			if _, exists := seen[key]; exists {
 				continue
 			}
-			for _, record := range discovered {
-				record.Source.ProviderID = provider.ID()
-				key := sourceKey(record.Source)
-				if _, exists := seen[key]; exists {
-					continue
-				}
-				seen[key] = struct{}{}
-				records = append(records, record)
-			}
-		}
-		for _, finding := range evaluateConflicts(intent, volumes, records) {
-			result.Findings = append(result.Findings, normalizeFinding(intent, finding, finding.SourceID, checkedAt))
+			seen[key] = struct{}{}
+			records = append(records, record)
 		}
 	}
+
+	return records, findings
+}
+
+func (s *DeconflictionService) finalize(ctx context.Context, result domain.DeconflictionResult) (domain.DeconflictionResult, error) {
 	if len(result.Findings) == 0 {
-		result.Findings = append(result.Findings, normalizeFinding(intent, domain.ConflictFinding{
-			Status:  domain.ConflictFindingStatusClear,
-			Message: "no airspace provider reported a conflict",
-		}, "deconfliction_service", checkedAt))
+		result.Findings = append(result.Findings, domain.ConflictFinding{
+			SourceType: domain.ConflictFindingSourceLocal,
+			SourceID:   "deconfliction_service",
+			Status:     domain.ConflictFindingStatusClear,
+			Message:    "no airspace provider reported a conflict",
+		})
 	}
-	for _, finding := range result.Findings {
+
+	for index, finding := range result.Findings {
+		finding = normalizeFinding(result.Intent, finding, finding.SourceID, result.CheckedAt)
+		result.Findings[index] = finding
 		result.Posture = maxPosture(result.Posture, finding.Status)
 	}
-	if err := s.durable.ReplaceConflictFindings(ctx, intent.ID, intent.Version, deconflictionRuleVersion, result.Findings); err != nil {
+
+	if err := s.durable.ReplaceConflictFindings(ctx, result.Intent.ID, result.Intent.Version, deconflictionRuleVersion, result.Findings); err != nil {
 		return domain.DeconflictionResult{}, fmt.Errorf("replace conflict findings: %w", err)
 	}
+
 	return result, nil
 }
 
