@@ -13,6 +13,8 @@ import (
 
 func evaluateConflicts(intent domain.OperationalIntent, volumes []domain.OperationalVolume, records []airspaceprovider.OperationalIntent) []domain.ConflictFinding {
 	findings := make([]domain.ConflictFinding, 0)
+	peers := preparePeerVolumes(records)
+
 	for _, volume := range volumes {
 		ownBounds, status, message := evaluateVolume(volume)
 		if status != domain.ConflictFindingStatusClear {
@@ -21,41 +23,82 @@ func evaluateConflicts(intent domain.OperationalIntent, volumes []domain.Operati
 			}, status, volume.ID, "", 0, "", message))
 			continue
 		}
-		for _, record := range records {
-			for _, peerVolume := range append(record.Volumes, record.OffNominalVolumes...) {
-				peerBounds, peerStatus, peerMessage := evaluateVolume(peerVolume)
-				if peerStatus != domain.ConflictFindingStatusClear {
-					if peerStatus == domain.ConflictFindingStatusIndeterminate && !volumeDimensionsUsable(peerVolume) {
-						findings = append(findings, evaluatedFinding(intent, record.Source, peerStatus, volume.ID, record.Intent.ID, record.Intent.Version, peerVolume.ID, peerMessage))
-						continue
-					}
-					if timeWindowsOverlap(volume.StartsAt, volume.EndsAt, peerVolume.StartsAt, peerVolume.EndsAt) &&
-						altitudeBandsOverlap(volume.MinAltitudeM, volume.MaxAltitudeM, peerVolume.MinAltitudeM, peerVolume.MaxAltitudeM) {
-						findings = append(findings, evaluatedFinding(intent, record.Source, peerStatus, volume.ID, record.Intent.ID, record.Intent.Version, peerVolume.ID, peerMessage))
-					}
+
+		for _, peer := range peers {
+			if peer.status != domain.ConflictFindingStatusClear {
+				if peer.status == domain.ConflictFindingStatusIndeterminate && !peer.dimensionsUsable {
+					findings = append(findings, evaluatedFinding(intent, peer.source, peer.status, volume.ID, peer.intent.ID, peer.intent.Version, peer.volume.ID, peer.message))
 					continue
 				}
-				if !timeWindowsOverlap(volume.StartsAt, volume.EndsAt, peerVolume.StartsAt, peerVolume.EndsAt) || !ownBounds.overlaps(peerBounds) {
-					continue
+				if timeWindowsOverlap(volume.StartsAt, volume.EndsAt, peer.volume.StartsAt, peer.volume.EndsAt) &&
+					altitudeBandsOverlap(volume.MinAltitudeM, volume.MaxAltitudeM, peer.volume.MinAltitudeM, peer.volume.MaxAltitudeM) {
+					findings = append(findings, evaluatedFinding(intent, peer.source, peer.status, volume.ID, peer.intent.ID, peer.intent.Version, peer.volume.ID, peer.message))
 				}
-				if volume.AltitudeRef != peerVolume.AltitudeRef {
-					findings = append(findings, evaluatedFinding(intent, record.Source, domain.ConflictFindingStatusIndeterminate, volume.ID, record.Intent.ID, record.Intent.Version, peerVolume.ID, "operational volume altitude references differ and cannot be compared locally"))
-					continue
-				}
-				if !altitudeBandsOverlap(volume.MinAltitudeM, volume.MaxAltitudeM, peerVolume.MinAltitudeM, peerVolume.MaxAltitudeM) {
-					continue
-				}
-				finding := evaluatedFinding(intent, record.Source, domain.ConflictFindingStatusPotentialConflict, volume.ID, record.Intent.ID, record.Intent.Version, peerVolume.ID, "4D operational volume bounding boxes overlap; exact polygon intersection is not evaluated in v1")
-				start, end := timeOverlap(volume.StartsAt, volume.EndsAt, peerVolume.StartsAt, peerVolume.EndsAt)
-				minAltitude, maxAltitude := altitudeOverlap(volume.MinAltitudeM, volume.MaxAltitudeM, peerVolume.MinAltitudeM, peerVolume.MaxAltitudeM)
-				finding.TimeOverlapStart, finding.TimeOverlapEnd = &start, &end
-				finding.AltitudeOverlapMin, finding.AltitudeOverlapMax = &minAltitude, &maxAltitude
-				finding.OwnBounds, finding.ConflictingBounds = ownBounds.domainBounds(), peerBounds.domainBounds()
-				findings = append(findings, finding)
+				continue
 			}
+			if !timeWindowsOverlap(volume.StartsAt, volume.EndsAt, peer.volume.StartsAt, peer.volume.EndsAt) ||
+				!ownBounds.overlaps(peer.bounds) {
+				continue
+			}
+			if volume.AltitudeRef != peer.volume.AltitudeRef {
+				findings = append(findings, evaluatedFinding(intent, peer.source, domain.ConflictFindingStatusIndeterminate, volume.ID, peer.intent.ID, peer.intent.Version, peer.volume.ID, "operational volume altitude references differ and cannot be compared locally"))
+				continue
+			}
+			if !altitudeBandsOverlap(volume.MinAltitudeM, volume.MaxAltitudeM, peer.volume.MinAltitudeM, peer.volume.MaxAltitudeM) {
+				continue
+			}
+
+			finding := evaluatedFinding(intent, peer.source, domain.ConflictFindingStatusPotentialConflict, volume.ID, peer.intent.ID, peer.intent.Version, peer.volume.ID, "4D operational volume bounding boxes overlap; exact polygon intersection is not evaluated in v1")
+			start, end := timeOverlap(volume.StartsAt, volume.EndsAt, peer.volume.StartsAt, peer.volume.EndsAt)
+			minAltitude, maxAltitude := altitudeOverlap(volume.MinAltitudeM, volume.MaxAltitudeM, peer.volume.MinAltitudeM, peer.volume.MaxAltitudeM)
+			finding.TimeOverlapStart, finding.TimeOverlapEnd = &start, &end
+			finding.AltitudeOverlapMin, finding.AltitudeOverlapMax = &minAltitude, &maxAltitude
+			finding.OwnBounds, finding.ConflictingBounds = ownBounds.domainBounds(), peer.bounds.domainBounds()
+			findings = append(findings, finding)
 		}
 	}
 	return findings
+}
+
+type preparedPeerVolume struct {
+	source           airspaceprovider.Source
+	intent           domain.OperationalIntent
+	volume           domain.OperationalVolume
+	bounds           geoBounds
+	status           domain.ConflictFindingStatus
+	message          string
+	dimensionsUsable bool
+}
+
+func preparePeerVolumes(records []airspaceprovider.OperationalIntent) []preparedPeerVolume {
+	count := 0
+	for _, record := range records {
+		count += len(record.Volumes) + len(record.OffNominalVolumes)
+	}
+
+	peers := make([]preparedPeerVolume, 0, count)
+	for _, record := range records {
+		for _, volume := range record.Volumes {
+			peers = append(peers, preparePeerVolume(record, volume))
+		}
+		for _, volume := range record.OffNominalVolumes {
+			peers = append(peers, preparePeerVolume(record, volume))
+		}
+	}
+	return peers
+}
+
+func preparePeerVolume(record airspaceprovider.OperationalIntent, volume domain.OperationalVolume) preparedPeerVolume {
+	bounds, status, message := evaluateVolume(volume)
+	return preparedPeerVolume{
+		source:           record.Source,
+		intent:           record.Intent,
+		volume:           volume,
+		bounds:           bounds,
+		status:           status,
+		message:          message,
+		dimensionsUsable: volumeDimensionsUsable(volume),
+	}
 }
 
 func evaluatedFinding(intent domain.OperationalIntent, source airspaceprovider.Source, status domain.ConflictFindingStatus, volumeID, peerIntentID string, peerVersion int, peerVolumeID, message string) domain.ConflictFinding {
