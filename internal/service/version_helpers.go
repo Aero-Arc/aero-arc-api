@@ -28,6 +28,16 @@ func complianceFindingsForVersion(findings []domain.ComplianceFinding, version i
 	return filtered
 }
 
+func volumesForVersion(volumes []domain.OperationalVolume, version int) []domain.OperationalVolume {
+	filtered := make([]domain.OperationalVolume, 0, len(volumes))
+	for _, volume := range volumes {
+		if volume.IntentVersion == version {
+			filtered = append(filtered, volume)
+		}
+	}
+	return filtered
+}
+
 func conformanceSummaryForVersion(ctx context.Context, store durable.Store, intent domain.OperationalIntent) (*domain.ConformanceSummary, error) {
 	summaries, err := store.ListConformanceSummaries(ctx, intent.ID)
 	if err != nil {
