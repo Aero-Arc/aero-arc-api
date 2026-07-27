@@ -30,18 +30,17 @@ func TestLocalStoreProviderCheckIntentReturnsCandidates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assessment, err := NewLocalStoreAirspaceProvider(store).CheckIntent(ctx, target, []domain.OperationalVolume{targetVolume})
+	provider := NewLocalStoreAirspaceProvider(store)
+	records, err := provider.FindOperationalIntents(ctx, Query{Intent: target, Volumes: []domain.OperationalVolume{targetVolume}})
 	if err != nil {
 		t.Fatalf("CheckIntent returned error: %v", err)
 	}
-	if assessment.ProviderID != "local_durable_store" {
-		t.Fatalf("provider ID = %q", assessment.ProviderID)
+	if provider.ID() != "local_durable_store" {
+		t.Fatalf("provider ID = %q", provider.ID())
 	}
-	if len(assessment.Findings) != 0 {
-		t.Fatalf("local provider returned authoritative findings: %#v", assessment.Findings)
-	}
-	if len(assessment.Candidates) != 1 || assessment.Candidates[0].Intent.ID != peer.ID {
-		t.Fatalf("candidates = %#v", assessment.Candidates)
+	if len(records) != 1 || records[0].Intent.ID != peer.ID ||
+		records[0].Source.ReferenceID != peer.ID {
+		t.Fatalf("records = %#v", records)
 	}
 }
 
@@ -62,12 +61,12 @@ func TestLocalStoreProviderExcludesIneligibleIntents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assessment, err := NewLocalStoreAirspaceProvider(store).CheckIntent(ctx, target, []domain.OperationalVolume{targetVolume})
+	records, err := NewLocalStoreAirspaceProvider(store).FindOperationalIntents(ctx, Query{Intent: target, Volumes: []domain.OperationalVolume{targetVolume}})
 	if err != nil {
 		t.Fatalf("CheckIntent returned error: %v", err)
 	}
-	if len(assessment.Candidates) != 0 {
-		t.Fatalf("candidates = %#v, want none", assessment.Candidates)
+	if len(records) != 0 {
+		t.Fatalf("records = %#v, want none", records)
 	}
 }
 

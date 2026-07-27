@@ -9,33 +9,6 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 )
 
-// AirspaceAwarenessProvider performs broad-phase candidate discovery for
-// deconfliction: given a target intent and its operational volumes, it returns
-// the peer intents (and the subset of their volumes) that could plausibly
-// conflict. Narrow-phase overlap evaluation remains the responsibility of the
-// DeconflictionService, so providers may over-include candidates but must
-// never exclude a volume that could produce a finding.
-//
-// This is the seam for future DSS/USS-backed discovery (for example a
-// DSSAirspaceProvider or a CompositeAirspaceProvider).
-type Assessment struct {
-	ProviderID string
-	Findings   []domain.ConflictFinding
-	Candidates []domain.OperationalIntentConflictCandidate
-}
-
-// Provider checks an intent against one source of airspace awareness.
-// Findings are authoritative provider decisions and are accepted by the
-// deconfliction service as reported. Candidates are possible conflicts that
-// require Aero Arc's local validation.
-type Provider interface {
-	CheckIntent(
-		ctx context.Context,
-		intent domain.OperationalIntent,
-		volumes []domain.OperationalVolume,
-	) (Assessment, error)
-}
-
 // LocalStoreAirspaceProvider discovers conflict candidates from the local
 // durable store. It filters by intent lifecycle status, current intent
 // version, time overlap, and altitude band before any geometry is parsed.
@@ -47,36 +20,14 @@ func NewLocalStoreAirspaceProvider(durableStore durable.Store) *LocalStoreAirspa
 	return &LocalStoreAirspaceProvider{durable: durableStore}
 }
 
-func (p *LocalStoreAirspaceProvider) CheckIntent(
-	ctx context.Context,
-	intent domain.OperationalIntent,
-	volumes []domain.OperationalVolume,
-) (Assessment, error) {
-	candidates, err := p.queryConflictCandidates(ctx, intent, volumes)
-	if err != nil {
-		return Assessment{}, err
-	}
-	return Assessment{
-		ProviderID: "local_durable_store",
-		Candidates: candidates,
-	}, nil
+func (p *LocalStoreAirspaceProvider) ID() string {
+	return "local_durable_store"
 }
 
-// QueryConflictCandidates is retained as a convenience for callers that only
-// need the local provider's broad-phase result.
-func (p *LocalStoreAirspaceProvider) QueryConflictCandidates(
+func (p *LocalStoreAirspaceProvider) FindOperationalIntents(
 	ctx context.Context,
-	intent domain.OperationalIntent,
-	volumes []domain.OperationalVolume,
-) ([]domain.OperationalIntentConflictCandidate, error) {
-	return p.queryConflictCandidates(ctx, intent, volumes)
-}
-
-func (p *LocalStoreAirspaceProvider) queryConflictCandidates(
-	ctx context.Context,
-	intent domain.OperationalIntent,
-	volumes []domain.OperationalVolume,
-) ([]domain.OperationalIntentConflictCandidate, error) {
+	query Query,
+) ([]OperationalIntent, error) {
 	peers, err := p.durable.ListOperationalIntents(ctx, "")
 	if err != nil {
 		return nil, fmt.Errorf("list operational intents: %w", err)
@@ -90,26 +41,30 @@ func (p *LocalStoreAirspaceProvider) queryConflictCandidates(
 		volumesByIntent[volume.IntentID] = append(volumesByIntent[volume.IntentID], volume)
 	}
 
-	candidates := make([]domain.OperationalIntentConflictCandidate, 0)
+	records := make([]OperationalIntent, 0)
 	for _, peer := range peers {
-		if peer.ID == intent.ID || !candidateConflictEligible(peer.Status) {
+		if peer.ID == query.Intent.ID || !candidateConflictEligible(peer.Status) {
 			continue
 		}
 		peerVolumes := make([]domain.OperationalVolume, 0)
 		for _, peerVolume := range volumesForVersion(volumesByIntent[peer.ID], peer.Version) {
-			if peerVolumeCouldConflict(volumes, peerVolume) {
+			if peerVolumeCouldConflict(query.Volumes, peerVolume) {
 				peerVolumes = append(peerVolumes, peerVolume)
 			}
 		}
 		if len(peerVolumes) == 0 {
 			continue
 		}
-		candidates = append(candidates, domain.OperationalIntentConflictCandidate{
+		records = append(records, OperationalIntent{
+			Source: Source{
+				ProviderID: p.ID(), ReferenceID: peer.ID, Manager: peer.OperatorID,
+				Version: peer.Version,
+			},
 			Intent:  peer,
 			Volumes: peerVolumes,
 		})
 	}
-	return candidates, nil
+	return records, nil
 }
 
 // peerVolumeCouldConflict is the broad-phase 1D prefilter applied before any
