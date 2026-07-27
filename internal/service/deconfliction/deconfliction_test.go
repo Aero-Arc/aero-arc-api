@@ -1,4 +1,4 @@
-package service
+package deconfliction_test
 
 import (
 	"context"
@@ -6,8 +6,81 @@ import (
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
+	. "github.com/Aero-Arc/aero-arc-api/internal/service"
+	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 )
+
+func fixedWorkflowTime() time.Time {
+	return time.Date(2026, time.January, 15, 12, 0, 0, 0, time.UTC)
+}
+
+func fixedClock(now time.Time) func() time.Time {
+	return func() time.Time { return now }
+}
+
+func squareGeoJSON() string {
+	return `{"type":"Polygon","coordinates":[[[-98,35],[-97,35],[-97,36],[-98,36],[-98,35]]]}`
+}
+
+func eastSquareGeoJSON() string {
+	return `{"type":"Polygon","coordinates":[[[-96.5,35],[-96,35],[-96,36],[-96.5,36],[-96.5,35]]]}`
+}
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func float64Ptr(value float64) *float64 {
+	return &value
+}
+
+func seedWorkflowAircraft(t *testing.T, ctx context.Context, store durable.Store, now time.Time, soh *float64) {
+	t.Helper()
+	must(t, store.CreateAircraft(ctx, domain.Aircraft{
+		ID: "aircraft-1", OperatorID: "operator-1", Status: domain.AircraftStatusActive,
+		AcceptanceStatus: domain.AcceptanceStatusAccepted, RemoteIDStatus: domain.RemoteIDStatusBroadcasting,
+		CreatedAt: now, UpdatedAt: now,
+	}))
+	must(t, store.CreateBattery(ctx, domain.Battery{
+		ID: "battery-1", OperatorID: "operator-1", SerialNumber: "B101",
+		StateOfHealth: soh, Status: domain.MaintenanceStatusCurrent, CreatedAt: now, UpdatedAt: now,
+	}))
+	must(t, store.RecordBatteryInstallation(ctx, domain.BatteryInstallation{
+		ID: "install-1", OperatorID: "operator-1", AircraftID: "aircraft-1",
+		BatteryID: "battery-1", InstalledAt: now.Add(-24 * time.Hour),
+	}))
+}
+
+func seedSubmittedIntentWithVolume(t *testing.T, ctx context.Context, store durable.Store, now time.Time) domain.OperationalIntent {
+	t.Helper()
+	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intent, err := intents.CreateIntent(ctx, CreateIntentRequest{
+		ID: "intent-1", OperatorID: "operator-1", AircraftID: "aircraft-1",
+		Name: "Demo intent", Summary: "deconfliction test intent",
+		AuthorizationPath: domain.AuthorizationPathDemo, PopulationCategory: domain.PopulationCategoryOne,
+		ConformanceRequired: true, PlannedStartAt: now, PlannedEndAt: now.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = intents.AddOperationalVolume(ctx, intent.ID, AddOperationalVolumeRequest{
+		ID: "volume-1", Sequence: 1, GeoJSON: squareGeoJSON(),
+		MinAltitudeM: float64Ptr(10), MaxAltitudeM: float64Ptr(120),
+		AltitudeRef: domain.AltitudeReferenceAGL, StartsAt: now, EndsAt: now.Add(time.Hour),
+		VolumeType: domain.OperationalVolumeLoiter,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	intent, err = intents.SubmitIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return intent
+}
 
 func TestDeconflictionClearWhenNoLocalVolumeOverlap(t *testing.T) {
 	ctx := context.Background()

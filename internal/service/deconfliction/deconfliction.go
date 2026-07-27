@@ -1,4 +1,4 @@
-package service
+package deconfliction
 
 import (
 	"context"
@@ -8,35 +8,37 @@ import (
 	"strings"
 	"time"
 
+	aprovider "github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider"
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 )
 
-const deconflictionRuleVersion = "local-dss-shaped-v1"
+const deconflictionRuleVersion = "provider-aggregate-v1"
 
 type DeconflictionService struct {
-	durable  durable.Store
-	airspace AirspaceAwarenessProvider
-	now      func() time.Time
+	durable   durable.Store
+	providers []aprovider.Provider
+	now       func() time.Time
 }
 
-func NewDeconflictionService(durableStore durable.Store, airspace ...AirspaceAwarenessProvider) *DeconflictionService {
-	return NewDeconflictionServiceWithClock(durableStore, nil, airspace...)
+func NewDeconflictionService(durableStore durable.Store, providers ...aprovider.Provider) *DeconflictionService {
+	return NewDeconflictionServiceWithClock(durableStore, nil, providers...)
 }
 
-func NewDeconflictionServiceWithClock(durableStore durable.Store, now func() time.Time, airspace ...AirspaceAwarenessProvider) *DeconflictionService {
+func NewDeconflictionServiceWithClock(durableStore durable.Store, now func() time.Time, providers ...aprovider.Provider) *DeconflictionService {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	service := &DeconflictionService{
-		durable:  durableStore,
-		airspace: NewLocalStoreAirspaceProvider(durableStore),
-		now:      now,
+	configured := make([]aprovider.Provider, 0, len(providers))
+	for _, provider := range providers {
+		if provider != nil {
+			configured = append(configured, provider)
+		}
 	}
-	if len(airspace) > 0 && airspace[0] != nil {
-		service.airspace = airspace[0]
+	if len(configured) == 0 {
+		configured = append(configured, aprovider.NewLocalStoreAirspaceProvider(durableStore))
 	}
-	return service
+	return &DeconflictionService{durable: durableStore, providers: configured, now: now}
 }
 
 func (s *DeconflictionService) CheckIntent(ctx context.Context, intentID string) (domain.DeconflictionResult, error) {
@@ -69,9 +71,18 @@ func (s *DeconflictionService) CheckIntent(ctx context.Context, intentID string)
 		return result, nil
 	}
 
-	candidates, err := s.airspace.QueryConflictCandidates(ctx, intent, volumes)
-	if err != nil {
-		return domain.DeconflictionResult{}, fmt.Errorf("query conflict candidates: %w", err)
+	candidates := make([]domain.OperationalIntentConflictCandidate, 0)
+	for _, provider := range s.providers {
+		assessment, err := provider.CheckIntent(ctx, intent, volumes)
+		if err != nil {
+			return domain.DeconflictionResult{}, fmt.Errorf("check intent with airspace provider: %w", err)
+		}
+		for _, finding := range assessment.Findings {
+			finding = normalizeProviderFinding(intent, finding, assessment.ProviderID, checkedAt)
+			result.Findings = append(result.Findings, finding)
+			result.Posture = maxPosture(result.Posture, finding.Status)
+		}
+		candidates = append(candidates, assessment.Candidates...)
 	}
 	candidates = eligibleProviderCandidates(intent, candidates)
 
@@ -146,7 +157,7 @@ func (s *DeconflictionService) CheckIntent(ctx context.Context, intentID string)
 
 func (s *DeconflictionService) ListConflictFindings(ctx context.Context, intentID string) ([]domain.ConflictFinding, error) {
 	if strings.TrimSpace(intentID) == "" {
-		return nil, fmt.Errorf("%w: intent_id is required", ErrValidation)
+		return nil, fmt.Errorf("validation failed: intent_id is required")
 	}
 	intent, err := s.durable.GetOperationalIntent(ctx, intentID)
 	if err != nil {
@@ -157,6 +168,30 @@ func (s *DeconflictionService) ListConflictFindings(ctx context.Context, intentI
 		return nil, fmt.Errorf("list conflict findings: %w", err)
 	}
 	return findings, nil
+}
+
+func normalizeProviderFinding(intent domain.OperationalIntent, finding domain.ConflictFinding, providerID string, checkedAt time.Time) domain.ConflictFinding {
+	finding.IntentID = intent.ID
+	finding.IntentVersion = intent.Version
+	finding.OperatorID = intent.OperatorID
+	finding.AircraftID = intent.AircraftID
+	if finding.SourceID == "" {
+		finding.SourceID = providerID
+	}
+	if finding.SourceType == "" {
+		finding.SourceType = domain.ConflictFindingSourceExternal
+	}
+	if finding.ID == "" {
+		finding.ID = strings.Join([]string{"conflict", intent.ID, fmt.Sprintf("v%d", intent.Version), string(finding.Status), emptyID(finding.SourceID), emptyID(finding.ConflictingIntentID), emptyID(finding.ConflictingVolumeID)}, "-")
+	}
+	if finding.EvaluatedAt.IsZero() {
+		finding.EvaluatedAt = checkedAt
+	}
+	if finding.Severity == "" {
+		finding.Severity = conflictSeverity(finding.Status)
+	}
+	finding.Blocking = finding.Status != domain.ConflictFindingStatusClear
+	return finding
 }
 
 func (s *DeconflictionService) evaluableVolume(intent domain.OperationalIntent, volume domain.OperationalVolume, checkedAt time.Time) (geoBounds, domain.ConflictFinding, bool) {
@@ -180,6 +215,20 @@ func eligibleProviderCandidates(target domain.OperationalIntent, candidates []do
 			continue
 		}
 		filtered = append(filtered, candidate)
+	}
+	return filtered
+}
+
+func candidateConflictEligible(status domain.IntentStatus) bool {
+	return status == domain.IntentStatusAccepted || status == domain.IntentStatusActive
+}
+
+func volumesForVersion(volumes []domain.OperationalVolume, version int) []domain.OperationalVolume {
+	filtered := make([]domain.OperationalVolume, 0, len(volumes))
+	for _, volume := range volumes {
+		if volume.IntentVersion == version {
+			filtered = append(filtered, volume)
+		}
 	}
 	return filtered
 }

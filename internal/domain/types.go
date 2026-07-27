@@ -223,5 +223,6 @@ const (
 )
 
 const (
-	ConflictFindingSourceLocal ConflictFindingSourceType = "local"
+	ConflictFindingSourceLocal    ConflictFindingSourceType = "local"
+	ConflictFindingSourceExternal ConflictFindingSourceType = "external"
 )

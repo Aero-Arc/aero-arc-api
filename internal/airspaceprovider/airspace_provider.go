@@ -1,8 +1,9 @@
-package service
+package airspaceprovider
 
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
@@ -17,12 +18,22 @@ import (
 //
 // This is the seam for future DSS/USS-backed discovery (for example a
 // DSSAirspaceProvider or a CompositeAirspaceProvider).
-type AirspaceAwarenessProvider interface {
-	QueryConflictCandidates(
+type Assessment struct {
+	ProviderID string
+	Findings   []domain.ConflictFinding
+	Candidates []domain.OperationalIntentConflictCandidate
+}
+
+// Provider checks an intent against one source of airspace awareness.
+// Findings are authoritative provider decisions and are accepted by the
+// deconfliction service as reported. Candidates are possible conflicts that
+// require Aero Arc's local validation.
+type Provider interface {
+	CheckIntent(
 		ctx context.Context,
 		intent domain.OperationalIntent,
 		volumes []domain.OperationalVolume,
-	) ([]domain.OperationalIntentConflictCandidate, error)
+	) (Assessment, error)
 }
 
 // LocalStoreAirspaceProvider discovers conflict candidates from the local
@@ -36,7 +47,32 @@ func NewLocalStoreAirspaceProvider(durableStore durable.Store) *LocalStoreAirspa
 	return &LocalStoreAirspaceProvider{durable: durableStore}
 }
 
+func (p *LocalStoreAirspaceProvider) CheckIntent(
+	ctx context.Context,
+	intent domain.OperationalIntent,
+	volumes []domain.OperationalVolume,
+) (Assessment, error) {
+	candidates, err := p.queryConflictCandidates(ctx, intent, volumes)
+	if err != nil {
+		return Assessment{}, err
+	}
+	return Assessment{
+		ProviderID: "local_durable_store",
+		Candidates: candidates,
+	}, nil
+}
+
+// QueryConflictCandidates is retained as a convenience for callers that only
+// need the local provider's broad-phase result.
 func (p *LocalStoreAirspaceProvider) QueryConflictCandidates(
+	ctx context.Context,
+	intent domain.OperationalIntent,
+	volumes []domain.OperationalVolume,
+) ([]domain.OperationalIntentConflictCandidate, error) {
+	return p.queryConflictCandidates(ctx, intent, volumes)
+}
+
+func (p *LocalStoreAirspaceProvider) queryConflictCandidates(
 	ctx context.Context,
 	intent domain.OperationalIntent,
 	volumes []domain.OperationalVolume,
@@ -103,4 +139,32 @@ func peerVolumeCouldConflict(targetVolumes []domain.OperationalVolume, peerVolum
 
 func candidateConflictEligible(status domain.IntentStatus) bool {
 	return status == domain.IntentStatusAccepted || status == domain.IntentStatusActive
+}
+
+func volumesForVersion(volumes []domain.OperationalVolume, version int) []domain.OperationalVolume {
+	filtered := make([]domain.OperationalVolume, 0, len(volumes))
+	for _, volume := range volumes {
+		if volume.IntentVersion == version {
+			filtered = append(filtered, volume)
+		}
+	}
+	return filtered
+}
+
+func peerVolumeDimensionsUsable(volume domain.OperationalVolume) bool {
+	return !volume.StartsAt.IsZero() &&
+		!volume.EndsAt.IsZero() &&
+		volume.StartsAt.Before(volume.EndsAt) &&
+		volume.MinAltitudeM >= 0 &&
+		volume.MaxAltitudeM > 0 &&
+		volume.MinAltitudeM <= volume.MaxAltitudeM &&
+		volume.AltitudeRef != ""
+}
+
+func timeWindowsOverlap(aStart, aEnd, bStart, bEnd time.Time) bool {
+	return aStart.Before(bEnd) && bStart.Before(aEnd)
+}
+
+func altitudeBandsOverlap(aMin, aMax, bMin, bMax float64) bool {
+	return aMin <= bMax && bMin <= aMax
 }
