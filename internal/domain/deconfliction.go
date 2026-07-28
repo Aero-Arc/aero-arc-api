@@ -36,15 +36,6 @@ type ConflictFinding struct {
 	EvaluatedAt         time.Time                 `json:"evaluated_at"`
 }
 
-// OperationalIntentConflictCandidate is a broad-phase airspace awareness
-// result: a peer intent plus the subset of its operational volumes that could
-// plausibly conflict with a target intent. Narrow-phase overlap evaluation
-// makes the final determination.
-type OperationalIntentConflictCandidate struct {
-	Intent  OperationalIntent   `json:"intent"`
-	Volumes []OperationalVolume `json:"volumes"`
-}
-
 type DeconflictionResult struct {
 	Intent      OperationalIntent    `json:"intent"`
 	Posture     DeconflictionPosture `json:"posture"`

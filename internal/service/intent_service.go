@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
+	deconflictionservice "github.com/Aero-Arc/aero-arc-api/internal/service/deconfliction"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 )
 
@@ -118,7 +119,7 @@ func NewIntentServiceWithClock(durableStore durable.Store, now func() time.Time,
 	service := &IntentService{
 		durable:       durableStore,
 		now:           now,
-		deconfliction: NewDeconflictionServiceWithClock(durableStore, now),
+		deconfliction: deconflictionservice.NewDeconflictionServiceWithClock(durableStore, now),
 	}
 	if len(deconfliction) > 0 {
 		service.deconfliction = deconfliction[0]

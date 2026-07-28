@@ -15,6 +15,7 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/registry"
 	"github.com/Aero-Arc/aero-arc-api/internal/seed"
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
+	"github.com/Aero-Arc/aero-arc-api/internal/service/deconfliction"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/replay"
@@ -176,7 +177,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		slog.Info("seeded demo data")
 	}
 	fleetService := service.NewFleetService(durableStore, telemetryStore, replayStore, registryClient)
-	deconflictionService := service.NewDeconflictionService(durableStore)
+	deconflictionService := deconfliction.NewDeconflictionService(durableStore)
 	intentService := service.NewIntentService(durableStore, deconflictionService)
 	preflightService := service.NewPreflightService(durableStore)
 	conformanceService := service.NewConformanceService(durableStore, telemetryStore)

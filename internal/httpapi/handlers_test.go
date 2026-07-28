@@ -13,6 +13,7 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/readmodel"
 	"github.com/Aero-Arc/aero-arc-api/internal/registry"
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
+	"github.com/Aero-Arc/aero-arc-api/internal/service/deconfliction"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 	replaymemory "github.com/Aero-Arc/aero-arc-api/internal/store/replay/memory"
 	telemetrymemory "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/memory"
@@ -450,7 +451,7 @@ func TestHandleAddOperationalVolumeRejectsMissingAltitudeFields(t *testing.T) {
 		service.NewPreflightService(durable),
 		service.NewConformanceService(durable, telemetry),
 		time.Second,
-		service.NewDeconflictionService(durable),
+		deconfliction.NewDeconflictionService(durable),
 	)
 	body := []byte(`{"id":"volume-1","sequence":1,"geojson":"{\"type\":\"Polygon\",\"coordinates\":[[[-98,35],[-97,35],[-97,36],[-98,36],[-98,35]]]}","max_altitude_m":120,"altitude_ref":"agl","starts_at":"2026-06-15T15:00:00Z","ends_at":"2026-06-15T16:00:00Z"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/operational-intents/"+intent.ID+"/volumes", bytes.NewReader(body))
@@ -473,14 +474,14 @@ func TestHandleCheckOperationalIntentDeconfliction(t *testing.T) {
 	seedHTTPDeconflictionIntents(t, ctx, durable, now)
 
 	fleet := service.NewFleetService(durable, telemetry, replay, reg)
-	deconfliction := service.NewDeconflictionService(durable)
+	deconflictionService := deconfliction.NewDeconflictionService(durable)
 	server := NewWithWorkflows(
 		fleet,
-		service.NewIntentService(durable, deconfliction),
+		service.NewIntentService(durable, deconflictionService),
 		service.NewPreflightService(durable),
 		service.NewConformanceService(durable, telemetry),
 		time.Second,
-		deconfliction,
+		deconflictionService,
 	)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/operational-intents/intent-target/deconfliction/check", nil)
 	rec := httptest.NewRecorder()
@@ -530,14 +531,14 @@ func TestHandleActivateOperationalIntentBlocksOnDeconflictionPotentialConflict(t
 	}
 
 	fleet := service.NewFleetService(durable, telemetry, replay, reg)
-	deconfliction := service.NewDeconflictionService(durable)
+	deconflictionService := deconfliction.NewDeconflictionService(durable)
 	server := NewWithWorkflows(
 		fleet,
-		service.NewIntentService(durable, deconfliction),
+		service.NewIntentService(durable, deconflictionService),
 		service.NewPreflightService(durable),
 		service.NewConformanceService(durable, telemetry),
 		time.Second,
-		deconfliction,
+		deconflictionService,
 	)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/operational-intents/intent-target/activate", nil)
 	rec := httptest.NewRecorder()
@@ -572,7 +573,7 @@ func TestHandleActivateOperationalIntentInvalidTransitionDoesNotRunDeconfliction
 		service.NewPreflightService(durable),
 		service.NewConformanceService(durable, telemetry),
 		time.Second,
-		service.NewDeconflictionService(durable),
+		deconfliction.NewDeconflictionService(durable),
 	)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/operational-intents/intent-target/activate", nil)
 	rec := httptest.NewRecorder()
@@ -699,14 +700,14 @@ func TestHandleActivateOperationalIntentDoesNotTrustOldVersionClearFinding(t *te
 	}
 
 	fleet := service.NewFleetService(durable, telemetry, replay, reg)
-	deconfliction := service.NewDeconflictionService(durable)
+	deconflictionService := deconfliction.NewDeconflictionService(durable)
 	server := NewWithWorkflows(
 		fleet,
-		service.NewIntentService(durable, deconfliction),
+		service.NewIntentService(durable, deconflictionService),
 		service.NewPreflightService(durable),
 		service.NewConformanceService(durable, telemetry),
 		time.Second,
-		deconfliction,
+		deconflictionService,
 	)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/operational-intents/intent-target/activate", nil)
 	rec := httptest.NewRecorder()

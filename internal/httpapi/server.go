@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
+	"github.com/Aero-Arc/aero-arc-api/internal/service/deconfliction"
 	"github.com/mrshabel/mach"
 )
 
@@ -14,7 +15,7 @@ type Server struct {
 	intents        *service.IntentService
 	preflight      *service.PreflightService
 	conformance    *service.ConformanceService
-	deconfliction  *service.DeconflictionService
+	deconfliction  *deconfliction.DeconflictionService
 	requestTimeout time.Duration
 	debug          bool
 }
@@ -23,7 +24,7 @@ func New(fleet *service.FleetService, requestTimeout time.Duration) *Server {
 	return &Server{fleet: fleet, requestTimeout: requestTimeout}
 }
 
-func NewWithWorkflows(fleet *service.FleetService, intents *service.IntentService, preflight *service.PreflightService, conformance *service.ConformanceService, requestTimeout time.Duration, deconfliction ...*service.DeconflictionService) *Server {
+func NewWithWorkflows(fleet *service.FleetService, intents *service.IntentService, preflight *service.PreflightService, conformance *service.ConformanceService, requestTimeout time.Duration, deconflictionServices ...*deconfliction.DeconflictionService) *Server {
 	server := &Server{
 		fleet:          fleet,
 		intents:        intents,
@@ -31,8 +32,8 @@ func NewWithWorkflows(fleet *service.FleetService, intents *service.IntentServic
 		conformance:    conformance,
 		requestTimeout: requestTimeout,
 	}
-	if len(deconfliction) > 0 {
-		server.deconfliction = deconfliction[0]
+	if len(deconflictionServices) > 0 {
+		server.deconfliction = deconflictionServices[0]
 	}
 	return server
 }
