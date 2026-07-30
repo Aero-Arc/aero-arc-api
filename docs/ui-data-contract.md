@@ -73,6 +73,7 @@ The Flutter DTOs for this slice should mirror:
 - `live_state`
 - `live_state_available`
 - `readiness`
+- `current_intent`
 
 UI-only labels, colors, formatted dates, maintenance summaries, and telemetry
 summaries must live in frontend view-model/helper code, not in API DTOs.
