@@ -81,7 +81,7 @@ intents.
 
 ## Enum Strategy
 
-Status-like fields use typed Go string enums in `internal/domain/models.go`.
+Status-like fields use typed Go string enums in `internal/domain/types.go`.
 This gives readable JSON and compile-time clarity without hiding values behind
 magic strings.
 
@@ -118,6 +118,10 @@ Recommended indexes:
 - `battery_installations(aircraft_id, removed_at)`
 - `maintenance_events(aircraft_id, status, due_at)`
 - `operational_intents(aircraft_id, status, planned_start_at)`
+- `operational_intents(id, version)` as the version-aware primary key
+- `operational_volumes USING gist(geometry)`
+- `operational_volumes(intent_id, intent_version, starts_at, ends_at)`
+- `conflict_findings(intent_id, intent_version, rule_version)`
 - `preflight_checks(intent_id, category, status)`
 - `flight_records(aircraft_id, started_at DESC)`
 - `flight_records(intent_id)`
@@ -159,8 +163,11 @@ CREATE TABLE aircraft (
 );
 
 CREATE TABLE operational_intents (
-  id text PRIMARY KEY,
+  id text NOT NULL,
+  version integer NOT NULL CHECK (version > 0),
+  operator_id text,
   aircraft_id text NOT NULL REFERENCES aircraft(id),
+  authorization_id text,
   name text NOT NULL,
   summary text NOT NULL,
   use_case text,
@@ -176,9 +183,68 @@ CREATE TABLE operational_intents (
   max_altitude_ft_agl double precision,
   supervisor_id text,
   flight_coordinator_id text,
-  submitted_at timestamptz NOT NULL,
-  updated_at timestamptz NOT NULL
+  submitted_at timestamptz,
+  accepted_at timestamptz,
+  activated_at timestamptz,
+  completed_at timestamptz,
+  canceled_at timestamptz,
+  superseded_at timestamptz,
+  updated_at timestamptz NOT NULL,
+  PRIMARY KEY (id, version)
 );
+
+CREATE EXTENSION IF NOT EXISTS postgis;
+
+CREATE TABLE operational_volumes (
+  id text NOT NULL,
+  intent_id text NOT NULL,
+  intent_version integer NOT NULL,
+  sequence integer NOT NULL,
+  geometry geometry(Polygon, 4326) NOT NULL,
+  min_altitude_m double precision NOT NULL,
+  max_altitude_m double precision NOT NULL,
+  altitude_ref text NOT NULL,
+  starts_at timestamptz NOT NULL,
+  ends_at timestamptz NOT NULL,
+  buffer_meters double precision,
+  volume_type text,
+  created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL,
+  PRIMARY KEY (id, intent_version),
+  FOREIGN KEY (intent_id, intent_version)
+    REFERENCES operational_intents(id, version),
+  CHECK (starts_at < ends_at),
+  CHECK (min_altitude_m <= max_altitude_m)
+);
+
+CREATE INDEX operational_volumes_geometry_gist
+  ON operational_volumes USING gist (geometry);
+
+CREATE INDEX operational_volumes_intent_time
+  ON operational_volumes (intent_id, intent_version, starts_at, ends_at);
+
+CREATE TABLE conflict_findings (
+  id text PRIMARY KEY,
+  intent_id text NOT NULL,
+  intent_version integer NOT NULL,
+  volume_id text,
+  conflicting_intent_id text,
+  conflicting_version integer,
+  conflicting_volume_id text,
+  source_type text NOT NULL,
+  source_id text,
+  status text NOT NULL,
+  severity severity NOT NULL,
+  blocking boolean NOT NULL,
+  message text NOT NULL,
+  rule_version text NOT NULL,
+  evaluated_at timestamptz NOT NULL,
+  FOREIGN KEY (intent_id, intent_version)
+    REFERENCES operational_intents(id, version)
+);
+
+CREATE INDEX conflict_findings_intent_rule
+  ON conflict_findings (intent_id, intent_version, rule_version);
 
 CREATE TABLE evidence_records (
   id text PRIMARY KEY,
@@ -202,5 +268,7 @@ and endpoint work can proceed before Postgres exists.
 
 Next useful backend step: add a Postgres package under
 `internal/store/durable/postgres` and map these domain types into normalized
-tables with migrations. Keep DTO shaping in the API/service layer; do not let
-the frontend talk directly to storage-specific shapes.
+tables with migrations. Use PostGIS for exact spatial candidate filtering and
+intersection; keep operational posture and policy decisions in the service
+layer. Keep DTO shaping in the API/service layer, and do not let the frontend
+talk directly to storage-specific shapes.

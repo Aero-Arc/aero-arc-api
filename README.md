@@ -39,6 +39,35 @@ or:
 make run-demo
 ```
 
+### Docker Compose
+
+The Compose stack runs the API and PostGIS on the same bridge network. The API
+container starts only after PostgreSQL passes its readiness check.
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+The API is available at `http://localhost:8080`, and PostgreSQL is exposed to
+the host at `localhost:5432`. Containers on the Compose network address the
+database as `postgis:5432`. The host ports and local development credentials
+can be changed in `.env`. These defaults are for local development only; use
+managed secrets and restrict database exposure in shared environments.
+
+Database data is retained in the named `postgis-data` volume. To stop the
+containers without deleting the data:
+
+```bash
+docker compose down
+```
+
+The API's durable store is still configured as `memory`: the current
+application does not yet contain a PostgreSQL store implementation or consume a
+PostgreSQL connection string. The `depends_on` health condition therefore
+provides a hard startup dependency, while wiring the deconfliction workflow to
+PostGIS remains application work.
+
 Configuration is available through flags or environment variables:
 
 ```bash
@@ -59,6 +88,8 @@ AERO_API_TELEMETRY_STORE=memory
 AERO_API_REPLAY_STORE=memory
 AERO_API_REGISTRY_MODE=memory
 AERO_API_REGISTRY_ADDR=localhost:50051
+AERO_API_REGISTRY_DIAL_TIMEOUT=5s
+AERO_API_REQUEST_TIMEOUT=3s
 AERO_API_SEED=demo
 AERO_API_DEBUG=true
 ```
@@ -80,16 +111,63 @@ named workflow operations such as `create_intent`, `modify_intent`,
 
 ## Endpoints
 
+Health:
+
 - `GET /healthz`
 - `GET /readyz`
+
+`/readyz` currently reports process readiness only. It does not probe registry,
+telemetry, replay, or durable-store dependencies.
+
+Dashboards:
+
+- `GET /api/v1/overview`
+- `GET /api/v1/operations`
+- `GET /api/v1/preflight`
+- `GET /api/v1/conformance`
+- `GET /api/v1/maintenance`
+- `GET /api/v1/records`
+
+Fleet and replay:
+
 - `GET /api/v1/aircraft`
 - `POST /api/v1/aircraft`
 - `GET /api/v1/aircraft/{aircraft_id}`
+- `GET /api/v1/aircraft/{aircraft_id}/map?limit=500`
 - `GET /api/v1/aircraft/{aircraft_id}/flights`
 - `GET /api/v1/flights/{flight_id}`
 - `GET /api/v1/flights/{flight_id}/replay?limit=500`
 - `POST /api/v1/batteries`
 - `POST /api/v1/maintenance-events`
+
+Operational workflows:
+
+- `POST /api/v1/operational-intents`
+- `POST /api/v1/operational-intents/{intent_id}/modify`
+- `POST /api/v1/operational-intents/{intent_id}/volumes`
+- `POST /api/v1/operational-intents/{intent_id}/submit`
+- `POST /api/v1/operational-intents/{intent_id}/preflight/evaluate`
+- `POST /api/v1/operational-intents/{intent_id}/deconfliction/check`
+- `GET /api/v1/operational-intents/{intent_id}/conflicts`
+- `POST /api/v1/operational-intents/{intent_id}/accept`
+- `POST /api/v1/operational-intents/{intent_id}/activate`
+- `GET /api/v1/operational-intents/{intent_id}/conformance`
+- `POST /api/v1/telemetry`
+
+### Current Deconfliction Behavior
+
+The current deconfliction service uses the configured durable store and defaults
+to a local airspace provider. In `memory` mode it:
+
+- evaluates the latest version of an operational intent;
+- compares overlapping time windows and compatible altitude references;
+- accepts inline GeoJSON `Polygon` geometry;
+- compares polygon bounding boxes rather than exact polygon intersections; and
+- persists version-scoped conflict findings in memory.
+
+PostGIS is running in the local Compose stack, but the API does not query it
+yet. Exact spatial predicates, durable findings, and dependency-aware readiness
+belong to the PostgreSQL/PostGIS store implementation.
 
 ## Demo Data
 
@@ -140,8 +218,7 @@ make check
 ## TODO
 
 - Add real durable store implementations for TiDB/Postgres.
-- Add real telemetry store implementations, such as InfluxDB or another
-  queryable time-series backend.
+- Harden the InfluxDB telemetry schema and production query integration.
 - Add real replay storage backed by S3/object storage manifests and log chunks.
 - Expand registry mapping once aircraft-to-agent identity is finalized. For now,
   `aircraft.agent_id` maps durable aircraft records to registry agents, falling
