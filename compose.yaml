@@ -1,0 +1,49 @@
+services:
+  postgis:
+    image: postgis/postgis:14-3.5-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aero_arc}
+      POSTGRES_USER: ${POSTGRES_USER:-aero_arc}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aero_arc_dev}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgis-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - aero-arc
+
+  aero-arc-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      AERO_API_ADDR: ":8080"
+      AERO_API_DURABLE_STORE: "memory"
+      AERO_API_TELEMETRY_STORE: "memory"
+      AERO_API_REPLAY_STORE: "memory"
+      AERO_API_REGISTRY_MODE: "memory"
+      AERO_API_REGISTRY_ADDR: "localhost:50051"
+    depends_on:
+      postgis:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-8080}:8080"
+    restart: unless-stopped
+    networks:
+      - aero-arc
+
+volumes:
+  postgis-data:
+
+networks:
+  aero-arc:
+    driver: bridge
