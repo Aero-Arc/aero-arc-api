@@ -1,0 +1,14 @@
+.git
+.github
+.agents
+.codex
+.env
+.env.*
+!.env.example
+bin
+build
+dist
+coverage.*
+*.out
+*.coverprofile
+*.pdf
