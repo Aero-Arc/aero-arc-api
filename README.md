@@ -62,11 +62,9 @@ containers without deleting the data:
 docker compose down
 ```
 
-The API's durable store is still configured as `memory`: the current
-application does not yet contain a PostgreSQL store implementation or consume a
-PostgreSQL connection string. The `depends_on` health condition therefore
-provides a hard startup dependency, while wiring the deconfliction workflow to
-PostGIS remains application work.
+The general durable store remains in `memory` mode. Compose configures PostGIS
+as the authoritative store for operational intents, operational volumes, and
+conflict findings, so API startup fails if the database cannot be reached.
 
 Configuration is available through flags or environment variables:
 
@@ -102,6 +100,41 @@ memory telemetry store.
 
 `AERO_API_REGISTRY_MODE=grpc` connects to the real `aero-arc-registry` gRPC
 service. Durable and replay stores still run in `memory` mode in this scaffold.
+
+## Deconfliction Read/Check Slice
+
+Set `AERO_API_POSTGIS_DATABASE_URL` to make PostGIS authoritative for
+operational intents, operational volumes, and conflict findings. Startup fails
+if the configured database cannot be reached, and the required PostGIS schema
+is initialized automatically. Other scaffold records continue to use the
+general durable store.
+
+Set `AERO_API_DSS_BASE_URL` to add InterUSS SCD discovery. The check queries DSS
+references for each submitted WGS84 volume, fetches full details from each
+managing USS, and evaluates those candidates together with local PostGIS
+candidates. Peer failures produce an indeterminate, blocking finding while
+successfully retrieved peers are still evaluated.
+
+For a local InterUSS stack:
+
+```bash
+AERO_API_POSTGIS_DATABASE_URL='postgres://aero_arc:aero_arc_dev@localhost:5432/aero_arc?sslmode=disable'
+AERO_API_DSS_BASE_URL='http://localhost:8082'
+AERO_API_DSS_OAUTH_TOKEN_URL='http://localhost:8085/token'
+AERO_API_DSS_OAUTH_AUDIENCE='localhost'
+AERO_API_DSS_OAUTH_ISSUER='localhost'
+AERO_API_DSS_OAUTH_SUBJECT='aero-arc-api'
+AERO_API_DSS_ALLOW_INSECURE_PEER_URLS=true
+```
+
+Use `AERO_API_DSS_STATIC_TOKEN` instead of the dummy OAuth settings when a
+bearer token is managed externally. WGS84 polygon volumes are supported in this
+slice. Malformed local geometry is rejected when written; unsupported SCD
+geometry or altitude references, peer failures, and antimeridian-crossing
+geometry fail closed as indeterminate findings.
+
+Peer USS URLs require HTTPS and public network addresses by default. Enable
+`AERO_API_DSS_ALLOW_INSECURE_PEER_URLS` only for a trusted local InterUSS stack.
 
 Set `--debug` or `AERO_API_DEBUG=true` to enable debug-level operation logs.
 Debug mode logs each HTTP request with method, path, status, and duration, plus
@@ -156,18 +189,21 @@ Operational workflows:
 
 ### Current Deconfliction Behavior
 
-The current deconfliction service uses the configured durable store and defaults
-to a local airspace provider. In `memory` mode it:
+The deconfliction service combines configured airspace providers. Without a
+PostGIS URL, the local provider uses the in-memory durable store. With PostGIS
+enabled, it applies indexed spatial, time, altitude, lifecycle, and
+intent-version predicates before the shared evaluator runs. The evaluator:
 
 - evaluates the latest version of an operational intent;
 - compares overlapping time windows and compatible altitude references;
 - accepts inline GeoJSON `Polygon` geometry;
 - compares polygon bounding boxes rather than exact polygon intersections; and
-- persists version-scoped conflict findings in memory.
+- persists version-scoped conflict findings in the configured operational
+  store.
 
-PostGIS is running in the local Compose stack, but the API does not query it
-yet. Exact spatial predicates, durable findings, and dependency-aware readiness
-belong to the PostgreSQL/PostGIS store implementation.
+InterUSS SCD discovery is optional. When configured, DSS references are queried
+and full operational-intent details are retrieved directly from each managing
+USS. Unsupported or unavailable peer data fails closed.
 
 ## Demo Data
 
@@ -217,7 +253,7 @@ make check
 
 ## TODO
 
-- Add real durable store implementations for TiDB/Postgres.
+- Expand PostGIS persistence beyond the operational-intent slice.
 - Harden the InfluxDB telemetry schema and production query integration.
 - Add real replay storage backed by S3/object storage manifests and log chunks.
 - Expand registry mapping once aircraft-to-agent identity is finalized. For now,

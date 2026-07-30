@@ -112,3 +112,54 @@ func TestProviderFailureProducesIndeterminateFinding(t *testing.T) {
 		t.Fatalf("result = %#v", result)
 	}
 }
+
+func TestProviderPartialFailureStillEvaluatesReturnedCandidates(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	now := time.Date(2026, time.July, 27, 12, 0, 0, 0, time.UTC)
+	intent := domain.OperationalIntent{ID: "target", Version: 1}
+	if err := store.CreateOperationalIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	targetVolume := domain.OperationalVolume{
+		ID: "target-volume", IntentID: intent.ID, IntentVersion: intent.Version,
+		MinAltitudeM: 10, MaxAltitudeM: 100, AltitudeRef: domain.AltitudeReferenceWGS84,
+		StartsAt: now, EndsAt: now.Add(time.Hour),
+		GeoJSON: `{"type":"Polygon","coordinates":[[[-97,32],[-96,32],[-96,33],[-97,33],[-97,32]]]}`,
+	}
+	if err := store.RecordOperationalVolume(ctx, targetVolume); err != nil {
+		t.Fatal(err)
+	}
+	provider := &discoveryProvider{
+		id:  "partially-available-dss",
+		err: errors.New("one peer unavailable"),
+		records: []airspaceprovider.OperationalIntent{{
+			Source: airspaceprovider.Source{ReferenceID: "available-peer", Version: 1},
+			Intent: domain.OperationalIntent{ID: "available-peer", Version: 1},
+			Volumes: []domain.OperationalVolume{{
+				ID: "peer-volume", IntentID: "available-peer", IntentVersion: 1,
+				MinAltitudeM: 10, MaxAltitudeM: 100, AltitudeRef: domain.AltitudeReferenceWGS84,
+				StartsAt: now, EndsAt: now.Add(time.Hour), GeoJSON: targetVolume.GeoJSON,
+			}},
+		}},
+	}
+
+	result, err := deconfliction.NewDeconflictionServiceWithClock(
+		store, func() time.Time { return now }, provider,
+	).CheckIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Posture != domain.DeconflictionPostureIndeterminate || len(result.Findings) != 2 {
+		t.Fatalf("result = %#v", result)
+	}
+	var sawPeer bool
+	for _, finding := range result.Findings {
+		if finding.ConflictingIntentID == "available-peer" {
+			sawPeer = true
+		}
+	}
+	if !sawPeer {
+		t.Fatalf("successful peer was not evaluated: %#v", result.Findings)
+	}
+}

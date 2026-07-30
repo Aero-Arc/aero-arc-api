@@ -17,6 +17,7 @@ type Source struct {
 	Manager     string
 	USSBaseURL  string
 	Version     int
+	Local       bool
 }
 
 type OperationalIntent struct {

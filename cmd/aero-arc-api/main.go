@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider"
+	interussprovider "github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider/interuss"
 	"github.com/Aero-Arc/aero-arc-api/internal/config"
 	"github.com/Aero-Arc/aero-arc-api/internal/httpapi"
 	"github.com/Aero-Arc/aero-arc-api/internal/registry"
@@ -18,11 +20,13 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/service/deconfliction"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
+	durablepostgis "github.com/Aero-Arc/aero-arc-api/internal/store/durable/postgis"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/replay"
 	replaymemory "github.com/Aero-Arc/aero-arc-api/internal/store/replay/memory"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/telemetry"
 	telemetryinfluxdb "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/influxdb"
 	telemetrymemory "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/memory"
+	"github.com/Aero-Arc/dss-clients/interuss"
 	"github.com/urfave/cli/v3"
 )
 
@@ -66,6 +70,14 @@ func newCommand() *cli.Command {
 					&cli.StringFlag{Name: "influxdb-host", Usage: "InfluxDB 3 host URL", Sources: cli.EnvVars("AERO_API_INFLUXDB_HOST")},
 					&cli.StringFlag{Name: "influxdb-token", Usage: "InfluxDB 3 access token", Sources: cli.EnvVars("AERO_API_INFLUXDB_TOKEN")},
 					&cli.StringFlag{Name: "influxdb-database", Usage: "InfluxDB 3 database", Sources: cli.EnvVars("AERO_API_INFLUXDB_DATABASE")},
+					&cli.StringFlag{Name: "postgis-database-url", Usage: "PostGIS URL for operational intent storage", Sources: cli.EnvVars("AERO_API_POSTGIS_DATABASE_URL")},
+					&cli.StringFlag{Name: "dss-base-url", Usage: "InterUSS DSS base URL", Sources: cli.EnvVars("AERO_API_DSS_BASE_URL")},
+					&cli.StringFlag{Name: "dss-static-token", Usage: "static DSS bearer token", Sources: cli.EnvVars("AERO_API_DSS_STATIC_TOKEN")},
+					&cli.StringFlag{Name: "dss-oauth-token-url", Usage: "local dummy OAuth token URL", Sources: cli.EnvVars("AERO_API_DSS_OAUTH_TOKEN_URL")},
+					&cli.StringFlag{Name: "dss-oauth-audience", Value: defaults.DSSOAuthAudience, Usage: "DSS OAuth audience", Sources: cli.EnvVars("AERO_API_DSS_OAUTH_AUDIENCE")},
+					&cli.StringFlag{Name: "dss-oauth-issuer", Value: defaults.DSSOAuthIssuer, Usage: "DSS OAuth issuer", Sources: cli.EnvVars("AERO_API_DSS_OAUTH_ISSUER")},
+					&cli.StringFlag{Name: "dss-oauth-subject", Value: defaults.DSSOAuthSubject, Usage: "stable Aero Arc USS identity", Sources: cli.EnvVars("AERO_API_DSS_OAUTH_SUBJECT")},
+					&cli.BoolFlag{Name: "dss-allow-insecure-peer-urls", Usage: "allow HTTP and private peer USS URLs for local development", Sources: cli.EnvVars("AERO_API_DSS_ALLOW_INSECURE_PEER_URLS")},
 					&cli.StringFlag{
 						Name:    "replay-store",
 						Value:   defaults.ReplayStore,
@@ -111,19 +123,27 @@ func newCommand() *cli.Command {
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					cfg := &config.Config{
-						Addr:                cmd.String("addr"),
-						DurableStore:        cmd.String("durable-store"),
-						TelemetryStore:      cmd.String("telemetry-store"),
-						InfluxDBHost:        cmd.String("influxdb-host"),
-						InfluxDBToken:       cmd.String("influxdb-token"),
-						InfluxDBDatabase:    cmd.String("influxdb-database"),
-						ReplayStore:         cmd.String("replay-store"),
-						RegistryMode:        cmd.String("registry-mode"),
-						RegistryAddress:     cmd.String("registry-addr"),
-						RegistryDialTimeout: cmd.Duration("registry-dial-timeout"),
-						RequestTimeout:      cmd.Duration("request-timeout"),
-						Seed:                cmd.String("seed"),
-						Debug:               cmd.Bool("debug"),
+						Addr:                     cmd.String("addr"),
+						DurableStore:             cmd.String("durable-store"),
+						TelemetryStore:           cmd.String("telemetry-store"),
+						InfluxDBHost:             cmd.String("influxdb-host"),
+						InfluxDBToken:            cmd.String("influxdb-token"),
+						InfluxDBDatabase:         cmd.String("influxdb-database"),
+						PostGISDatabaseURL:       cmd.String("postgis-database-url"),
+						DSSBaseURL:               cmd.String("dss-base-url"),
+						DSSStaticToken:           cmd.String("dss-static-token"),
+						DSSOAuthTokenURL:         cmd.String("dss-oauth-token-url"),
+						DSSOAuthAudience:         cmd.String("dss-oauth-audience"),
+						DSSOAuthIssuer:           cmd.String("dss-oauth-issuer"),
+						DSSOAuthSubject:          cmd.String("dss-oauth-subject"),
+						DSSAllowInsecurePeerURLs: cmd.Bool("dss-allow-insecure-peer-urls"),
+						ReplayStore:              cmd.String("replay-store"),
+						RegistryMode:             cmd.String("registry-mode"),
+						RegistryAddress:          cmd.String("registry-addr"),
+						RegistryDialTimeout:      cmd.Duration("registry-dial-timeout"),
+						RequestTimeout:           cmd.Duration("request-timeout"),
+						Seed:                     cmd.String("seed"),
+						Debug:                    cmd.Bool("debug"),
 					}
 					if err := cfg.Validate(); err != nil {
 						return err
@@ -151,10 +171,11 @@ func run(ctx context.Context, cfg *config.Config) error {
 		}
 	}()
 
-	durableStore, err := newDurableStore(cfg.DurableStore)
+	durableStore, providers, closeDurable, err := newDurableStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
+	defer closeDurable()
 	telemetryStore, err := newTelemetryStore(cfg)
 	if err != nil {
 		return err
@@ -177,7 +198,14 @@ func run(ctx context.Context, cfg *config.Config) error {
 		slog.Info("seeded demo data")
 	}
 	fleetService := service.NewFleetService(durableStore, telemetryStore, replayStore, registryClient)
-	deconflictionService := deconfliction.NewDeconflictionService(durableStore)
+	if cfg.DSSBaseURL != "" {
+		provider, err := newInterUSSProvider(cfg)
+		if err != nil {
+			return err
+		}
+		providers = append(providers, provider)
+	}
+	deconflictionService := deconfliction.NewDeconflictionService(durableStore, providers...)
 	intentService := service.NewIntentService(durableStore, deconflictionService)
 	preflightService := service.NewPreflightService(durableStore)
 	conformanceService := service.NewConformanceService(durableStore, telemetryStore)
@@ -193,6 +221,8 @@ func run(ctx context.Context, cfg *config.Config) error {
 		slog.Info("starting aero-arc-api",
 			slog.String("http_addr", cfg.Addr),
 			slog.String("durable_store", cfg.DurableStore),
+			slog.Bool("postgis_enabled", cfg.PostGISDatabaseURL != ""),
+			slog.Bool("dss_enabled", cfg.DSSBaseURL != ""),
 			slog.String("telemetry_store", cfg.TelemetryStore),
 			slog.String("replay_store", cfg.ReplayStore),
 			slog.String("registry_mode", cfg.RegistryMode),
@@ -226,13 +256,66 @@ func run(ctx context.Context, cfg *config.Config) error {
 	return nil
 }
 
-func newDurableStore(mode string) (durable.Store, error) {
-	switch mode {
+func newDurableStore(ctx context.Context, cfg *config.Config) (durable.Store, []airspaceprovider.Provider, func(), error) {
+	var base durable.Store
+	switch cfg.DurableStore {
 	case "memory":
-		return durablememory.NewStore(), nil
+		base = durablememory.NewStore()
 	default:
-		return nil, fmt.Errorf("unsupported durable store %q", mode)
+		return nil, nil, nil, fmt.Errorf("unsupported durable store %q", cfg.DurableStore)
 	}
+
+	if cfg.PostGISDatabaseURL == "" {
+		return base, []airspaceprovider.Provider{
+			airspaceprovider.NewLocalStoreAirspaceProvider(base),
+		}, func() {}, nil
+	}
+	operational, err := durablepostgis.Open(ctx, cfg.PostGISDatabaseURL)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return durable.UseOperationalStore(base, operational),
+		[]airspaceprovider.Provider{operational},
+		operational.Close,
+		nil
+}
+
+func newInterUSSProvider(cfg *config.Config) (airspaceprovider.Provider, error) {
+	dssHTTPClient := &http.Client{Timeout: cfg.RequestTimeout}
+	peerHTTPClient := interussprovider.NewPeerHTTPClient(cfg.RequestTimeout, cfg.DSSAllowInsecurePeerURLs)
+	var tokenSource interuss.TokenSource
+	switch {
+	case cfg.DSSStaticToken != "":
+		tokenSource = interuss.StaticTokenSource(cfg.DSSStaticToken)
+	case cfg.DSSOAuthTokenURL != "":
+		tokenSource = interuss.DummyOAuthTokenSource{
+			TokenURL:         cfg.DSSOAuthTokenURL,
+			Scope:            interuss.ScopeUTMStrategicCoordination,
+			IntendedAudience: cfg.DSSOAuthAudience,
+			Issuer:           cfg.DSSOAuthIssuer,
+			Subject:          cfg.DSSOAuthSubject,
+			HTTPClient:       dssHTTPClient,
+		}
+	}
+	queryClient, err := interuss.NewClient(interuss.Config{
+		BaseURL:     cfg.DSSBaseURL,
+		TokenSource: tokenSource,
+		HTTPClient:  dssHTTPClient,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("configure InterUSS DSS client: %w", err)
+	}
+	peerClient, err := interuss.NewClient(interuss.Config{
+		BaseURL:     cfg.DSSBaseURL,
+		TokenSource: tokenSource,
+		HTTPClient:  peerHTTPClient,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("configure InterUSS peer client: %w", err)
+	}
+	return interussprovider.New(interussprovider.NewClientWithPeer(
+		queryClient, peerClient, cfg.DSSAllowInsecurePeerURLs,
+	)), nil
 }
 
 func newTelemetryStore(cfg *config.Config) (telemetry.Store, error) {

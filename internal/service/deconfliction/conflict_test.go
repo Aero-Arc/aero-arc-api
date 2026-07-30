@@ -103,6 +103,69 @@ func TestEvaluateConflictsFailsClosedForPeerWithInvalidDimensions(t *testing.T) 
 	}
 }
 
+func TestEvaluateConflictsIncludesGeometryBuffers(t *testing.T) {
+	now := time.Date(2026, time.July, 27, 12, 0, 0, 0, time.UTC)
+	target := conflictTestVolume("target", "target-intent", 1, now)
+	bufferMeters := 150.0
+	target.BufferMeters = &bufferMeters
+	peer := conflictTestVolume("peer", "peer-intent", 1, now)
+	peer.GeoJSON = `{"type":"Polygon","coordinates":[[[-95.999,32],[-95,32],[-95,33],[-95.999,33],[-95.999,32]]]}`
+
+	findings := evaluateConflicts(
+		domain.OperationalIntent{ID: "target-intent", Version: 1},
+		[]domain.OperationalVolume{target},
+		[]airspaceprovider.OperationalIntent{{
+			Source:  airspaceprovider.Source{ProviderID: "local_postgis", Local: true},
+			Intent:  domain.OperationalIntent{ID: "peer-intent", Version: 1},
+			Volumes: []domain.OperationalVolume{peer},
+		}},
+	)
+
+	if len(findings) != 1 || findings[0].Status != domain.ConflictFindingStatusPotentialConflict {
+		t.Fatalf("findings = %#v", findings)
+	}
+	if findings[0].SourceType != domain.ConflictFindingSourceLocal {
+		t.Fatalf("source type = %q, want local", findings[0].SourceType)
+	}
+}
+
+func TestEvaluateVolumeRejectsNegativeGeometryBuffer(t *testing.T) {
+	volume := conflictTestVolume("target", "target-intent", 1, time.Now().UTC())
+	negative := -1.0
+	volume.BufferMeters = &negative
+
+	_, status, message := evaluateVolume(volume)
+
+	if status != domain.ConflictFindingStatusIndeterminate ||
+		message != "operational volume has a negative geometry buffer" {
+		t.Fatalf("status = %q, message = %q", status, message)
+	}
+}
+
+func TestEvaluateConflictsFailsClosedForInvalidGeometryWithDifferentAltitudeReference(t *testing.T) {
+	now := time.Now().UTC()
+	target := conflictTestVolume("target", "target-intent", 1, now)
+	target.MinAltitudeM, target.MaxAltitudeM = 10, 20
+	peer := conflictTestVolume("peer", "peer-intent", 1, now)
+	peer.GeoJSON = "{"
+	peer.AltitudeRef = domain.AltitudeReferenceAGL
+	peer.MinAltitudeM, peer.MaxAltitudeM = 1_000, 2_000
+
+	findings := evaluateConflicts(
+		domain.OperationalIntent{ID: target.IntentID, Version: 1},
+		[]domain.OperationalVolume{target},
+		[]airspaceprovider.OperationalIntent{{
+			Source:  airspaceprovider.Source{ProviderID: "peer"},
+			Intent:  domain.OperationalIntent{ID: peer.IntentID, Version: 1},
+			Volumes: []domain.OperationalVolume{peer},
+		}},
+	)
+
+	if len(findings) != 1 || findings[0].Status != domain.ConflictFindingStatusIndeterminate {
+		t.Fatalf("findings = %#v", findings)
+	}
+}
+
 func BenchmarkEvaluateConflictsFiveTargetsOneThousandPeers(b *testing.B) {
 	now := time.Date(2026, time.July, 27, 12, 0, 0, 0, time.UTC)
 	target := domain.OperationalIntent{ID: "target-intent", Version: 1}

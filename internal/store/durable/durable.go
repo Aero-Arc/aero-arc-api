@@ -14,7 +14,10 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 )
 
-var ErrNotFound = errors.New("not found")
+var (
+	ErrNotFound        = errors.New("not found")
+	ErrVersionConflict = errors.New("version conflict")
+)
 
 // Store defines the durable system-of-record operations used by the API.
 type Store interface {

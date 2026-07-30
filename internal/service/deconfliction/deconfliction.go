@@ -107,7 +107,6 @@ func (s *DeconflictionService) discoverOperationalIntents(
 				Message:  fmt.Sprintf("airspace provider %q could not be queried: %v", provider.ID(), err),
 				SourceID: provider.ID(),
 			})
-			continue
 		}
 
 		for _, record := range discovered {

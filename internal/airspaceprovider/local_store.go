@@ -55,14 +55,22 @@ func (p *LocalStoreAirspaceProvider) FindOperationalIntents(
 		if len(peerVolumes) == 0 {
 			continue
 		}
-		records = append(records, OperationalIntent{
+		record := OperationalIntent{
 			Source: Source{
 				ProviderID: p.ID(), ReferenceID: peer.ID, Manager: peer.OperatorID,
-				Version: peer.Version,
+				Version: peer.Version, Local: true,
 			},
-			Intent:  peer,
-			Volumes: peerVolumes,
-		})
+			Intent: peer,
+		}
+		for _, volume := range peerVolumes {
+			if volume.VolumeType == domain.OperationalVolumeContingency ||
+				volume.VolumeType == domain.OperationalVolumeEmergency {
+				record.OffNominalVolumes = append(record.OffNominalVolumes, volume)
+			} else {
+				record.Volumes = append(record.Volumes, volume)
+			}
+		}
+		records = append(records, record)
 	}
 	return records, nil
 }

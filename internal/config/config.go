@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"time"
@@ -16,24 +17,35 @@ const (
 	defaultRegistryAddress     = "localhost:50051"
 	defaultRegistryDialTimeout = 5 * time.Second
 	defaultRequestTimeout      = 3 * time.Second
+	defaultDSSOAuthAudience    = "localhost"
+	defaultDSSOAuthIssuer      = "localhost"
+	defaultDSSOAuthSubject     = "aero-arc-api"
 	defaultSeed                = ""
 	defaultDebug               = false
 )
 
 type Config struct {
-	Addr                string
-	DurableStore        string
-	TelemetryStore      string
-	InfluxDBHost        string
-	InfluxDBToken       string
-	InfluxDBDatabase    string
-	ReplayStore         string
-	RegistryMode        string
-	RegistryAddress     string
-	RegistryDialTimeout time.Duration
-	RequestTimeout      time.Duration
-	Seed                string
-	Debug               bool
+	Addr                     string
+	DurableStore             string
+	TelemetryStore           string
+	InfluxDBHost             string
+	InfluxDBToken            string
+	InfluxDBDatabase         string
+	PostGISDatabaseURL       string
+	DSSBaseURL               string
+	DSSStaticToken           string
+	DSSOAuthTokenURL         string
+	DSSOAuthAudience         string
+	DSSOAuthIssuer           string
+	DSSOAuthSubject          string
+	DSSAllowInsecurePeerURLs bool
+	ReplayStore              string
+	RegistryMode             string
+	RegistryAddress          string
+	RegistryDialTimeout      time.Duration
+	RequestTimeout           time.Duration
+	Seed                     string
+	Debug                    bool
 }
 
 func Defaults() *Config {
@@ -46,6 +58,9 @@ func Defaults() *Config {
 		RegistryAddress:     defaultRegistryAddress,
 		RegistryDialTimeout: defaultRegistryDialTimeout,
 		RequestTimeout:      defaultRequestTimeout,
+		DSSOAuthAudience:    defaultDSSOAuthAudience,
+		DSSOAuthIssuer:      defaultDSSOAuthIssuer,
+		DSSOAuthSubject:     defaultDSSOAuthSubject,
 		Seed:                defaultSeed,
 		Debug:               defaultDebug,
 	}
@@ -60,11 +75,21 @@ func Load() (*Config, error) {
 	applyStringEnv("AERO_API_INFLUXDB_HOST", &cfg.InfluxDBHost)
 	applyStringEnv("AERO_API_INFLUXDB_TOKEN", &cfg.InfluxDBToken)
 	applyStringEnv("AERO_API_INFLUXDB_DATABASE", &cfg.InfluxDBDatabase)
+	applyStringEnv("AERO_API_POSTGIS_DATABASE_URL", &cfg.PostGISDatabaseURL)
+	applyStringEnv("AERO_API_DSS_BASE_URL", &cfg.DSSBaseURL)
+	applyStringEnv("AERO_API_DSS_STATIC_TOKEN", &cfg.DSSStaticToken)
+	applyStringEnv("AERO_API_DSS_OAUTH_TOKEN_URL", &cfg.DSSOAuthTokenURL)
+	applyStringEnv("AERO_API_DSS_OAUTH_AUDIENCE", &cfg.DSSOAuthAudience)
+	applyStringEnv("AERO_API_DSS_OAUTH_ISSUER", &cfg.DSSOAuthIssuer)
+	applyStringEnv("AERO_API_DSS_OAUTH_SUBJECT", &cfg.DSSOAuthSubject)
 	applyStringEnv("AERO_API_REPLAY_STORE", &cfg.ReplayStore)
 	applyStringEnv("AERO_API_REGISTRY_MODE", &cfg.RegistryMode)
 	applyStringEnv("AERO_API_REGISTRY_ADDR", &cfg.RegistryAddress)
 	applyStringEnv("AERO_API_SEED", &cfg.Seed)
 	if err := applyBoolEnv("AERO_API_DEBUG", &cfg.Debug); err != nil {
+		return nil, err
+	}
+	if err := applyBoolEnv("AERO_API_DSS_ALLOW_INSECURE_PEER_URLS", &cfg.DSSAllowInsecurePeerURLs); err != nil {
 		return nil, err
 	}
 	if err := applyDurationEnv("AERO_API_REGISTRY_DIAL_TIMEOUT", &cfg.RegistryDialTimeout); err != nil {
@@ -120,6 +145,22 @@ func (cfg *Config) Validate() error {
 	}
 	if cfg.RequestTimeout <= 0 {
 		return fmt.Errorf("AERO_API_REQUEST_TIMEOUT must be > 0")
+	}
+	for name, value := range map[string]string{
+		"AERO_API_POSTGIS_DATABASE_URL": cfg.PostGISDatabaseURL,
+		"AERO_API_DSS_BASE_URL":         cfg.DSSBaseURL,
+		"AERO_API_DSS_OAUTH_TOKEN_URL":  cfg.DSSOAuthTokenURL,
+	} {
+		if value == "" {
+			continue
+		}
+		parsed, err := url.ParseRequestURI(value)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return fmt.Errorf("%s must be an absolute URL", name)
+		}
+	}
+	if cfg.DSSStaticToken != "" && cfg.DSSOAuthTokenURL != "" {
+		return fmt.Errorf("AERO_API_DSS_STATIC_TOKEN and AERO_API_DSS_OAUTH_TOKEN_URL are mutually exclusive")
 	}
 	switch cfg.Seed {
 	case "", "none", "demo":
