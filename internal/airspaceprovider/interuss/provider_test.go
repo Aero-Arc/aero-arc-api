@@ -1,8 +1,13 @@
 package interussprovider
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -172,6 +177,161 @@ func TestPeerURLPolicy(t *testing.T) {
 	}
 	if err := validatePeerURL("http://localhost:8080", true); err != nil {
 		t.Fatalf("explicit local development peer rejected: %v", err)
+	}
+}
+
+func TestClientAdapterUsesDSSAndPeerEndpoints(t *testing.T) {
+	now := time.Date(2026, time.July, 30, 12, 0, 0, 0, time.UTC)
+	reference := testReference(t, "11111111-1111-4111-8111-111111111111", 3)
+	if err := reference.UssBaseUrl.FromUssBaseURL("http://peer.example"); err != nil {
+		t.Fatal(err)
+	}
+	intent := testSCDIntent(t, reference, testVolume(now))
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/dss/v1/operational_intent_references/query":
+			return jsonResponse(t, http.StatusOK, scdv1.QueryOperationalIntentReferenceResponse{
+				OperationalIntentReferences: []scdv1.OperationalIntentReference{reference},
+			}), nil
+		case "/uss/v1/operational_intents/11111111-1111-4111-8111-111111111111":
+			if version := request.URL.Query().Get("version"); version != "3" {
+				t.Errorf("peer request version = %q", version)
+			}
+			return jsonResponse(t, http.StatusOK, scdv1.GetOperationalIntentDetailsResponse{
+				OperationalIntent: *intent,
+			}), nil
+		default:
+			t.Fatalf("unexpected request path %q", request.URL.Path)
+			return nil, nil
+		}
+	})
+	client := testDSSClient(t, transport)
+	adapter := NewClientWithPeer(client, client, true)
+	area, err := toSCDVolume(testVolume(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	references, err := adapter.QueryOperationalIntentReferences(context.Background(), area)
+	if err != nil || len(references) != 1 {
+		t.Fatalf("references = %#v, error = %v", references, err)
+	}
+	details, err := adapter.GetOperationalIntent(context.Background(), references[0])
+	if err != nil || details.Reference.Version != 3 {
+		t.Fatalf("details = %#v, error = %v", details, err)
+	}
+}
+
+func TestClientAdapterReportsDSSResponseFailures(t *testing.T) {
+	area, err := toSCDVolume(testVolume(time.Now().UTC()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name       string
+		response   *http.Response
+		wantStatus int
+		wantText   string
+	}{
+		{
+			name: "status",
+			response: &http.Response{
+				StatusCode: http.StatusServiceUnavailable,
+				Status:     "503 Service Unavailable",
+				Body:       io.NopCloser(strings.NewReader("unavailable")),
+			},
+			wantStatus: http.StatusServiceUnavailable,
+		},
+		{
+			name: "missing JSON",
+			response: &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     http.Header{"Content-Type": []string{"text/plain"}},
+				Body:       io.NopCloser(strings.NewReader("{}")),
+			},
+			wantText: "without a JSON body",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := testDSSClient(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
+				copy := *test.response
+				return &copy, nil
+			}))
+			adapter := NewClientWithPeer(client, client, true)
+			_, err := adapter.QueryOperationalIntentReferences(context.Background(), area)
+			if err == nil {
+				t.Fatal("expected query error")
+			}
+			if test.wantStatus != 0 {
+				var responseErr *dss.SCDResponseError
+				if !errors.As(err, &responseErr) || responseErr.StatusCode != test.wantStatus {
+					t.Fatalf("error = %v", err)
+				}
+			}
+			if test.wantText != "" && !strings.Contains(err.Error(), test.wantText) {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+func TestPeerHTTPClientEnforcesRedirectAndAddressPolicy(t *testing.T) {
+	secure := NewPeerHTTPClient(time.Second, false)
+	private, err := http.NewRequest(http.MethodGet, "https://127.0.0.1/intent", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := secure.CheckRedirect(private, nil); err == nil {
+		t.Fatal("private redirect unexpectedly accepted")
+	}
+	via := make([]*http.Request, 10)
+	if err := secure.CheckRedirect(private, via); err == nil || !strings.Contains(err.Error(), "too many") {
+		t.Fatalf("redirect limit error = %v", err)
+	}
+
+	insecure := NewPeerHTTPClient(time.Second, true)
+	local, err := http.NewRequest(http.MethodGet, "http://localhost:8080/intent", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := insecure.CheckRedirect(local, nil); err != nil {
+		t.Fatalf("local development redirect rejected: %v", err)
+	}
+	if publicPeerIP(net.ParseIP("127.0.0.1")) || !publicPeerIP(net.ParseIP("8.8.8.8")) {
+		t.Fatal("peer address classification is incorrect")
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func testDSSClient(t *testing.T, transport http.RoundTripper) *dss.Client {
+	t.Helper()
+	client, err := dss.NewClient(dss.Config{
+		BaseURL:    "http://dss.example",
+		HTTPClient: &http.Client{Transport: transport},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
+func jsonResponse(t *testing.T, status int, value any) *http.Response {
+	t.Helper()
+	body, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &http.Response{
+		StatusCode: status,
+		Status:     http.StatusText(status),
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(body)),
 	}
 }
 
