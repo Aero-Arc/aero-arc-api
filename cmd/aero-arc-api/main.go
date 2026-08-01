@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider"
+	providerfactory "github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider/factory"
 	interussprovider "github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider/interuss"
 	"github.com/Aero-Arc/aero-arc-api/internal/config"
 	"github.com/Aero-Arc/aero-arc-api/internal/httpapi"
@@ -28,7 +28,6 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/store/telemetry"
 	telemetryinfluxdb "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/influxdb"
 	telemetrymemory "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/memory"
-	"github.com/Aero-Arc/dss-clients/interuss"
 	"github.com/urfave/cli/v3"
 )
 
@@ -210,7 +209,19 @@ func run(ctx context.Context, cfg *config.Config) error {
 		defer projection.Close()
 		durableStore = durable.UseSpatialIndex(durableStore, projection)
 	}
-	providers, err := newAirspaceProviders(cfg, durableStore, projection)
+	providers, err := providerfactory.New(providerfactory.Config{
+		Providers: cfg.AirspaceProviders,
+		InterUSS: interussprovider.Config{
+			BaseURL:               cfg.DSSBaseURL,
+			StaticToken:           cfg.DSSStaticToken,
+			OAuthTokenURL:         cfg.DSSOAuthTokenURL,
+			OAuthAudience:         cfg.DSSOAuthAudience,
+			OAuthIssuer:           cfg.DSSOAuthIssuer,
+			OAuthSubject:          cfg.DSSOAuthSubject,
+			AllowInsecurePeerURLs: cfg.DSSAllowInsecurePeerURLs,
+			RequestTimeout:        cfg.RequestTimeout,
+		},
+	}, durableStore, projection)
 	if err != nil {
 		return err
 	}
@@ -307,70 +318,6 @@ func newSpatialIndex(ctx context.Context, cfg *config.Config) (spatialindex.Inde
 	default:
 		return nil, fmt.Errorf("unsupported spatial index %q", cfg.SpatialIndex)
 	}
-}
-
-func newAirspaceProviders(
-	cfg *config.Config,
-	durableStore durable.Store,
-	localIndex spatialindex.CandidateFinder,
-) ([]airspaceprovider.Provider, error) {
-	providers := make([]airspaceprovider.Provider, 0, len(cfg.AirspaceProviders))
-	for _, name := range cfg.AirspaceProviders {
-		switch name {
-		case config.AirspaceProviderLocal:
-			if localIndex == nil {
-				return nil, fmt.Errorf("local airspace provider requires a spatial index")
-			}
-			providers = append(providers, airspaceprovider.NewLocalSpatialProvider(durableStore, localIndex))
-		case config.AirspaceProviderInterUSS:
-			provider, err := newInterUSSProvider(cfg)
-			if err != nil {
-				return nil, err
-			}
-			providers = append(providers, provider)
-		default:
-			return nil, fmt.Errorf("unsupported airspace provider %q", name)
-		}
-	}
-	return providers, nil
-}
-
-func newInterUSSProvider(cfg *config.Config) (airspaceprovider.Provider, error) {
-	dssHTTPClient := &http.Client{Timeout: cfg.RequestTimeout}
-	peerHTTPClient := interussprovider.NewPeerHTTPClient(cfg.RequestTimeout, cfg.DSSAllowInsecurePeerURLs)
-	var tokenSource interuss.TokenSource
-	switch {
-	case cfg.DSSStaticToken != "":
-		tokenSource = interuss.StaticTokenSource(cfg.DSSStaticToken)
-	case cfg.DSSOAuthTokenURL != "":
-		tokenSource = interuss.DummyOAuthTokenSource{
-			TokenURL:         cfg.DSSOAuthTokenURL,
-			Scope:            interuss.ScopeUTMStrategicCoordination,
-			IntendedAudience: cfg.DSSOAuthAudience,
-			Issuer:           cfg.DSSOAuthIssuer,
-			Subject:          cfg.DSSOAuthSubject,
-			HTTPClient:       dssHTTPClient,
-		}
-	}
-	queryClient, err := interuss.NewClient(interuss.Config{
-		BaseURL:     cfg.DSSBaseURL,
-		TokenSource: tokenSource,
-		HTTPClient:  dssHTTPClient,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("configure InterUSS DSS client: %w", err)
-	}
-	peerClient, err := interuss.NewClient(interuss.Config{
-		BaseURL:     cfg.DSSBaseURL,
-		TokenSource: tokenSource,
-		HTTPClient:  peerHTTPClient,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("configure InterUSS peer client: %w", err)
-	}
-	return interussprovider.New(interussprovider.NewClientWithPeer(
-		queryClient, peerClient, cfg.DSSAllowInsecurePeerURLs,
-	)), nil
 }
 
 func newTelemetryStore(cfg *config.Config) (telemetry.Store, error) {

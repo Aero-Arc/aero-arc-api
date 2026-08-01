@@ -6,8 +6,6 @@ import (
 	"testing"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/config"
-	"github.com/Aero-Arc/aero-arc-api/internal/spatialindex"
-	spatialmemory "github.com/Aero-Arc/aero-arc-api/internal/spatialindex/memory"
 )
 
 func TestNewDurableStoreIsIndependentFromAirspaceConfiguration(t *testing.T) {
@@ -46,39 +44,5 @@ func TestNewSpatialIndexModes(t *testing.T) {
 	_, err = newSpatialIndex(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("expected invalid PostGIS configuration to fail")
-	}
-}
-
-func TestNewAirspaceProvidersUsesExplicitOrder(t *testing.T) {
-	cfg := config.Defaults()
-	cfg.AirspaceProviders = []string{config.AirspaceProviderLocal, config.AirspaceProviderInterUSS}
-	cfg.DSSBaseURL = "http://dss.example"
-	store, err := newDurableStore(cfg.DurableStore)
-	if err != nil {
-		t.Fatal(err)
-	}
-	projection := spatialindex.NewProjection(spatialmemory.New())
-	if err := projection.Rebuild(context.Background(), nil); err != nil {
-		t.Fatal(err)
-	}
-	providers, err := newAirspaceProviders(cfg, store, projection)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(providers) != 2 || providers[0].ID() != "local" || providers[1].ID() != "interuss_scd" {
-		t.Fatalf("providers = %#v", providers)
-	}
-}
-
-func TestNewInterUSSProviderBuildsConfiguredAdapter(t *testing.T) {
-	cfg := config.Defaults()
-	cfg.DSSBaseURL = "http://dss.example"
-	cfg.DSSStaticToken = "test-token"
-	provider, err := newInterUSSProvider(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if provider.ID() != "interuss_scd" {
-		t.Fatalf("provider ID = %q", provider.ID())
 	}
 }

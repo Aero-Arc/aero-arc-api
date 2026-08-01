@@ -6,6 +6,11 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 )
 
+const (
+	ProviderLocal    = "local"
+	ProviderInterUSS = "interuss"
+)
+
 type Query struct {
 	Intent  domain.OperationalIntent
 	Volumes []domain.OperationalVolume

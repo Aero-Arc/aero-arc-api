@@ -26,6 +26,19 @@ type fakeClient struct {
 	queries    int
 }
 
+func TestNewBuildsConfiguredProvider(t *testing.T) {
+	provider, err := New(Config{
+		BaseURL:     "http://dss.example",
+		StaticToken: "test-token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.ID() != "interuss_scd" {
+		t.Fatalf("provider ID = %q", provider.ID())
+	}
+}
+
 func (c *fakeClient) QueryOperationalIntentReferences(context.Context, scdv1.Volume4D) ([]scdv1.OperationalIntentReference, error) {
 	c.queries++
 	return c.references, nil
@@ -56,7 +69,7 @@ func TestProviderQueriesEachTargetAndDeduplicatesReferences(t *testing.T) {
 	second := target
 	second.ID = "target-two"
 
-	records, err := New(client).FindOperationalIntents(context.Background(), airspaceprovider.Query{
+	records, err := NewWithClient(client).FindOperationalIntents(context.Background(), airspaceprovider.Query{
 		Intent:  domain.OperationalIntent{ID: "target"},
 		Volumes: []domain.OperationalVolume{target, second},
 	})
@@ -93,7 +106,7 @@ func TestProviderReturnsSuccessfulPeersWithPartialFailure(t *testing.T) {
 		},
 	}
 
-	records, err := New(client).FindOperationalIntents(context.Background(), airspaceprovider.Query{
+	records, err := NewWithClient(client).FindOperationalIntents(context.Background(), airspaceprovider.Query{
 		Intent:  domain.OperationalIntent{ID: "target"},
 		Volumes: []domain.OperationalVolume{testVolume(now)},
 	})
@@ -110,7 +123,7 @@ func TestProviderRejectsUnsupportedTargetAltitudeReference(t *testing.T) {
 	volume.AltitudeRef = domain.AltitudeReferenceAGL
 	client := &fakeClient{}
 
-	records, err := New(client).FindOperationalIntents(context.Background(), airspaceprovider.Query{
+	records, err := NewWithClient(client).FindOperationalIntents(context.Background(), airspaceprovider.Query{
 		Intent: domain.OperationalIntent{ID: "target"}, Volumes: []domain.OperationalVolume{volume},
 	})
 	if err == nil || !strings.Contains(err.Error(), "not supported by SCD") {
@@ -133,7 +146,7 @@ func TestProviderRejectsMismatchedPeerReference(t *testing.T) {
 		},
 	}
 
-	records, err := New(client).FindOperationalIntents(context.Background(), airspaceprovider.Query{
+	records, err := NewWithClient(client).FindOperationalIntents(context.Background(), airspaceprovider.Query{
 		Intent:  domain.OperationalIntent{ID: "target"},
 		Volumes: []domain.OperationalVolume{testVolume(now)},
 	})
@@ -151,7 +164,7 @@ func TestProviderRejectsMissingStateRequiredVolumes(t *testing.T) {
 		},
 	}
 
-	records, err := New(client).FindOperationalIntents(context.Background(), airspaceprovider.Query{
+	records, err := NewWithClient(client).FindOperationalIntents(context.Background(), airspaceprovider.Query{
 		Intent:  domain.OperationalIntent{ID: "target"},
 		Volumes: []domain.OperationalVolume{testVolume(time.Now().UTC())},
 	})

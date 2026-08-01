@@ -31,7 +31,7 @@ func NewLocalSpatialProvider(
 }
 
 func (p *LocalSpatialProvider) ID() string {
-	return "local"
+	return ProviderLocal
 }
 
 func (p *LocalSpatialProvider) FindOperationalIntents(

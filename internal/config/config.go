@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider"
 )
 
 const (
@@ -14,8 +16,8 @@ const (
 	SpatialIndexMemory  = "memory"
 	SpatialIndexPostGIS = "postgis"
 
-	AirspaceProviderLocal    = "local"
-	AirspaceProviderInterUSS = "interuss"
+	AirspaceProviderLocal    = airspaceprovider.ProviderLocal
+	AirspaceProviderInterUSS = airspaceprovider.ProviderInterUSS
 )
 
 const (

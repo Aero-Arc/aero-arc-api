@@ -36,7 +36,58 @@ type Provider struct {
 	client Client
 }
 
-func New(client Client) *Provider {
+type Config struct {
+	BaseURL               string
+	StaticToken           string
+	OAuthTokenURL         string
+	OAuthAudience         string
+	OAuthIssuer           string
+	OAuthSubject          string
+	AllowInsecurePeerURLs bool
+	RequestTimeout        time.Duration
+}
+
+// New constructs an InterUSS provider and the DSS and peer clients it uses.
+func New(cfg Config) (*Provider, error) {
+	dssHTTPClient := &http.Client{Timeout: cfg.RequestTimeout}
+	peerHTTPClient := NewPeerHTTPClient(cfg.RequestTimeout, cfg.AllowInsecurePeerURLs)
+	var tokenSource dss.TokenSource
+	switch {
+	case cfg.StaticToken != "":
+		tokenSource = dss.StaticTokenSource(cfg.StaticToken)
+	case cfg.OAuthTokenURL != "":
+		tokenSource = dss.DummyOAuthTokenSource{
+			TokenURL:         cfg.OAuthTokenURL,
+			Scope:            dss.ScopeUTMStrategicCoordination,
+			IntendedAudience: cfg.OAuthAudience,
+			Issuer:           cfg.OAuthIssuer,
+			Subject:          cfg.OAuthSubject,
+			HTTPClient:       dssHTTPClient,
+		}
+	}
+	queryClient, err := dss.NewClient(dss.Config{
+		BaseURL:     cfg.BaseURL,
+		TokenSource: tokenSource,
+		HTTPClient:  dssHTTPClient,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("configure InterUSS DSS client: %w", err)
+	}
+	peerClient, err := dss.NewClient(dss.Config{
+		BaseURL:     cfg.BaseURL,
+		TokenSource: tokenSource,
+		HTTPClient:  peerHTTPClient,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("configure InterUSS peer client: %w", err)
+	}
+	return NewWithClient(NewClientWithPeer(
+		queryClient, peerClient, cfg.AllowInsecurePeerURLs,
+	)), nil
+}
+
+// NewWithClient constructs a provider around an injected client.
+func NewWithClient(client Client) *Provider {
 	return &Provider{client: client}
 }
 
