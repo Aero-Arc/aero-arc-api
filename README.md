@@ -12,7 +12,10 @@ directly.
 - Registry: live topology, liveness, relay placement, and last-known connected
   state.
 - Durable store: aircraft, batteries, battery installations, maintenance events,
-  flight records, operational intents, and conformance events.
+  flight records, operational intents and volumes, conflict findings, and
+  conformance events.
+- Spatial index: a replaceable projection of operational volumes used only for
+  local conflict-candidate discovery.
 - Telemetry store: queryable time-series telemetry samples.
 - Replay store: raw replay manifests and log chunk locations.
 
@@ -62,9 +65,9 @@ containers without deleting the data:
 docker compose down
 ```
 
-The general durable store remains in `memory` mode. Compose configures PostGIS
-as the authoritative store for operational intents, operational volumes, and
-conflict findings, so API startup fails if the database cannot be reached.
+The durable store remains authoritative and runs in `memory` mode in this
+Compose slice. PostGIS is only the local spatial index. Startup rebuilds that
+projection from the durable store and fails if PostGIS cannot be reached.
 
 Configuration is available through flags or environment variables:
 
@@ -72,6 +75,8 @@ Configuration is available through flags or environment variables:
 go run ./cmd/aero-arc-api start \
   --addr :8080 \
   --durable-store memory \
+  --spatial-index memory \
+  --airspace-provider local \
   --telemetry-store memory \
   --replay-store memory \
   --registry-mode memory \
@@ -82,6 +87,8 @@ go run ./cmd/aero-arc-api start \
 ```bash
 AERO_API_ADDR=:8080
 AERO_API_DURABLE_STORE=memory
+AERO_API_SPATIAL_INDEX=memory
+AERO_API_AIRSPACE_PROVIDERS=local
 AERO_API_TELEMETRY_STORE=memory
 AERO_API_REPLAY_STORE=memory
 AERO_API_REGISTRY_MODE=memory
@@ -103,22 +110,23 @@ service. Durable and replay stores still run in `memory` mode in this scaffold.
 
 ## Deconfliction Read/Check Slice
 
-Set `AERO_API_POSTGIS_DATABASE_URL` to make PostGIS authoritative for
-operational intents, operational volumes, and conflict findings. Startup fails
-if the configured database cannot be reached, and the required PostGIS schema
-is initialized automatically. Other scaffold records continue to use the
-general durable store.
+Set `AERO_API_SPATIAL_INDEX=postgis` and `AERO_API_POSTGIS_DATABASE_URL` to use
+PostGIS for local spatial candidate discovery. The required spatial schema is
+initialized automatically. Operational intents, versions, volumes, and
+conflict findings remain authoritative in `AERO_API_DURABLE_STORE`.
 
-Set `AERO_API_DSS_BASE_URL` to add InterUSS SCD discovery. The check queries DSS
-references for each submitted WGS84 volume, fetches full details from each
-managing USS, and evaluates those candidates together with local PostGIS
-candidates. Peer failures produce an indeterminate, blocking finding while
-successfully retrieved peers are still evaluated.
+Airspace sources are explicit and composable. `local` queries the configured
+spatial index and hydrates candidates from the durable store. `interuss` queries
+DSS references for each submitted WGS84 volume and fetches full details from
+each managing USS. Peer failures produce an indeterminate, blocking finding
+while successfully retrieved peers are still evaluated.
 
 For a local InterUSS stack:
 
 ```bash
+AERO_API_SPATIAL_INDEX=postgis
 AERO_API_POSTGIS_DATABASE_URL='postgres://aero_arc:aero_arc_dev@localhost:5432/aero_arc?sslmode=disable'
+AERO_API_AIRSPACE_PROVIDERS='local,interuss'
 AERO_API_DSS_BASE_URL='http://localhost:8082'
 AERO_API_DSS_OAUTH_TOKEN_URL='http://localhost:8085/token'
 AERO_API_DSS_OAUTH_AUDIENCE='localhost'
@@ -189,21 +197,24 @@ Operational workflows:
 
 ### Current Deconfliction Behavior
 
-The deconfliction service combines configured airspace providers. Without a
-PostGIS URL, the local provider uses the in-memory durable store. With PostGIS
-enabled, it applies indexed spatial, time, altitude, lifecycle, and
-intent-version predicates before the shared evaluator runs. The evaluator:
+The deconfliction service combines the providers named by
+`AERO_API_AIRSPACE_PROVIDERS`. The local provider uses the selected spatial
+index for broad-phase geometry, time, and altitude filtering, then reloads the
+candidate intent version and volumes from the authoritative durable store. The
+evaluator:
 
-- evaluates the latest version of an operational intent;
+- evaluates the target's latest version while retaining an accepted candidate
+  version when a newer draft is being edited;
 - compares overlapping time windows and compatible altitude references;
 - accepts inline GeoJSON `Polygon` geometry;
 - compares polygon bounding boxes rather than exact polygon intersections; and
 - persists version-scoped conflict findings in the configured operational
   store.
 
-InterUSS SCD discovery is optional. When configured, DSS references are queried
-and full operational-intent details are retrieved directly from each managing
-USS. Unsupported or unavailable peer data fails closed.
+InterUSS SCD discovery is optional and must be selected explicitly. When
+selected, DSS references are queried and full operational-intent details are
+retrieved directly from each managing USS. Unsupported or unavailable peer data
+fails closed.
 
 ## Demo Data
 
@@ -253,7 +264,9 @@ make check
 
 ## TODO
 
-- Expand PostGIS persistence beyond the operational-intent slice.
+- Add a persistent durable-store adapter and an outbox-backed spatial projector;
+  the current vertical slice updates the projection synchronously and fails
+  local checks closed after a projection error.
 - Harden the InfluxDB telemetry schema and production query integration.
 - Add real replay storage backed by S3/object storage manifests and log chunks.
 - Expand registry mapping once aircraft-to-agent identity is finalized. For now,

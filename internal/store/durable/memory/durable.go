@@ -311,6 +311,33 @@ func (s *Store) ReplaceOperationalVolumes(_ context.Context, intentID string, in
 	return nil
 }
 
+func (s *Store) ReplaceOperationalIntent(
+	_ context.Context,
+	expectedVersion int,
+	intent domain.OperationalIntent,
+	volumes []domain.OperationalVolume,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.latestOperationalIntent(intent.ID)
+	if !ok {
+		return durable.ErrNotFound
+	}
+	if current.Version != expectedVersion {
+		return durable.ErrVersionConflict
+	}
+	s.operationalIntents[operationalIntentKey(intent.ID, intent.Version)] = intent
+	for key, volume := range s.operationalVolumes {
+		if volume.IntentID == intent.ID && volume.IntentVersion == intent.Version {
+			delete(s.operationalVolumes, key)
+		}
+	}
+	for _, volume := range volumes {
+		s.operationalVolumes[operationalVolumeKey(volume)] = volume
+	}
+	return nil
+}
+
 func (s *Store) ListOperationalVolumes(_ context.Context, intentID string) ([]domain.OperationalVolume, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

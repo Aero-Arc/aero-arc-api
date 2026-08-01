@@ -6,73 +6,42 @@ import (
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
+	"github.com/Aero-Arc/aero-arc-api/internal/spatialindex"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 )
 
-// LocalStoreAirspaceProvider discovers conflict candidates from the local
-// durable store. It filters by intent lifecycle status, current intent
-// version, time overlap, and altitude band before any geometry is parsed.
-type LocalStoreAirspaceProvider struct {
+// NewLocalStoreAirspaceProvider is the in-process fallback used by tests and
+// callers that do not configure a separate spatial index. Production startup
+// wires NewLocalSpatialProvider explicitly.
+func NewLocalStoreAirspaceProvider(durableStore durable.Store) *LocalSpatialProvider {
+	return NewLocalSpatialProvider(durableStore, &durableVolumeFinder{durable: durableStore})
+}
+
+type durableVolumeFinder struct {
 	durable durable.Store
 }
 
-func NewLocalStoreAirspaceProvider(durableStore durable.Store) *LocalStoreAirspaceProvider {
-	return &LocalStoreAirspaceProvider{durable: durableStore}
-}
-
-func (p *LocalStoreAirspaceProvider) ID() string {
-	return "local_durable_store"
-}
-
-func (p *LocalStoreAirspaceProvider) FindOperationalIntents(
+func (f *durableVolumeFinder) FindCandidates(
 	ctx context.Context,
-	query Query,
-) ([]OperationalIntent, error) {
-	peers, err := p.durable.ListOperationalIntents(ctx, "")
-	if err != nil {
-		return nil, fmt.Errorf("list operational intents: %w", err)
-	}
-	allVolumes, err := p.durable.ListOperationalVolumes(ctx, "")
+	query spatialindex.Query,
+) ([]spatialindex.Candidate, error) {
+	allVolumes, err := f.durable.ListOperationalVolumes(ctx, "")
 	if err != nil {
 		return nil, fmt.Errorf("list candidate operational volumes: %w", err)
 	}
-	volumesByIntent := make(map[string][]domain.OperationalVolume)
+	unique := make(map[string]spatialindex.Candidate)
 	for _, volume := range allVolumes {
-		volumesByIntent[volume.IntentID] = append(volumesByIntent[volume.IntentID], volume)
-	}
-
-	records := make([]OperationalIntent, 0)
-	for _, peer := range peers {
-		if peer.ID == query.Intent.ID || !candidateConflictEligible(peer.Status) {
+		if volume.IntentID == query.ExcludeIntentID || !peerVolumeCouldConflict(query.Volumes, volume) {
 			continue
 		}
-		peerVolumes := make([]domain.OperationalVolume, 0)
-		for _, peerVolume := range volumesForVersion(volumesByIntent[peer.ID], peer.Version) {
-			if peerVolumeCouldConflict(query.Volumes, peerVolume) {
-				peerVolumes = append(peerVolumes, peerVolume)
-			}
-		}
-		if len(peerVolumes) == 0 {
-			continue
-		}
-		record := OperationalIntent{
-			Source: Source{
-				ProviderID: p.ID(), ReferenceID: peer.ID, Manager: peer.OperatorID,
-				Version: peer.Version, Local: true,
-			},
-			Intent: peer,
-		}
-		for _, volume := range peerVolumes {
-			if volume.VolumeType == domain.OperationalVolumeContingency ||
-				volume.VolumeType == domain.OperationalVolumeEmergency {
-				record.OffNominalVolumes = append(record.OffNominalVolumes, volume)
-			} else {
-				record.Volumes = append(record.Volumes, volume)
-			}
-		}
-		records = append(records, record)
+		candidate := spatialindex.Candidate{IntentID: volume.IntentID, IntentVersion: volume.IntentVersion}
+		unique[fmt.Sprintf("%s:%d", candidate.IntentID, candidate.IntentVersion)] = candidate
 	}
-	return records, nil
+	candidates := make([]spatialindex.Candidate, 0, len(unique))
+	for _, candidate := range unique {
+		candidates = append(candidates, candidate)
+	}
+	return candidates, nil
 }
 
 // peerVolumeCouldConflict is the broad-phase 1D prefilter applied before any

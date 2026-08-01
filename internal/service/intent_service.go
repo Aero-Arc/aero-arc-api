@@ -278,20 +278,11 @@ func (s *IntentService) ModifyIntent(ctx context.Context, intentID string, req M
 		volumes = append(volumes, volume)
 	}
 
-	if replacer, ok := s.durable.(durable.OperationalIntentReplacer); ok {
-		if err := replacer.ReplaceOperationalIntent(ctx, sourceVersion, intent, volumes); err != nil {
-			if errors.Is(err, durable.ErrVersionConflict) {
-				return ModifyIntentResult{}, fmt.Errorf("%w: operational intent changed during modification", ErrInvalidTransition)
-			}
-			return ModifyIntentResult{}, fmt.Errorf("replace operational intent: %w", err)
+	if err := s.durable.ReplaceOperationalIntent(ctx, sourceVersion, intent, volumes); err != nil {
+		if errors.Is(err, durable.ErrVersionConflict) {
+			return ModifyIntentResult{}, fmt.Errorf("%w: operational intent changed during modification", ErrInvalidTransition)
 		}
-	} else {
-		if err := s.durable.UpdateOperationalIntent(ctx, intent); err != nil {
-			return ModifyIntentResult{}, fmt.Errorf("update operational intent: %w", err)
-		}
-		if err := s.durable.ReplaceOperationalVolumes(ctx, intent.ID, intent.Version, volumes); err != nil {
-			return ModifyIntentResult{}, fmt.Errorf("replace operational volumes: %w", err)
-		}
+		return ModifyIntentResult{}, fmt.Errorf("replace operational intent: %w", err)
 	}
 	result.Intent = intent
 	result.Volumes = volumes

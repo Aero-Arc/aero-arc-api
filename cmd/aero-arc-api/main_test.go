@@ -6,35 +6,67 @@ import (
 	"testing"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/config"
+	"github.com/Aero-Arc/aero-arc-api/internal/spatialindex"
+	spatialmemory "github.com/Aero-Arc/aero-arc-api/internal/spatialindex/memory"
 )
 
-func TestNewDurableStoreUsesLocalMemoryProviderWithoutPostGIS(t *testing.T) {
-	cfg := config.Defaults()
-	store, providers, closeStore, err := newDurableStore(context.Background(), cfg)
+func TestNewDurableStoreIsIndependentFromAirspaceConfiguration(t *testing.T) {
+	store, err := newDurableStore("memory")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(closeStore)
-	if store == nil || len(providers) != 1 || providers[0].ID() != "local_durable_store" {
-		t.Fatalf("store = %#v, providers = %#v", store, providers)
+	if store == nil {
+		t.Fatal("store is nil")
 	}
 }
 
 func TestNewDurableStoreRejectsUnsupportedBaseStore(t *testing.T) {
-	cfg := config.Defaults()
-	cfg.DurableStore = "unknown"
-	_, _, _, err := newDurableStore(context.Background(), cfg)
+	_, err := newDurableStore("unknown")
 	if err == nil || !strings.Contains(err.Error(), "unsupported durable store") {
 		t.Fatalf("error = %v", err)
 	}
 }
 
-func TestNewDurableStoreReportsInvalidPostGISConfiguration(t *testing.T) {
+func TestNewSpatialIndexModes(t *testing.T) {
 	cfg := config.Defaults()
+	cfg.SpatialIndex = config.SpatialIndexNone
+	index, err := newSpatialIndex(context.Background(), cfg)
+	if err != nil || index != nil {
+		t.Fatalf("none index = %#v, error = %v", index, err)
+	}
+	cfg.SpatialIndex = config.SpatialIndexMemory
+	index, err = newSpatialIndex(context.Background(), cfg)
+	if err != nil || index == nil || index.ID() != "memory" {
+		t.Fatalf("memory index = %#v, error = %v", index, err)
+	}
+	index.Close()
+
+	cfg.SpatialIndex = config.SpatialIndexPostGIS
 	cfg.PostGISDatabaseURL = "postgres://invalid host"
-	_, _, _, err := newDurableStore(context.Background(), cfg)
+	_, err = newSpatialIndex(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("expected invalid PostGIS configuration to fail")
+	}
+}
+
+func TestNewAirspaceProvidersUsesExplicitOrder(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.AirspaceProviders = []string{config.AirspaceProviderLocal, config.AirspaceProviderInterUSS}
+	cfg.DSSBaseURL = "http://dss.example"
+	store, err := newDurableStore(cfg.DurableStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection := spatialindex.NewProjection(spatialmemory.New())
+	if err := projection.Rebuild(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	providers, err := newAirspaceProviders(cfg, store, projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(providers) != 2 || providers[0].ID() != "local" || providers[1].ID() != "interuss_scd" {
+		t.Fatalf("providers = %#v", providers)
 	}
 }
 

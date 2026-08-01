@@ -5,12 +5,23 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
+)
+
+const (
+	SpatialIndexNone    = "none"
+	SpatialIndexMemory  = "memory"
+	SpatialIndexPostGIS = "postgis"
+
+	AirspaceProviderLocal    = "local"
+	AirspaceProviderInterUSS = "interuss"
 )
 
 const (
 	defaultAddr                = ":8080"
 	defaultDurableStore        = "memory"
+	defaultSpatialIndex        = SpatialIndexMemory
 	defaultTelemetryStore      = "memory"
 	defaultReplayStore         = "memory"
 	defaultRegistryMode        = "memory"
@@ -27,6 +38,8 @@ const (
 type Config struct {
 	Addr                     string
 	DurableStore             string
+	SpatialIndex             string
+	AirspaceProviders        []string
 	TelemetryStore           string
 	InfluxDBHost             string
 	InfluxDBToken            string
@@ -52,6 +65,8 @@ func Defaults() *Config {
 	return &Config{
 		Addr:                defaultAddr,
 		DurableStore:        defaultDurableStore,
+		SpatialIndex:        defaultSpatialIndex,
+		AirspaceProviders:   []string{AirspaceProviderLocal},
 		TelemetryStore:      defaultTelemetryStore,
 		ReplayStore:         defaultReplayStore,
 		RegistryMode:        defaultRegistryMode,
@@ -71,6 +86,8 @@ func Load() (*Config, error) {
 
 	applyStringEnv("AERO_API_ADDR", &cfg.Addr)
 	applyStringEnv("AERO_API_DURABLE_STORE", &cfg.DurableStore)
+	applyStringEnv("AERO_API_SPATIAL_INDEX", &cfg.SpatialIndex)
+	applyStringSliceEnv("AERO_API_AIRSPACE_PROVIDERS", &cfg.AirspaceProviders)
 	applyStringEnv("AERO_API_TELEMETRY_STORE", &cfg.TelemetryStore)
 	applyStringEnv("AERO_API_INFLUXDB_HOST", &cfg.InfluxDBHost)
 	applyStringEnv("AERO_API_INFLUXDB_TOKEN", &cfg.InfluxDBToken)
@@ -113,6 +130,46 @@ func (cfg *Config) Validate() error {
 	if cfg.DurableStore != "memory" {
 		// TODO: support tidb and postgres durable stores.
 		return fmt.Errorf("unsupported durable store %q", cfg.DurableStore)
+	}
+	switch cfg.SpatialIndex {
+	case SpatialIndexNone, SpatialIndexMemory, SpatialIndexPostGIS:
+	default:
+		return fmt.Errorf("unsupported spatial index %q", cfg.SpatialIndex)
+	}
+	providers := make(map[string]struct{}, len(cfg.AirspaceProviders))
+	for index, provider := range cfg.AirspaceProviders {
+		provider = strings.TrimSpace(provider)
+		cfg.AirspaceProviders[index] = provider
+		switch provider {
+		case AirspaceProviderLocal, AirspaceProviderInterUSS:
+		case "":
+			return fmt.Errorf("AERO_API_AIRSPACE_PROVIDERS cannot contain an empty provider")
+		default:
+			return fmt.Errorf("unsupported airspace provider %q", provider)
+		}
+		if _, exists := providers[provider]; exists {
+			return fmt.Errorf("duplicate airspace provider %q", provider)
+		}
+		providers[provider] = struct{}{}
+	}
+	if len(providers) == 0 {
+		return fmt.Errorf("AERO_API_AIRSPACE_PROVIDERS must configure at least one provider")
+	}
+	if _, local := providers[AirspaceProviderLocal]; local && cfg.SpatialIndex == SpatialIndexNone {
+		return fmt.Errorf("local airspace provider requires a spatial index")
+	}
+	if cfg.SpatialIndex == SpatialIndexPostGIS && cfg.PostGISDatabaseURL == "" {
+		return fmt.Errorf("AERO_API_POSTGIS_DATABASE_URL is required when spatial index is postgis")
+	}
+	if cfg.SpatialIndex != SpatialIndexPostGIS && cfg.PostGISDatabaseURL != "" {
+		return fmt.Errorf("AERO_API_POSTGIS_DATABASE_URL requires spatial index postgis")
+	}
+	_, interussEnabled := providers[AirspaceProviderInterUSS]
+	if interussEnabled && cfg.DSSBaseURL == "" {
+		return fmt.Errorf("AERO_API_DSS_BASE_URL is required when airspace provider interuss is enabled")
+	}
+	if !interussEnabled && (cfg.DSSBaseURL != "" || cfg.DSSStaticToken != "" || cfg.DSSOAuthTokenURL != "" || cfg.DSSAllowInsecurePeerURLs) {
+		return fmt.Errorf("InterUSS DSS configuration requires airspace provider interuss")
 	}
 	if cfg.TelemetryStore != "memory" && cfg.TelemetryStore != "influxdb" {
 		return fmt.Errorf("unsupported telemetry store %q", cfg.TelemetryStore)
@@ -174,6 +231,12 @@ func (cfg *Config) Validate() error {
 func applyStringEnv(key string, dst *string) {
 	if v := os.Getenv(key); v != "" {
 		*dst = v
+	}
+}
+
+func applyStringSliceEnv(key string, dst *[]string) {
+	if value := os.Getenv(key); value != "" {
+		*dst = strings.Split(value, ",")
 	}
 }
 

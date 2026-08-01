@@ -35,7 +35,7 @@ func TestLocalStoreProviderCheckIntentReturnsCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckIntent returned error: %v", err)
 	}
-	if provider.ID() != "local_durable_store" {
+	if provider.ID() != "local" {
 		t.Fatalf("provider ID = %q", provider.ID())
 	}
 	if len(records) != 1 || records[0].Intent.ID != peer.ID ||

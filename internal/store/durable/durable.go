@@ -52,6 +52,7 @@ type Store interface {
 	ListOperationalIntentVersions(ctx context.Context, intentID string) ([]domain.OperationalIntent, error)
 	RecordOperationalVolume(ctx context.Context, volume domain.OperationalVolume) error
 	ReplaceOperationalVolumes(ctx context.Context, intentID string, intentVersion int, volumes []domain.OperationalVolume) error
+	ReplaceOperationalIntent(ctx context.Context, expectedVersion int, intent domain.OperationalIntent, volumes []domain.OperationalVolume) error
 	ListOperationalVolumes(ctx context.Context, intentID string) ([]domain.OperationalVolume, error)
 	UpsertRegulatoryAuthorization(ctx context.Context, authorization domain.RegulatoryAuthorization) error
 	GetRegulatoryAuthorization(ctx context.Context, authorizationID string) (domain.RegulatoryAuthorization, error)
