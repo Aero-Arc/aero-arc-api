@@ -1,4 +1,4 @@
-package airspaceprovider
+package localprovider
 
 import (
 	"context"
@@ -10,11 +10,11 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 )
 
-// NewLocalStoreAirspaceProvider is the in-process fallback used by tests and
-// callers that do not configure a separate spatial index. Production startup
-// wires NewLocalSpatialProvider explicitly.
-func NewLocalStoreAirspaceProvider(durableStore durable.Store) *LocalSpatialProvider {
-	return NewLocalSpatialProvider(durableStore, &durableVolumeFinder{durable: durableStore})
+// NewFromStore is the in-process fallback used by tests and callers that do
+// not configure a separate spatial index. Production startup calls New with
+// an explicit spatial index.
+func NewFromStore(durableStore durable.Store) *Provider {
+	return New(durableStore, &durableVolumeFinder{durable: durableStore})
 }
 
 type durableVolumeFinder struct {

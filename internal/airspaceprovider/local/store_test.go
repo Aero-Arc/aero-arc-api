@@ -1,10 +1,11 @@
-package airspaceprovider
+package localprovider
 
 import (
 	"context"
 	"testing"
 	"time"
 
+	"github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider"
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 )
@@ -30,8 +31,8 @@ func TestLocalStoreProviderCheckIntentReturnsCandidates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	provider := NewLocalStoreAirspaceProvider(store)
-	records, err := provider.FindOperationalIntents(ctx, Query{Intent: target, Volumes: []domain.OperationalVolume{targetVolume}})
+	provider := NewFromStore(store)
+	records, err := provider.FindOperationalIntents(ctx, airspaceprovider.Query{Intent: target, Volumes: []domain.OperationalVolume{targetVolume}})
 	if err != nil {
 		t.Fatalf("CheckIntent returned error: %v", err)
 	}
@@ -61,7 +62,7 @@ func TestLocalStoreProviderExcludesIneligibleIntents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	records, err := NewLocalStoreAirspaceProvider(store).FindOperationalIntents(ctx, Query{Intent: target, Volumes: []domain.OperationalVolume{targetVolume}})
+	records, err := NewFromStore(store).FindOperationalIntents(ctx, airspaceprovider.Query{Intent: target, Volumes: []domain.OperationalVolume{targetVolume}})
 	if err != nil {
 		t.Fatalf("CheckIntent returned error: %v", err)
 	}

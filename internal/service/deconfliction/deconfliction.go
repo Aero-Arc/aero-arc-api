@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider"
+	localprovider "github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider/local"
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 )
@@ -34,7 +35,7 @@ func NewDeconflictionServiceWithClock(store durable.Store, now func() time.Time,
 		}
 	}
 	if len(configured) == 0 {
-		configured = append(configured, airspaceprovider.NewLocalStoreAirspaceProvider(store))
+		configured = append(configured, localprovider.NewFromStore(store))
 	}
 	return &DeconflictionService{durable: store, providers: configured, now: now}
 }

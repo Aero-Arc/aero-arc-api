@@ -12,6 +12,7 @@ import (
 
 	"github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider"
 	interussprovider "github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider/interuss"
+	localprovider "github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider/local"
 	"github.com/Aero-Arc/aero-arc-api/internal/config"
 	"github.com/Aero-Arc/aero-arc-api/internal/httpapi"
 	"github.com/Aero-Arc/aero-arc-api/internal/registry"
@@ -320,7 +321,7 @@ func newAirspaceProviders(
 			if localIndex == nil {
 				return nil, fmt.Errorf("local airspace provider requires a spatial index")
 			}
-			providers = append(providers, airspaceprovider.NewLocalSpatialProvider(durableStore, localIndex))
+			providers = append(providers, localprovider.New(durableStore, localIndex))
 		case airspaceprovider.ProviderInterUSS:
 			provider, err := newInterUSSProvider(cfg)
 			if err != nil {

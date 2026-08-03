@@ -1,10 +1,11 @@
-package airspaceprovider
+package localprovider
 
 import (
 	"context"
 	"testing"
 	"time"
 
+	"github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider"
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/spatialindex"
 	spatialmemory "github.com/Aero-Arc/aero-arc-api/internal/spatialindex/memory"
@@ -12,7 +13,7 @@ import (
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 )
 
-func TestLocalSpatialProviderHydratesAuthoritativeCandidate(t *testing.T) {
+func TestProviderHydratesAuthoritativeCandidate(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, time.August, 1, 12, 0, 0, 0, time.UTC)
 	base := durablememory.NewStore()
@@ -38,8 +39,8 @@ func TestLocalSpatialProviderHydratesAuthoritativeCandidate(t *testing.T) {
 		}
 	}
 
-	provider := NewLocalSpatialProvider(store, projection)
-	records, err := provider.FindOperationalIntents(ctx, Query{Intent: target, Volumes: []domain.OperationalVolume{targetVolume}})
+	provider := New(store, projection)
+	records, err := provider.FindOperationalIntents(ctx, airspaceprovider.Query{Intent: target, Volumes: []domain.OperationalVolume{targetVolume}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,15 +49,15 @@ func TestLocalSpatialProviderHydratesAuthoritativeCandidate(t *testing.T) {
 	}
 }
 
-func TestLocalSpatialProviderFailsClosedWhenProjectionIsOutOfSync(t *testing.T) {
+func TestProviderFailsClosedWhenProjectionIsOutOfSync(t *testing.T) {
 	ctx := context.Background()
 	index := &failingSpatialIndex{}
 	projection := spatialindex.NewProjection(index)
 	if err := projection.Rebuild(ctx, nil); err == nil {
 		t.Fatal("expected rebuild failure")
 	}
-	provider := NewLocalSpatialProvider(durablememory.NewStore(), projection)
-	if _, err := provider.FindOperationalIntents(ctx, Query{}); err == nil {
+	provider := New(durablememory.NewStore(), projection)
+	if _, err := provider.FindOperationalIntents(ctx, airspaceprovider.Query{}); err == nil {
 		t.Fatal("expected out-of-sync projection error")
 	}
 }

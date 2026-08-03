@@ -1,4 +1,4 @@
-package airspaceprovider
+package localprovider
 
 import (
 	"context"
@@ -6,14 +6,15 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider"
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/spatialindex"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 )
 
-// LocalSpatialProvider uses a spatial projection for candidate discovery and
+// Provider uses a spatial projection for candidate discovery and
 // hydrates every result from the authoritative durable store.
-type LocalSpatialProvider struct {
+type Provider struct {
 	durable operationalReader
 	spatial spatialindex.CandidateFinder
 }
@@ -23,21 +24,21 @@ type operationalReader interface {
 	ListOperationalVolumes(context.Context, string) ([]domain.OperationalVolume, error)
 }
 
-func NewLocalSpatialProvider(
+func New(
 	durableStore operationalReader,
 	spatialIndex spatialindex.CandidateFinder,
-) *LocalSpatialProvider {
-	return &LocalSpatialProvider{durable: durableStore, spatial: spatialIndex}
+) *Provider {
+	return &Provider{durable: durableStore, spatial: spatialIndex}
 }
 
-func (p *LocalSpatialProvider) ID() string {
-	return ProviderLocal
+func (p *Provider) ID() string {
+	return airspaceprovider.ProviderLocal
 }
 
-func (p *LocalSpatialProvider) FindOperationalIntents(
+func (p *Provider) FindOperationalIntents(
 	ctx context.Context,
-	query Query,
-) ([]OperationalIntent, error) {
+	query airspaceprovider.Query,
+) ([]airspaceprovider.OperationalIntent, error) {
 	if p.durable == nil || p.spatial == nil {
 		return nil, fmt.Errorf("local spatial provider is not configured")
 	}
@@ -76,7 +77,7 @@ func (p *LocalSpatialProvider) FindOperationalIntents(
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	records := make([]OperationalIntent, 0, len(ids))
+	records := make([]airspaceprovider.OperationalIntent, 0, len(ids))
 	for _, id := range ids {
 		intent := selected[id]
 		volumes, err := p.durable.ListOperationalVolumes(ctx, id)
@@ -84,8 +85,8 @@ func (p *LocalSpatialProvider) FindOperationalIntents(
 			readErrors = append(readErrors, fmt.Errorf("list candidate %s volumes: %w", id, err))
 			continue
 		}
-		record := OperationalIntent{
-			Source: Source{
+		record := airspaceprovider.OperationalIntent{
+			Source: airspaceprovider.Source{
 				ProviderID: p.ID(), ReferenceID: intent.ID, Manager: intent.OperatorID,
 				Version: intent.Version, Local: true,
 			},
