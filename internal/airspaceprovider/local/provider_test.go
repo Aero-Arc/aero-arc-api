@@ -78,3 +78,17 @@ func (*failingSpatialIndex) ReplaceVolumes(context.Context, string, int, []domai
 func (*failingSpatialIndex) FindCandidates(context.Context, spatialindex.Query) ([]spatialindex.Candidate, error) {
 	return nil, nil
 }
+
+func testVolume(id, intentID string, now time.Time) domain.OperationalVolume {
+	return domain.OperationalVolume{
+		ID:            id,
+		IntentID:      intentID,
+		IntentVersion: 1,
+		MinAltitudeM:  10,
+		MaxAltitudeM:  120,
+		AltitudeRef:   domain.AltitudeReferenceWGS84,
+		StartsAt:      now,
+		EndsAt:        now.Add(time.Hour),
+		GeoJSON:       `{"type":"Polygon","coordinates":[[[-97,32],[-96,32],[-96,33],[-97,33],[-97,32]]]}`,
+	}
+}

@@ -18,7 +18,7 @@ func TestIntentLifecycleHappyPath(t *testing.T) {
 	now := fixedWorkflowTime()
 	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
 
-	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intents := NewIntentServiceWithClock(store, fixedClock(now), nil)
 	preflight := NewPreflightServiceWithClock(store, fixedClock(now))
 
 	intent, err := intents.CreateIntent(ctx, workflowIntentRequest(now))
@@ -65,7 +65,7 @@ func TestActivationBlockedWhenNoOperationalVolumeExists(t *testing.T) {
 	now := fixedWorkflowTime()
 	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
 
-	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intents := NewIntentServiceWithClock(store, fixedClock(now), nil)
 	intent, err := intents.CreateIntent(ctx, workflowIntentRequest(now))
 	if err != nil {
 		t.Fatalf("CreateIntent returned error: %v", err)
@@ -88,7 +88,7 @@ func TestActivationBlockedWhenNoPreflightChecksExist(t *testing.T) {
 	now := fixedWorkflowTime()
 	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
 
-	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intents := NewIntentServiceWithClock(store, fixedClock(now), nil)
 	intent, err := intents.CreateIntent(ctx, workflowIntentRequest(now))
 	if err != nil {
 		t.Fatalf("CreateIntent returned error: %v", err)
@@ -114,7 +114,7 @@ func TestAddOperationalVolumeSucceedsForDraftIntent(t *testing.T) {
 	now := fixedWorkflowTime()
 	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
 
-	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intents := NewIntentServiceWithClock(store, fixedClock(now), nil)
 	intent, err := intents.CreateIntent(ctx, workflowIntentRequest(now))
 	if err != nil {
 		t.Fatalf("CreateIntent returned error: %v", err)
@@ -135,7 +135,7 @@ func TestAddOperationalVolumeFailsAfterSubmit(t *testing.T) {
 	now := fixedWorkflowTime()
 	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
 
-	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intents := NewIntentServiceWithClock(store, fixedClock(now), nil)
 	intent, err := intents.CreateIntent(ctx, workflowIntentRequest(now))
 	if err != nil {
 		t.Fatalf("CreateIntent returned error: %v", err)
@@ -155,7 +155,7 @@ func TestAddOperationalVolumeFailsAfterAccept(t *testing.T) {
 	now := fixedWorkflowTime()
 	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
 
-	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intents := NewIntentServiceWithClock(store, fixedClock(now), nil)
 	intent := seedSubmittedIntentWithVolume(t, ctx, store, now)
 	if _, err := intents.AcceptIntent(ctx, intent.ID); err != nil {
 		t.Fatalf("AcceptIntent returned error: %v", err)
@@ -172,7 +172,7 @@ func TestAddOperationalVolumeFailsAfterActivate(t *testing.T) {
 	now := fixedWorkflowTime()
 	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
 
-	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intents := NewIntentServiceWithClock(store, fixedClock(now), nil)
 	intent := seedActiveIntentWithVolume(t, ctx, store, now)
 
 	if _, err := intents.AddOperationalVolume(ctx, intent.ID, workflowVolumeRequest(now)); !errors.Is(err, ErrInvalidTransition) {
@@ -186,7 +186,7 @@ func TestModifyDraftIntentReplacesEditableVersionVolumes(t *testing.T) {
 	now := fixedWorkflowTime()
 	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
 
-	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intents := NewIntentServiceWithClock(store, fixedClock(now), nil)
 	intent, err := intents.CreateIntent(ctx, workflowIntentRequest(now))
 	if err != nil {
 		t.Fatalf("CreateIntent returned error: %v", err)
@@ -245,7 +245,7 @@ func TestModifySubmittedIntentRequiresFreshPreflightForReplacementVolumes(t *tes
 	}
 
 	modifyAt := now.Add(10 * time.Minute)
-	intents := NewIntentServiceWithClock(store, fixedClock(modifyAt))
+	intents := NewIntentServiceWithClock(store, fixedClock(modifyAt), nil)
 	if _, err := intents.ModifyIntent(ctx, intent.ID, ModifyIntentRequest{
 		Reason:          "operator_adjustment",
 		ExpectedVersion: 1,
@@ -293,7 +293,7 @@ func TestModifyAcceptedIntentCreatesDraftNextVersion(t *testing.T) {
 	now := fixedWorkflowTime()
 	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
 
-	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intents := NewIntentServiceWithClock(store, fixedClock(now), nil)
 	intent := seedSubmittedIntentWithVolume(t, ctx, store, now)
 	intent, err := intents.AcceptIntent(ctx, intent.ID)
 	if err != nil {
@@ -364,7 +364,7 @@ func TestModifyActiveIntentBlocked(t *testing.T) {
 	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
 	intent := seedActiveIntentWithVolume(t, ctx, store, now)
 
-	_, err := NewIntentServiceWithClock(store, fixedClock(now)).ModifyIntent(ctx, intent.ID, ModifyIntentRequest{
+	_, err := NewIntentServiceWithClock(store, fixedClock(now), nil).ModifyIntent(ctx, intent.ID, ModifyIntentRequest{
 		Reason:          "operator_adjustment",
 		ExpectedVersion: intent.Version,
 		Intent: ModifyIntentFields{
@@ -439,7 +439,7 @@ func TestPreflightClearOverwritesStaleBlockingFinding(t *testing.T) {
 		t.Fatalf("stale blocking battery SOH finding remained: %#v", findings)
 	}
 
-	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intents := NewIntentServiceWithClock(store, fixedClock(now), nil)
 	if _, err = intents.AcceptIntent(ctx, intent.ID); err != nil {
 		t.Fatalf("AcceptIntent returned error: %v", err)
 	}
@@ -1121,7 +1121,7 @@ func TestActivationReadinessIgnoresPreflightAndFindingsFromOldIntentVersion(t *t
 		t.Fatalf("current preflight blocked unexpectedly: %#v", evaluation.Findings)
 	}
 
-	intent, err := NewIntentServiceWithClock(store, fixedClock(now)).ActivateIntent(ctx, "intent-versioned-activation")
+	intent, err := NewIntentServiceWithClock(store, fixedClock(now), nil).ActivateIntent(ctx, "intent-versioned-activation")
 	if err != nil {
 		t.Fatalf("ActivateIntent returned error with only stale old-version blockers: %v", err)
 	}
@@ -1175,7 +1175,7 @@ func seedSubmittedIntentWithVolume(t *testing.T, ctx context.Context, store dura
 
 func seedSubmittedIntentWithVolumeRequest(t *testing.T, ctx context.Context, store durable.Store, now time.Time, volumeReq AddOperationalVolumeRequest) domain.OperationalIntent {
 	t.Helper()
-	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intents := NewIntentServiceWithClock(store, fixedClock(now), nil)
 	intent, err := intents.CreateIntent(ctx, workflowIntentRequest(now))
 	if err != nil {
 		t.Fatalf("CreateIntent returned error: %v", err)
@@ -1203,7 +1203,7 @@ func seedActiveIntentWithVolumeRequest(t *testing.T, ctx context.Context, store 
 	} else if evaluation.Blocked {
 		t.Fatalf("preflight blocked unexpectedly: %#v", evaluation.Findings)
 	}
-	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intents := NewIntentServiceWithClock(store, fixedClock(now), nil)
 	intent, err := intents.AcceptIntent(ctx, intent.ID)
 	if err != nil {
 		t.Fatalf("AcceptIntent returned error: %v", err)
@@ -1217,7 +1217,7 @@ func seedActiveIntentWithVolumeRequest(t *testing.T, ctx context.Context, store 
 
 func createActiveIntentWithVolume(t *testing.T, ctx context.Context, store durable.Store, now time.Time, intentID string, volumeID string, geoJSON string, plannedStart time.Time) domain.OperationalIntent {
 	t.Helper()
-	intents := NewIntentServiceWithClock(store, fixedClock(now))
+	intents := NewIntentServiceWithClock(store, fixedClock(now), nil)
 	intent, err := intents.CreateIntent(ctx, CreateIntentRequest{
 		ID:                  intentID,
 		OperatorID:          "operator-1",

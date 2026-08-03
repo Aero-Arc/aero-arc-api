@@ -86,3 +86,12 @@ func TestNewAirspaceProvidersRejectsUnsupportedProvider(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestNewAirspaceProvidersRequiresAtLeastOneProvider(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.AirspaceProviders = nil
+	_, err := newAirspaceProviders(cfg, durablememory.NewStore(), nil)
+	if err == nil || !strings.Contains(err.Error(), "at least one airspace provider") {
+		t.Fatalf("error = %v", err)
+	}
+}

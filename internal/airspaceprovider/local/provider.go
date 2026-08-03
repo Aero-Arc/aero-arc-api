@@ -106,3 +106,17 @@ func (p *Provider) FindOperationalIntents(
 	}
 	return records, errors.Join(readErrors...)
 }
+
+func candidateConflictEligible(status domain.IntentStatus) bool {
+	return status == domain.IntentStatusAccepted || status == domain.IntentStatusActive
+}
+
+func volumesForVersion(volumes []domain.OperationalVolume, version int) []domain.OperationalVolume {
+	filtered := make([]domain.OperationalVolume, 0, len(volumes))
+	for _, volume := range volumes {
+		if volume.IntentVersion == version {
+			filtered = append(filtered, volume)
+		}
+	}
+	return filtered
+}

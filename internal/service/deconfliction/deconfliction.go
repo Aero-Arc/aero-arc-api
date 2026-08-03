@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider"
-	localprovider "github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider/local"
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 )
@@ -20,22 +19,32 @@ type DeconflictionService struct {
 	now       func() time.Time
 }
 
-func NewDeconflictionService(store durable.Store, providers ...airspaceprovider.Provider) *DeconflictionService {
-	return NewDeconflictionServiceWithClock(store, nil, providers...)
+func NewDeconflictionService(
+	store durable.Store,
+	provider airspaceprovider.Provider,
+	additional ...airspaceprovider.Provider,
+) *DeconflictionService {
+	return NewDeconflictionServiceWithClock(store, nil, provider, additional...)
 }
 
-func NewDeconflictionServiceWithClock(store durable.Store, now func() time.Time, providers ...airspaceprovider.Provider) *DeconflictionService {
+func NewDeconflictionServiceWithClock(
+	store durable.Store,
+	now func() time.Time,
+	provider airspaceprovider.Provider,
+	additional ...airspaceprovider.Provider,
+) *DeconflictionService {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	configured := make([]airspaceprovider.Provider, 0, len(providers))
-	for _, provider := range providers {
-		if provider != nil {
-			configured = append(configured, provider)
-		}
+	if provider == nil {
+		panic("deconfliction airspace provider is required")
 	}
-	if len(configured) == 0 {
-		configured = append(configured, localprovider.NewFromStore(store))
+	configured := make([]airspaceprovider.Provider, 0, 1+len(additional))
+	configured = append(configured, provider)
+	for _, candidate := range additional {
+		if candidate != nil {
+			configured = append(configured, candidate)
+		}
 	}
 	return &DeconflictionService{durable: store, providers: configured, now: now}
 }

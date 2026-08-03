@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
-	deconflictionservice "github.com/Aero-Arc/aero-arc-api/internal/service/deconfliction"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 )
 
@@ -108,23 +107,19 @@ type ModifyIntentResult struct {
 	SupersedesVersion  int                        `json:"supersedes_version,omitempty"`
 }
 
-func NewIntentService(durableStore durable.Store, deconfliction ...DeconflictionChecker) *IntentService {
-	return NewIntentServiceWithClock(durableStore, nil, deconfliction...)
+func NewIntentService(durableStore durable.Store, deconfliction DeconflictionChecker) *IntentService {
+	return NewIntentServiceWithClock(durableStore, nil, deconfliction)
 }
 
-func NewIntentServiceWithClock(durableStore durable.Store, now func() time.Time, deconfliction ...DeconflictionChecker) *IntentService {
+func NewIntentServiceWithClock(durableStore durable.Store, now func() time.Time, deconfliction DeconflictionChecker) *IntentService {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	service := &IntentService{
+	return &IntentService{
 		durable:       durableStore,
 		now:           now,
-		deconfliction: deconflictionservice.NewDeconflictionServiceWithClock(durableStore, now),
+		deconfliction: deconfliction,
 	}
-	if len(deconfliction) > 0 {
-		service.deconfliction = deconfliction[0]
-	}
-	return service
 }
 
 func (s *IntentService) CreateIntent(ctx context.Context, req CreateIntentRequest) (domain.OperationalIntent, error) {

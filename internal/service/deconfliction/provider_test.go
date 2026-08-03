@@ -19,6 +19,15 @@ type discoveryProvider struct {
 	calls   int
 }
 
+func TestServiceRequiresProvider(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewDeconflictionService did not reject a nil provider")
+		}
+	}()
+	deconfliction.NewDeconflictionService(durablememory.NewStore(), nil)
+}
+
 func (p *discoveryProvider) ID() string {
 	return p.id
 }

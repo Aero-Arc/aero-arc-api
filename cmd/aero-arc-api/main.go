@@ -236,7 +236,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		slog.Info("seeded demo data")
 	}
 	fleetService := service.NewFleetService(durableStore, telemetryStore, replayStore, registryClient)
-	deconflictionService := deconfliction.NewDeconflictionService(durableStore, providers...)
+	deconflictionService := deconfliction.NewDeconflictionService(durableStore, providers[0], providers[1:]...)
 	intentService := service.NewIntentService(durableStore, deconflictionService)
 	preflightService := service.NewPreflightService(durableStore)
 	conformanceService := service.NewConformanceService(durableStore, telemetryStore)
@@ -331,6 +331,9 @@ func newAirspaceProviders(
 		default:
 			return nil, fmt.Errorf("unsupported airspace provider %q", name)
 		}
+	}
+	if len(providers) == 0 {
+		return nil, fmt.Errorf("at least one airspace provider is required")
 	}
 	return providers, nil
 }
