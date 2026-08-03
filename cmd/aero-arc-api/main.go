@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	providerfactory "github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider/factory"
+	"github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider"
 	interussprovider "github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider/interuss"
 	"github.com/Aero-Arc/aero-arc-api/internal/config"
 	"github.com/Aero-Arc/aero-arc-api/internal/httpapi"
@@ -209,19 +209,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		defer projection.Close()
 		durableStore = durable.UseSpatialIndex(durableStore, projection)
 	}
-	providers, err := providerfactory.New(providerfactory.Config{
-		Providers: cfg.AirspaceProviders,
-		InterUSS: interussprovider.Config{
-			BaseURL:               cfg.DSSBaseURL,
-			StaticToken:           cfg.DSSStaticToken,
-			OAuthTokenURL:         cfg.DSSOAuthTokenURL,
-			OAuthAudience:         cfg.DSSOAuthAudience,
-			OAuthIssuer:           cfg.DSSOAuthIssuer,
-			OAuthSubject:          cfg.DSSOAuthSubject,
-			AllowInsecurePeerURLs: cfg.DSSAllowInsecurePeerURLs,
-			RequestTimeout:        cfg.RequestTimeout,
-		},
-	}, durableStore, projection)
+	providers, err := newAirspaceProviders(cfg, durableStore, projection)
 	if err != nil {
 		return err
 	}
@@ -318,6 +306,45 @@ func newSpatialIndex(ctx context.Context, cfg *config.Config) (spatialindex.Inde
 	default:
 		return nil, fmt.Errorf("unsupported spatial index %q", cfg.SpatialIndex)
 	}
+}
+
+func newAirspaceProviders(
+	cfg *config.Config,
+	durableStore durable.Store,
+	localIndex spatialindex.CandidateFinder,
+) ([]airspaceprovider.Provider, error) {
+	providers := make([]airspaceprovider.Provider, 0, len(cfg.AirspaceProviders))
+	for _, name := range cfg.AirspaceProviders {
+		switch name {
+		case airspaceprovider.ProviderLocal:
+			if localIndex == nil {
+				return nil, fmt.Errorf("local airspace provider requires a spatial index")
+			}
+			providers = append(providers, airspaceprovider.NewLocalSpatialProvider(durableStore, localIndex))
+		case airspaceprovider.ProviderInterUSS:
+			provider, err := newInterUSSProvider(cfg)
+			if err != nil {
+				return nil, err
+			}
+			providers = append(providers, provider)
+		default:
+			return nil, fmt.Errorf("unsupported airspace provider %q", name)
+		}
+	}
+	return providers, nil
+}
+
+func newInterUSSProvider(cfg *config.Config) (airspaceprovider.Provider, error) {
+	return interussprovider.New(interussprovider.Config{
+		BaseURL:               cfg.DSSBaseURL,
+		StaticToken:           cfg.DSSStaticToken,
+		OAuthTokenURL:         cfg.DSSOAuthTokenURL,
+		OAuthAudience:         cfg.DSSOAuthAudience,
+		OAuthIssuer:           cfg.DSSOAuthIssuer,
+		OAuthSubject:          cfg.DSSOAuthSubject,
+		AllowInsecurePeerURLs: cfg.DSSAllowInsecurePeerURLs,
+		RequestTimeout:        cfg.RequestTimeout,
+	})
 }
 
 func newTelemetryStore(cfg *config.Config) (telemetry.Store, error) {
