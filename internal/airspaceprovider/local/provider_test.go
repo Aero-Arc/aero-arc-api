@@ -35,7 +35,7 @@ func TestProviderHydratesAuthoritativeCandidate(t *testing.T) {
 		}
 	}
 
-	provider := New(store, store)
+	provider := New(store)
 	records, err := provider.FindOperationalIntents(ctx, airspaceprovider.Query{Intent: target, Volumes: []domain.OperationalVolume{targetVolume}})
 	if err != nil {
 		t.Fatal(err)
@@ -47,15 +47,17 @@ func TestProviderHydratesAuthoritativeCandidate(t *testing.T) {
 
 func TestProviderReturnsCandidateQueryError(t *testing.T) {
 	ctx := context.Background()
-	provider := New(durablememory.NewStore(), failingCandidates{})
+	provider := New(&failingStore{Store: durablememory.NewStore()})
 	if _, err := provider.FindOperationalIntents(ctx, airspaceprovider.Query{}); err == nil {
 		t.Fatal("expected candidate finder error")
 	}
 }
 
-type failingCandidates struct{}
+type failingStore struct {
+	*durablememory.Store
+}
 
-func (failingCandidates) FindCandidates(context.Context, durable.CandidateQuery) ([]durable.Candidate, error) {
+func (*failingStore) FindCandidates(context.Context, durable.CandidateQuery) ([]durable.Candidate, error) {
 	return nil, context.Canceled
 }
 

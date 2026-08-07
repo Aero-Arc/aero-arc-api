@@ -283,7 +283,7 @@ func newAirspaceProviders(
 	for _, name := range cfg.AirspaceProviders {
 		switch name {
 		case airspaceprovider.ProviderLocal:
-			providers = append(providers, localprovider.New(durableStore, durableStore))
+			providers = append(providers, localprovider.New(durableStore))
 		case airspaceprovider.ProviderInterUSS:
 			provider, err := newInterUSSProvider(cfg)
 			if err != nil {

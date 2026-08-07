@@ -14,24 +14,17 @@ import (
 // Provider uses the durable store's spatial query for candidate discovery and
 // hydrates every result from that same authoritative store.
 type Provider struct {
-	durable    operationalReader
-	candidates candidateFinder
+	store store
 }
 
-type operationalReader interface {
+type store interface {
 	GetOperationalIntentVersion(context.Context, string, int) (domain.OperationalIntent, error)
 	ListOperationalVolumes(context.Context, string) ([]domain.OperationalVolume, error)
-}
-
-type candidateFinder interface {
 	FindCandidates(context.Context, durable.CandidateQuery) ([]durable.Candidate, error)
 }
 
-func New(
-	durableStore operationalReader,
-	candidates candidateFinder,
-) *Provider {
-	return &Provider{durable: durableStore, candidates: candidates}
+func New(store store) *Provider {
+	return &Provider{store: store}
 }
 
 func (p *Provider) ID() string {
@@ -42,10 +35,10 @@ func (p *Provider) FindOperationalIntents(
 	ctx context.Context,
 	query airspaceprovider.Query,
 ) ([]airspaceprovider.OperationalIntent, error) {
-	if p.durable == nil || p.candidates == nil {
+	if p.store == nil {
 		return nil, fmt.Errorf("local spatial provider is not configured")
 	}
-	candidates, err := p.candidates.FindCandidates(ctx, durable.CandidateQuery{
+	candidates, err := p.store.FindCandidates(ctx, durable.CandidateQuery{
 		ExcludeIntentID: query.Intent.ID,
 		Volumes:         query.Volumes,
 	})
@@ -58,7 +51,7 @@ func (p *Provider) FindOperationalIntents(
 	selected := make(map[string]domain.OperationalIntent)
 	var readErrors []error
 	for _, candidate := range candidates {
-		intent, err := p.durable.GetOperationalIntentVersion(ctx, candidate.IntentID, candidate.IntentVersion)
+		intent, err := p.store.GetOperationalIntentVersion(ctx, candidate.IntentID, candidate.IntentVersion)
 		if errors.Is(err, durable.ErrNotFound) {
 			continue // The candidate may have been removed after the spatial query.
 		}
@@ -83,7 +76,7 @@ func (p *Provider) FindOperationalIntents(
 	records := make([]airspaceprovider.OperationalIntent, 0, len(ids))
 	for _, id := range ids {
 		intent := selected[id]
-		volumes, err := p.durable.ListOperationalVolumes(ctx, id)
+		volumes, err := p.store.ListOperationalVolumes(ctx, id)
 		if err != nil {
 			readErrors = append(readErrors, fmt.Errorf("list candidate %s volumes: %w", id, err))
 			continue
