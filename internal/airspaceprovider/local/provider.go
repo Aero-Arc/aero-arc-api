@@ -14,8 +14,8 @@ import (
 // Provider uses the durable store's spatial query for candidate discovery and
 // hydrates every result from that same authoritative store.
 type Provider struct {
-	durable operationalReader
-	spatial durable.CandidateFinder
+	durable    operationalReader
+	candidates candidateFinder
 }
 
 type operationalReader interface {
@@ -23,11 +23,15 @@ type operationalReader interface {
 	ListOperationalVolumes(context.Context, string) ([]domain.OperationalVolume, error)
 }
 
+type candidateFinder interface {
+	FindCandidates(context.Context, durable.CandidateQuery) ([]durable.Candidate, error)
+}
+
 func New(
 	durableStore operationalReader,
-	spatialIndex durable.CandidateFinder,
+	candidates candidateFinder,
 ) *Provider {
-	return &Provider{durable: durableStore, spatial: spatialIndex}
+	return &Provider{durable: durableStore, candidates: candidates}
 }
 
 func (p *Provider) ID() string {
@@ -38,10 +42,10 @@ func (p *Provider) FindOperationalIntents(
 	ctx context.Context,
 	query airspaceprovider.Query,
 ) ([]airspaceprovider.OperationalIntent, error) {
-	if p.durable == nil || p.spatial == nil {
+	if p.durable == nil || p.candidates == nil {
 		return nil, fmt.Errorf("local spatial provider is not configured")
 	}
-	candidates, err := p.spatial.FindCandidates(ctx, durable.CandidateQuery{
+	candidates, err := p.candidates.FindCandidates(ctx, durable.CandidateQuery{
 		ExcludeIntentID: query.Intent.ID,
 		Volumes:         query.Volumes,
 	})

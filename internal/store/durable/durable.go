@@ -29,13 +29,9 @@ type Candidate struct {
 	IntentVersion int
 }
 
-type CandidateFinder interface {
-	FindCandidates(context.Context, CandidateQuery) ([]Candidate, error)
-}
-
 // Store defines the durable system-of-record operations used by the API.
 type Store interface {
-	CandidateFinder
+	FindCandidates(context.Context, CandidateQuery) ([]Candidate, error)
 	UpsertOperator(ctx context.Context, operator domain.Operator) error
 	GetOperator(ctx context.Context, operatorID string) (domain.Operator, error)
 	ListOperators(ctx context.Context) ([]domain.Operator, error)

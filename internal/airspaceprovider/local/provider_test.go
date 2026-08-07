@@ -45,17 +45,17 @@ func TestProviderHydratesAuthoritativeCandidate(t *testing.T) {
 	}
 }
 
-func TestProviderReturnsCandidateFinderError(t *testing.T) {
+func TestProviderReturnsCandidateQueryError(t *testing.T) {
 	ctx := context.Background()
-	provider := New(durablememory.NewStore(), failingCandidateFinder{})
+	provider := New(durablememory.NewStore(), failingCandidates{})
 	if _, err := provider.FindOperationalIntents(ctx, airspaceprovider.Query{}); err == nil {
 		t.Fatal("expected candidate finder error")
 	}
 }
 
-type failingCandidateFinder struct{}
+type failingCandidates struct{}
 
-func (failingCandidateFinder) FindCandidates(context.Context, durable.CandidateQuery) ([]durable.Candidate, error) {
+func (failingCandidates) FindCandidates(context.Context, durable.CandidateQuery) ([]durable.Candidate, error) {
 	return nil, context.Canceled
 }
 
