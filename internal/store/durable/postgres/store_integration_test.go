@@ -1,6 +1,6 @@
 //go:build integration
 
-package postgis
+package postgres
 
 import (
 	"context"
@@ -12,17 +12,26 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/spatialindex"
 )
 
-func TestSpatialProjectionReadCheckSlice(t *testing.T) {
+func TestAuthoritativeSpatialReadCheckSlice(t *testing.T) {
 	databaseURL := os.Getenv("AERO_API_TEST_POSTGIS_URL")
 	if databaseURL == "" {
 		t.Skip("AERO_API_TEST_POSTGIS_URL is not set")
 	}
 	ctx := context.Background()
-	index, err := Open(ctx, databaseURL)
+	store, err := Open(ctx, databaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(index.Close)
+	t.Cleanup(store.Close)
+	observer, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(observer.Close)
+	if _, err := store.pool.Exec(ctx, `TRUNCATE conflict_findings, operational_volumes, operational_intents`); err != nil {
+		t.Fatal(err)
+	}
+
 	now := time.Date(2026, time.August, 1, 12, 0, 0, 0, time.UTC)
 	target := integrationVolume("target-volume", "target", 1, now,
 		`{"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[[[-97,32],[-96,32],[-96,33],[-97,33],[-97,32]]]}}`)
@@ -30,10 +39,21 @@ func TestSpatialProjectionReadCheckSlice(t *testing.T) {
 		`{"type":"Polygon","coordinates":[[[-96.5,32.5],[-95.5,32.5],[-95.5,33.5],[-96.5,33.5],[-96.5,32.5]]]}`)
 	distant := integrationVolume("distant-volume", "distant", 1, now,
 		`{"type":"Polygon","coordinates":[[[-80,20],[-79,20],[-79,21],[-80,21],[-80,20]]]}`)
-	if err := index.Rebuild(ctx, []domain.OperationalVolume{target, overlap, distant}); err != nil {
-		t.Fatal(err)
+	for _, id := range []string{target.IntentID, overlap.IntentID, distant.IntentID} {
+		if err := store.CreateOperationalIntent(ctx, domain.OperationalIntent{
+			ID: id, Version: 1, AircraftID: id + "-aircraft", PlannedStartAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	candidates, err := index.FindCandidates(ctx, spatialindex.Query{
+	for _, volume := range []domain.OperationalVolume{target, overlap, distant} {
+		if err := store.RecordOperationalVolume(ctx, volume); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Query through a second store instance to model another API replica.
+	candidates, err := observer.FindCandidates(ctx, spatialindex.Query{
 		ExcludeIntentID: target.IntentID,
 		Volumes:         []domain.OperationalVolume{target},
 	})
@@ -47,10 +67,10 @@ func TestSpatialProjectionReadCheckSlice(t *testing.T) {
 	replacement := distant
 	replacement.ID = "overlap-moved"
 	replacement.IntentID = overlap.IntentID
-	if err := index.ReplaceVolumes(ctx, overlap.IntentID, 1, []domain.OperationalVolume{replacement}); err != nil {
+	if err := store.ReplaceOperationalVolumes(ctx, overlap.IntentID, 1, []domain.OperationalVolume{replacement}); err != nil {
 		t.Fatal(err)
 	}
-	candidates, err = index.FindCandidates(ctx, spatialindex.Query{
+	candidates, err = observer.FindCandidates(ctx, spatialindex.Query{
 		ExcludeIntentID: target.IntentID,
 		Volumes:         []domain.OperationalVolume{target},
 	})
@@ -64,7 +84,7 @@ func TestSpatialProjectionReadCheckSlice(t *testing.T) {
 	invalid := target
 	invalid.ID = "invalid"
 	invalid.EndsAt = invalid.StartsAt
-	if err := index.RecordVolume(ctx, invalid); err == nil {
+	if err := store.RecordOperationalVolume(ctx, invalid); err == nil {
 		t.Fatal("expected PostGIS to reject invalid time window")
 	}
 }

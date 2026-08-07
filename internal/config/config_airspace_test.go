@@ -8,9 +8,9 @@ import (
 func TestValidateAirspaceConfiguration(t *testing.T) {
 	t.Run("valid URLs", func(t *testing.T) {
 		cfg := Defaults()
-		cfg.SpatialIndex = SpatialIndexPostGIS
+		cfg.DurableStore = DurableStorePostgres
 		cfg.AirspaceProviders = []string{AirspaceProviderLocal, AirspaceProviderInterUSS}
-		cfg.PostGISDatabaseURL = "postgres://aero_arc:secret@localhost:5432/aero_arc"
+		cfg.DatabaseURL = "postgres://aero_arc:secret@localhost:5432/aero_arc"
 		cfg.DSSBaseURL = "http://localhost:8082"
 		cfg.DSSOAuthTokenURL = "http://localhost:8085/token"
 		if err := cfg.Validate(); err != nil {
@@ -21,7 +21,6 @@ func TestValidateAirspaceConfiguration(t *testing.T) {
 	t.Run("invalid DSS URL", func(t *testing.T) {
 		cfg := Defaults()
 		cfg.AirspaceProviders = []string{AirspaceProviderInterUSS}
-		cfg.SpatialIndex = SpatialIndexNone
 		cfg.DSSBaseURL = "localhost:8082"
 		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "DSS_BASE_URL") {
 			t.Fatalf("error = %v", err)
@@ -31,7 +30,6 @@ func TestValidateAirspaceConfiguration(t *testing.T) {
 	t.Run("conflicting credentials", func(t *testing.T) {
 		cfg := Defaults()
 		cfg.AirspaceProviders = []string{AirspaceProviderInterUSS}
-		cfg.SpatialIndex = SpatialIndexNone
 		cfg.DSSBaseURL = "http://localhost:8082"
 		cfg.DSSStaticToken = "token"
 		cfg.DSSOAuthTokenURL = "http://localhost:8085/token"
@@ -40,18 +38,18 @@ func TestValidateAirspaceConfiguration(t *testing.T) {
 		}
 	})
 
-	t.Run("postgis requires URL", func(t *testing.T) {
+	t.Run("postgres requires URL", func(t *testing.T) {
 		cfg := Defaults()
-		cfg.SpatialIndex = SpatialIndexPostGIS
-		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "POSTGIS_DATABASE_URL") {
+		cfg.DurableStore = DurableStorePostgres
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "DATABASE_URL") {
 			t.Fatalf("error = %v", err)
 		}
 	})
 
-	t.Run("local requires spatial index", func(t *testing.T) {
+	t.Run("database URL requires postgres", func(t *testing.T) {
 		cfg := Defaults()
-		cfg.SpatialIndex = SpatialIndexNone
-		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "requires a spatial index") {
+		cfg.DatabaseURL = "postgres://localhost/aero_arc"
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "requires durable store postgres") {
 			t.Fatalf("error = %v", err)
 		}
 	})

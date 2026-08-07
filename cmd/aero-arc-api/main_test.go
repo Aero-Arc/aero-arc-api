@@ -7,13 +7,12 @@ import (
 
 	"github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider"
 	"github.com/Aero-Arc/aero-arc-api/internal/config"
-	"github.com/Aero-Arc/aero-arc-api/internal/spatialindex"
-	spatialmemory "github.com/Aero-Arc/aero-arc-api/internal/spatialindex/memory"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 )
 
 func TestNewDurableStoreIsIndependentFromAirspaceConfiguration(t *testing.T) {
-	store, err := newDurableStore("memory")
+	cfg := config.Defaults()
+	store, err := newDurableStore(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,45 +22,29 @@ func TestNewDurableStoreIsIndependentFromAirspaceConfiguration(t *testing.T) {
 }
 
 func TestNewDurableStoreRejectsUnsupportedBaseStore(t *testing.T) {
-	_, err := newDurableStore("unknown")
+	cfg := config.Defaults()
+	cfg.DurableStore = "unknown"
+	_, err := newDurableStore(context.Background(), cfg)
 	if err == nil || !strings.Contains(err.Error(), "unsupported durable store") {
 		t.Fatalf("error = %v", err)
 	}
 }
 
-func TestNewSpatialIndexModes(t *testing.T) {
+func TestNewPostgresStoreRejectsInvalidConfiguration(t *testing.T) {
 	cfg := config.Defaults()
-	cfg.SpatialIndex = config.SpatialIndexNone
-	index, err := newSpatialIndex(context.Background(), cfg)
-	if err != nil || index != nil {
-		t.Fatalf("none index = %#v, error = %v", index, err)
-	}
-	cfg.SpatialIndex = config.SpatialIndexMemory
-	index, err = newSpatialIndex(context.Background(), cfg)
-	if err != nil || index == nil || index.ID() != "memory" {
-		t.Fatalf("memory index = %#v, error = %v", index, err)
-	}
-	index.Close()
-
-	cfg.SpatialIndex = config.SpatialIndexPostGIS
-	cfg.PostGISDatabaseURL = "postgres://invalid host"
-	_, err = newSpatialIndex(context.Background(), cfg)
+	cfg.DurableStore = config.DurableStorePostgres
+	cfg.DatabaseURL = "postgres://invalid host"
+	_, err := newDurableStore(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("expected invalid PostGIS configuration to fail")
 	}
 }
 
 func TestNewAirspaceProvidersUsesExplicitOrder(t *testing.T) {
-	projection := spatialindex.NewProjection(spatialmemory.New())
-	if err := projection.Rebuild(context.Background(), nil); err != nil {
-		t.Fatal(err)
-	}
-	defer projection.Close()
-
 	cfg := config.Defaults()
 	cfg.AirspaceProviders = []string{airspaceprovider.ProviderLocal, airspaceprovider.ProviderInterUSS}
 	cfg.DSSBaseURL = "http://dss.example"
-	providers, err := newAirspaceProviders(cfg, durablememory.NewStore(), projection)
+	providers, err := newAirspaceProviders(cfg, durablememory.NewStore())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,18 +53,10 @@ func TestNewAirspaceProvidersUsesExplicitOrder(t *testing.T) {
 	}
 }
 
-func TestNewAirspaceProvidersRequiresIndexForLocal(t *testing.T) {
-	cfg := config.Defaults()
-	_, err := newAirspaceProviders(cfg, durablememory.NewStore(), nil)
-	if err == nil || !strings.Contains(err.Error(), "requires a spatial index") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
 func TestNewAirspaceProvidersRejectsUnsupportedProvider(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.AirspaceProviders = []string{"unknown"}
-	_, err := newAirspaceProviders(cfg, durablememory.NewStore(), nil)
+	_, err := newAirspaceProviders(cfg, durablememory.NewStore())
 	if err == nil || !strings.Contains(err.Error(), "unsupported airspace provider") {
 		t.Fatalf("error = %v", err)
 	}
@@ -90,7 +65,7 @@ func TestNewAirspaceProvidersRejectsUnsupportedProvider(t *testing.T) {
 func TestNewAirspaceProvidersRequiresAtLeastOneProvider(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.AirspaceProviders = nil
-	_, err := newAirspaceProviders(cfg, durablememory.NewStore(), nil)
+	_, err := newAirspaceProviders(cfg, durablememory.NewStore())
 	if err == nil || !strings.Contains(err.Error(), "at least one airspace provider") {
 		t.Fatalf("error = %v", err)
 	}

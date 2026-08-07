@@ -1,12 +1,16 @@
 # Migrations
 
 PostgreSQL 14 with PostGIS 3.5 is the selected local target for the
-deconfliction vertical slice. The spatial index initializes its idempotent
-schema from `internal/spatialindex/postgis/schema.sql` when PostGIS is selected.
-It owns a projection of 4D volume search columns and PostGIS footprints; it is
-not the authoritative operational-intent database.
+deconfliction vertical slice. The PostgreSQL durable store initializes its
+idempotent schema from `internal/store/durable/postgres/schema.sql` when
+`AERO_API_DURABLE_STORE=postgres` is selected.
 
-Operational intents, versions, volumes, and conflict findings remain in the
-configured durable store. A versioned migration runner should replace startup
-schema initialization before the spatial schema needs non-additive changes or
-production deployments remove runtime DDL privileges.
+Operational intents, versions, volumes, conflict findings, and PostGIS search
+columns live in the same authoritative tables. PostgreSQL updates the GiST
+spatial index in the same transaction as each volume write, so horizontally
+scaled API replicas do not coordinate an application-managed projection.
+
+The other durable domain groups still use the embedded memory implementation
+in this vertical slice. A versioned migration runner and PostgreSQL tables for
+those groups should replace startup schema initialization and the fallback
+before production deployment.

@@ -14,8 +14,8 @@ directly.
 - Durable store: aircraft, batteries, battery installations, maintenance events,
   flight records, operational intents and volumes, conflict findings, and
   conformance events.
-- Spatial index: a replaceable projection of operational volumes used only for
-  local conflict-candidate discovery.
+- PostGIS indexes: transactionally maintained indexes over authoritative
+  operational volumes for local conflict-candidate discovery.
 - Telemetry store: queryable time-series telemetry samples.
 - Replay store: raw replay manifests and log chunk locations.
 
@@ -65,9 +65,10 @@ containers without deleting the data:
 docker compose down
 ```
 
-The durable store remains authoritative and runs in `memory` mode in this
-Compose slice. PostGIS is only the local spatial index. Startup rebuilds that
-projection from the durable store and fails if PostGIS cannot be reached.
+Compose uses PostgreSQL with PostGIS as the authoritative store for operational
+intents, volumes, and conflict findings. Spatial indexes are maintained by
+PostgreSQL in the same transactions as volume writes. Other durable domain
+groups remain in memory during this vertical slice.
 
 Configuration is available through flags or environment variables:
 
@@ -75,7 +76,6 @@ Configuration is available through flags or environment variables:
 go run ./cmd/aero-arc-api start \
   --addr :8080 \
   --durable-store memory \
-  --spatial-index memory \
   --airspace-provider local \
   --telemetry-store memory \
   --replay-store memory \
@@ -87,7 +87,6 @@ go run ./cmd/aero-arc-api start \
 ```bash
 AERO_API_ADDR=:8080
 AERO_API_DURABLE_STORE=memory
-AERO_API_SPATIAL_INDEX=memory
 AERO_API_AIRSPACE_PROVIDERS=local
 AERO_API_TELEMETRY_STORE=memory
 AERO_API_REPLAY_STORE=memory
@@ -110,13 +109,12 @@ service. Durable and replay stores still run in `memory` mode in this scaffold.
 
 ## Deconfliction Read/Check Slice
 
-Set `AERO_API_SPATIAL_INDEX=postgis` and `AERO_API_POSTGIS_DATABASE_URL` to use
-PostGIS for local spatial candidate discovery. The required spatial schema is
-initialized automatically. Operational intents, versions, volumes, and
-conflict findings remain authoritative in `AERO_API_DURABLE_STORE`.
+Set `AERO_API_DURABLE_STORE=postgres` and `AERO_API_DATABASE_URL` to persist
+the deconfliction slice in PostgreSQL and use PostGIS for local spatial
+candidate discovery. The required schema is initialized automatically.
 
-Airspace sources are explicit and composable. `local` queries the configured
-spatial index and hydrates candidates from the durable store. `interuss` queries
+Airspace sources are explicit and composable. `local` queries authoritative
+operational volumes through PostGIS. `interuss` queries
 DSS references for each submitted WGS84 volume and fetches full details from
 each managing USS. Peer failures produce an indeterminate, blocking finding
 while successfully retrieved peers are still evaluated.
@@ -124,8 +122,8 @@ while successfully retrieved peers are still evaluated.
 For a local InterUSS stack:
 
 ```bash
-AERO_API_SPATIAL_INDEX=postgis
-AERO_API_POSTGIS_DATABASE_URL='postgres://aero_arc:aero_arc_dev@localhost:5432/aero_arc?sslmode=disable'
+AERO_API_DURABLE_STORE=postgres
+AERO_API_DATABASE_URL='postgres://aero_arc:aero_arc_dev@localhost:5432/aero_arc?sslmode=disable'
 AERO_API_AIRSPACE_PROVIDERS='local,interuss'
 AERO_API_DSS_BASE_URL='http://localhost:8082'
 AERO_API_DSS_OAUTH_TOKEN_URL='http://localhost:8085/token'
@@ -198,9 +196,9 @@ Operational workflows:
 ### Current Deconfliction Behavior
 
 The deconfliction service combines the providers named by
-`AERO_API_AIRSPACE_PROVIDERS`. The local provider uses the selected spatial
-index for broad-phase geometry, time, and altitude filtering, then reloads the
-candidate intent version and volumes from the authoritative durable store. The
+`AERO_API_AIRSPACE_PROVIDERS`. The local provider uses PostGIS indexes over the
+authoritative operational-volume table for broad-phase geometry, time, and
+altitude filtering, then loads the candidate intent version and volumes. The
 evaluator:
 
 - evaluates the target's latest version while retaining an accepted candidate
@@ -264,9 +262,8 @@ make check
 
 ## TODO
 
-- Add a persistent durable-store adapter and an outbox-backed spatial projector;
-  the current vertical slice updates the projection synchronously and fails
-  local checks closed after a projection error.
+- Migrate the remaining in-memory durable domain groups to PostgreSQL and add a
+  versioned migration runner before production deployment.
 - Harden the InfluxDB telemetry schema and production query integration.
 - Add real replay storage backed by S3/object storage manifests and log chunks.
 - Expand registry mapping once aircraft-to-agent identity is finalized. For now,

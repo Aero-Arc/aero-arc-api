@@ -8,17 +8,13 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider"
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/spatialindex"
-	spatialmemory "github.com/Aero-Arc/aero-arc-api/internal/spatialindex/memory"
-	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 )
 
 func TestProviderHydratesAuthoritativeCandidate(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, time.August, 1, 12, 0, 0, 0, time.UTC)
-	base := durablememory.NewStore()
-	projection := spatialindex.NewProjection(spatialmemory.New())
-	store := durable.UseSpatialIndex(base, projection)
+	store := durablememory.NewStore()
 	target := domain.OperationalIntent{ID: "target", Version: 1, Status: domain.IntentStatusDraft}
 	accepted := domain.OperationalIntent{ID: "peer", Version: 1, Status: domain.IntentStatusAccepted, OperatorID: "operator"}
 	draft := accepted
@@ -39,7 +35,7 @@ func TestProviderHydratesAuthoritativeCandidate(t *testing.T) {
 		}
 	}
 
-	provider := New(store, projection)
+	provider := New(store, store)
 	records, err := provider.FindOperationalIntents(ctx, airspaceprovider.Query{Intent: target, Volumes: []domain.OperationalVolume{targetVolume}})
 	if err != nil {
 		t.Fatal(err)
@@ -49,34 +45,18 @@ func TestProviderHydratesAuthoritativeCandidate(t *testing.T) {
 	}
 }
 
-func TestProviderFailsClosedWhenProjectionIsOutOfSync(t *testing.T) {
+func TestProviderReturnsCandidateFinderError(t *testing.T) {
 	ctx := context.Background()
-	index := &failingSpatialIndex{}
-	projection := spatialindex.NewProjection(index)
-	if err := projection.Rebuild(ctx, nil); err == nil {
-		t.Fatal("expected rebuild failure")
-	}
-	provider := New(durablememory.NewStore(), projection)
+	provider := New(durablememory.NewStore(), failingCandidateFinder{})
 	if _, err := provider.FindOperationalIntents(ctx, airspaceprovider.Query{}); err == nil {
-		t.Fatal("expected out-of-sync projection error")
+		t.Fatal("expected candidate finder error")
 	}
 }
 
-type failingSpatialIndex struct{}
+type failingCandidateFinder struct{}
 
-func (*failingSpatialIndex) ID() string { return "failing" }
-func (*failingSpatialIndex) Close()     {}
-func (*failingSpatialIndex) Rebuild(context.Context, []domain.OperationalVolume) error {
-	return context.Canceled
-}
-func (*failingSpatialIndex) RecordVolume(context.Context, domain.OperationalVolume) error {
-	return context.Canceled
-}
-func (*failingSpatialIndex) ReplaceVolumes(context.Context, string, int, []domain.OperationalVolume) error {
-	return context.Canceled
-}
-func (*failingSpatialIndex) FindCandidates(context.Context, spatialindex.Query) ([]spatialindex.Candidate, error) {
-	return nil, nil
+func (failingCandidateFinder) FindCandidates(context.Context, spatialindex.Query) ([]spatialindex.Candidate, error) {
+	return nil, context.Canceled
 }
 
 func testVolume(id, intentID string, now time.Time) domain.OperationalVolume {

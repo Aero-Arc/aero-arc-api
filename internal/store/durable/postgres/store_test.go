@@ -1,4 +1,4 @@
-package postgis
+package postgres
 
 import "testing"
 

@@ -12,6 +12,7 @@ import (
 	"errors"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
+	"github.com/Aero-Arc/aero-arc-api/internal/spatialindex"
 )
 
 var (
@@ -21,6 +22,7 @@ var (
 
 // Store defines the durable system-of-record operations used by the API.
 type Store interface {
+	spatialindex.CandidateFinder
 	UpsertOperator(ctx context.Context, operator domain.Operator) error
 	GetOperator(ctx context.Context, operatorID string) (domain.Operator, error)
 	ListOperators(ctx context.Context) ([]domain.Operator, error)

@@ -19,11 +19,9 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/seed"
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
 	"github.com/Aero-Arc/aero-arc-api/internal/service/deconfliction"
-	"github.com/Aero-Arc/aero-arc-api/internal/spatialindex"
-	spatialmemory "github.com/Aero-Arc/aero-arc-api/internal/spatialindex/memory"
-	spatialpostgis "github.com/Aero-Arc/aero-arc-api/internal/spatialindex/postgis"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
+	durablepostgres "github.com/Aero-Arc/aero-arc-api/internal/store/durable/postgres"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/replay"
 	replaymemory "github.com/Aero-Arc/aero-arc-api/internal/store/replay/memory"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/telemetry"
@@ -57,12 +55,6 @@ func newCommand() *cli.Command {
 						Usage:   "HTTP listen address",
 						Sources: cli.EnvVars("AERO_API_ADDR"),
 					},
-					&cli.StringFlag{
-						Name:    "spatial-index",
-						Value:   defaults.SpatialIndex,
-						Usage:   "spatial candidate index: none, memory, or postgis",
-						Sources: cli.EnvVars("AERO_API_SPATIAL_INDEX"),
-					},
 					&cli.StringSliceFlag{
 						Name:    "airspace-provider",
 						Value:   append([]string(nil), defaults.AirspaceProviders...),
@@ -72,9 +64,10 @@ func newCommand() *cli.Command {
 					&cli.StringFlag{
 						Name:    "durable-store",
 						Value:   defaults.DurableStore,
-						Usage:   "durable store mode",
+						Usage:   "durable store mode: memory or postgres",
 						Sources: cli.EnvVars("AERO_API_DURABLE_STORE"),
 					},
+					&cli.StringFlag{Name: "database-url", Usage: "PostgreSQL/PostGIS URL", Sources: cli.EnvVars("AERO_API_DATABASE_URL")},
 					&cli.StringFlag{
 						Name:    "telemetry-store",
 						Value:   defaults.TelemetryStore,
@@ -84,7 +77,6 @@ func newCommand() *cli.Command {
 					&cli.StringFlag{Name: "influxdb-host", Usage: "InfluxDB 3 host URL", Sources: cli.EnvVars("AERO_API_INFLUXDB_HOST")},
 					&cli.StringFlag{Name: "influxdb-token", Usage: "InfluxDB 3 access token", Sources: cli.EnvVars("AERO_API_INFLUXDB_TOKEN")},
 					&cli.StringFlag{Name: "influxdb-database", Usage: "InfluxDB 3 database", Sources: cli.EnvVars("AERO_API_INFLUXDB_DATABASE")},
-					&cli.StringFlag{Name: "postgis-database-url", Usage: "PostGIS URL for the spatial candidate index", Sources: cli.EnvVars("AERO_API_POSTGIS_DATABASE_URL")},
 					&cli.StringFlag{Name: "dss-base-url", Usage: "InterUSS DSS base URL", Sources: cli.EnvVars("AERO_API_DSS_BASE_URL")},
 					&cli.StringFlag{Name: "dss-static-token", Usage: "static DSS bearer token", Sources: cli.EnvVars("AERO_API_DSS_STATIC_TOKEN")},
 					&cli.StringFlag{Name: "dss-oauth-token-url", Usage: "local dummy OAuth token URL", Sources: cli.EnvVars("AERO_API_DSS_OAUTH_TOKEN_URL")},
@@ -139,13 +131,12 @@ func newCommand() *cli.Command {
 					cfg := &config.Config{
 						Addr:                     cmd.String("addr"),
 						DurableStore:             cmd.String("durable-store"),
-						SpatialIndex:             cmd.String("spatial-index"),
+						DatabaseURL:              cmd.String("database-url"),
 						AirspaceProviders:        cmd.StringSlice("airspace-provider"),
 						TelemetryStore:           cmd.String("telemetry-store"),
 						InfluxDBHost:             cmd.String("influxdb-host"),
 						InfluxDBToken:            cmd.String("influxdb-token"),
 						InfluxDBDatabase:         cmd.String("influxdb-database"),
-						PostGISDatabaseURL:       cmd.String("postgis-database-url"),
 						DSSBaseURL:               cmd.String("dss-base-url"),
 						DSSStaticToken:           cmd.String("dss-static-token"),
 						DSSOAuthTokenURL:         cmd.String("dss-oauth-token-url"),
@@ -187,30 +178,14 @@ func run(ctx context.Context, cfg *config.Config) error {
 		}
 	}()
 
-	durableStore, err := newDurableStore(cfg.DurableStore)
+	durableStore, err := newDurableStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
-	spatial, err := newSpatialIndex(ctx, cfg)
-	if err != nil {
-		return err
+	if closer, ok := durableStore.(interface{ Close() }); ok {
+		defer closer.Close()
 	}
-	var projection *spatialindex.Projection
-	if spatial != nil {
-		projection = spatialindex.NewProjection(spatial)
-		volumes, err := durableStore.ListOperationalVolumes(ctx, "")
-		if err != nil {
-			spatial.Close()
-			return fmt.Errorf("load durable volumes for spatial rebuild: %w", err)
-		}
-		if err := projection.Rebuild(ctx, volumes); err != nil {
-			spatial.Close()
-			return fmt.Errorf("rebuild spatial index: %w", err)
-		}
-		defer projection.Close()
-		durableStore = durable.UseSpatialIndex(durableStore, projection)
-	}
-	providers, err := newAirspaceProviders(cfg, durableStore, projection)
+	providers, err := newAirspaceProviders(cfg, durableStore)
 	if err != nil {
 		return err
 	}
@@ -252,7 +227,6 @@ func run(ctx context.Context, cfg *config.Config) error {
 		slog.Info("starting aero-arc-api",
 			slog.String("http_addr", cfg.Addr),
 			slog.String("durable_store", cfg.DurableStore),
-			slog.String("spatial_index", cfg.SpatialIndex),
 			slog.Any("airspace_providers", cfg.AirspaceProviders),
 			slog.String("telemetry_store", cfg.TelemetryStore),
 			slog.String("replay_store", cfg.ReplayStore),
@@ -287,41 +261,26 @@ func run(ctx context.Context, cfg *config.Config) error {
 	return nil
 }
 
-func newDurableStore(mode string) (durable.Store, error) {
-	switch mode {
-	case "memory":
+func newDurableStore(ctx context.Context, cfg *config.Config) (durable.Store, error) {
+	switch cfg.DurableStore {
+	case config.DurableStoreMemory:
 		return durablememory.NewStore(), nil
+	case config.DurableStorePostgres:
+		return durablepostgres.Open(ctx, cfg.DatabaseURL)
 	default:
-		return nil, fmt.Errorf("unsupported durable store %q", mode)
-	}
-}
-
-func newSpatialIndex(ctx context.Context, cfg *config.Config) (spatialindex.Index, error) {
-	switch cfg.SpatialIndex {
-	case config.SpatialIndexNone:
-		return nil, nil
-	case config.SpatialIndexMemory:
-		return spatialmemory.New(), nil
-	case config.SpatialIndexPostGIS:
-		return spatialpostgis.Open(ctx, cfg.PostGISDatabaseURL)
-	default:
-		return nil, fmt.Errorf("unsupported spatial index %q", cfg.SpatialIndex)
+		return nil, fmt.Errorf("unsupported durable store %q", cfg.DurableStore)
 	}
 }
 
 func newAirspaceProviders(
 	cfg *config.Config,
 	durableStore durable.Store,
-	localIndex spatialindex.CandidateFinder,
 ) ([]airspaceprovider.Provider, error) {
 	providers := make([]airspaceprovider.Provider, 0, len(cfg.AirspaceProviders))
 	for _, name := range cfg.AirspaceProviders {
 		switch name {
 		case airspaceprovider.ProviderLocal:
-			if localIndex == nil {
-				return nil, fmt.Errorf("local airspace provider requires a spatial index")
-			}
-			providers = append(providers, localprovider.New(durableStore, localIndex))
+			providers = append(providers, localprovider.New(durableStore, durableStore))
 		case airspaceprovider.ProviderInterUSS:
 			provider, err := newInterUSSProvider(cfg)
 			if err != nil {

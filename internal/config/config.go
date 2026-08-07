@@ -12,9 +12,8 @@ import (
 )
 
 const (
-	SpatialIndexNone    = "none"
-	SpatialIndexMemory  = "memory"
-	SpatialIndexPostGIS = "postgis"
+	DurableStoreMemory   = "memory"
+	DurableStorePostgres = "postgres"
 
 	AirspaceProviderLocal    = airspaceprovider.ProviderLocal
 	AirspaceProviderInterUSS = airspaceprovider.ProviderInterUSS
@@ -22,8 +21,7 @@ const (
 
 const (
 	defaultAddr                = ":8080"
-	defaultDurableStore        = "memory"
-	defaultSpatialIndex        = SpatialIndexMemory
+	defaultDurableStore        = DurableStoreMemory
 	defaultTelemetryStore      = "memory"
 	defaultReplayStore         = "memory"
 	defaultRegistryMode        = "memory"
@@ -40,13 +38,12 @@ const (
 type Config struct {
 	Addr                     string
 	DurableStore             string
-	SpatialIndex             string
+	DatabaseURL              string
 	AirspaceProviders        []string
 	TelemetryStore           string
 	InfluxDBHost             string
 	InfluxDBToken            string
 	InfluxDBDatabase         string
-	PostGISDatabaseURL       string
 	DSSBaseURL               string
 	DSSStaticToken           string
 	DSSOAuthTokenURL         string
@@ -67,7 +64,6 @@ func Defaults() *Config {
 	return &Config{
 		Addr:                defaultAddr,
 		DurableStore:        defaultDurableStore,
-		SpatialIndex:        defaultSpatialIndex,
 		AirspaceProviders:   []string{AirspaceProviderLocal},
 		TelemetryStore:      defaultTelemetryStore,
 		ReplayStore:         defaultReplayStore,
@@ -88,13 +84,12 @@ func Load() (*Config, error) {
 
 	applyStringEnv("AERO_API_ADDR", &cfg.Addr)
 	applyStringEnv("AERO_API_DURABLE_STORE", &cfg.DurableStore)
-	applyStringEnv("AERO_API_SPATIAL_INDEX", &cfg.SpatialIndex)
+	applyStringEnv("AERO_API_DATABASE_URL", &cfg.DatabaseURL)
 	applyStringSliceEnv("AERO_API_AIRSPACE_PROVIDERS", &cfg.AirspaceProviders)
 	applyStringEnv("AERO_API_TELEMETRY_STORE", &cfg.TelemetryStore)
 	applyStringEnv("AERO_API_INFLUXDB_HOST", &cfg.InfluxDBHost)
 	applyStringEnv("AERO_API_INFLUXDB_TOKEN", &cfg.InfluxDBToken)
 	applyStringEnv("AERO_API_INFLUXDB_DATABASE", &cfg.InfluxDBDatabase)
-	applyStringEnv("AERO_API_POSTGIS_DATABASE_URL", &cfg.PostGISDatabaseURL)
 	applyStringEnv("AERO_API_DSS_BASE_URL", &cfg.DSSBaseURL)
 	applyStringEnv("AERO_API_DSS_STATIC_TOKEN", &cfg.DSSStaticToken)
 	applyStringEnv("AERO_API_DSS_OAUTH_TOKEN_URL", &cfg.DSSOAuthTokenURL)
@@ -129,14 +124,8 @@ func (cfg *Config) Validate() error {
 	if cfg.Addr == "" {
 		return fmt.Errorf("AERO_API_ADDR cannot be empty")
 	}
-	if cfg.DurableStore != "memory" {
-		// TODO: support tidb and postgres durable stores.
+	if cfg.DurableStore != DurableStoreMemory && cfg.DurableStore != DurableStorePostgres {
 		return fmt.Errorf("unsupported durable store %q", cfg.DurableStore)
-	}
-	switch cfg.SpatialIndex {
-	case SpatialIndexNone, SpatialIndexMemory, SpatialIndexPostGIS:
-	default:
-		return fmt.Errorf("unsupported spatial index %q", cfg.SpatialIndex)
 	}
 	providers := make(map[string]struct{}, len(cfg.AirspaceProviders))
 	for index, provider := range cfg.AirspaceProviders {
@@ -157,14 +146,11 @@ func (cfg *Config) Validate() error {
 	if len(providers) == 0 {
 		return fmt.Errorf("AERO_API_AIRSPACE_PROVIDERS must configure at least one provider")
 	}
-	if _, local := providers[AirspaceProviderLocal]; local && cfg.SpatialIndex == SpatialIndexNone {
-		return fmt.Errorf("local airspace provider requires a spatial index")
+	if cfg.DurableStore == DurableStorePostgres && cfg.DatabaseURL == "" {
+		return fmt.Errorf("AERO_API_DATABASE_URL is required when durable store is postgres")
 	}
-	if cfg.SpatialIndex == SpatialIndexPostGIS && cfg.PostGISDatabaseURL == "" {
-		return fmt.Errorf("AERO_API_POSTGIS_DATABASE_URL is required when spatial index is postgis")
-	}
-	if cfg.SpatialIndex != SpatialIndexPostGIS && cfg.PostGISDatabaseURL != "" {
-		return fmt.Errorf("AERO_API_POSTGIS_DATABASE_URL requires spatial index postgis")
+	if cfg.DurableStore != DurableStorePostgres && cfg.DatabaseURL != "" {
+		return fmt.Errorf("AERO_API_DATABASE_URL requires durable store postgres")
 	}
 	_, interussEnabled := providers[AirspaceProviderInterUSS]
 	if interussEnabled && cfg.DSSBaseURL == "" {
@@ -206,9 +192,9 @@ func (cfg *Config) Validate() error {
 		return fmt.Errorf("AERO_API_REQUEST_TIMEOUT must be > 0")
 	}
 	for name, value := range map[string]string{
-		"AERO_API_POSTGIS_DATABASE_URL": cfg.PostGISDatabaseURL,
-		"AERO_API_DSS_BASE_URL":         cfg.DSSBaseURL,
-		"AERO_API_DSS_OAUTH_TOKEN_URL":  cfg.DSSOAuthTokenURL,
+		"AERO_API_DATABASE_URL":        cfg.DatabaseURL,
+		"AERO_API_DSS_BASE_URL":        cfg.DSSBaseURL,
+		"AERO_API_DSS_OAUTH_TOKEN_URL": cfg.DSSOAuthTokenURL,
 	} {
 		if value == "" {
 			continue

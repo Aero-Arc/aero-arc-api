@@ -12,8 +12,8 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 )
 
-// Provider uses a spatial projection for candidate discovery and
-// hydrates every result from the authoritative durable store.
+// Provider uses the durable store's spatial query for candidate discovery and
+// hydrates every result from that same authoritative store.
 type Provider struct {
 	durable operationalReader
 	spatial spatialindex.CandidateFinder
@@ -57,7 +57,7 @@ func (p *Provider) FindOperationalIntents(
 	for _, candidate := range candidates {
 		intent, err := p.durable.GetOperationalIntentVersion(ctx, candidate.IntentID, candidate.IntentVersion)
 		if errors.Is(err, durable.ErrNotFound) {
-			continue // A stale projection row can only create a false positive.
+			continue // The candidate may have been removed after the spatial query.
 		}
 		if err != nil {
 			readErrors = append(readErrors, fmt.Errorf("get candidate %s v%d: %w", candidate.IntentID, candidate.IntentVersion, err))
