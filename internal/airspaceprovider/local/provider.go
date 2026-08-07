@@ -14,16 +14,10 @@ import (
 // Provider uses the durable store's spatial query for candidate discovery and
 // hydrates every result from that same authoritative store.
 type Provider struct {
-	store store
+	store durable.Store
 }
 
-type store interface {
-	GetOperationalIntentVersion(context.Context, string, int) (domain.OperationalIntent, error)
-	ListOperationalVolumes(context.Context, string) ([]domain.OperationalVolume, error)
-	FindCandidates(context.Context, durable.CandidateQuery) ([]durable.Candidate, error)
-}
-
-func New(store store) *Provider {
+func New(store durable.Store) *Provider {
 	return &Provider{store: store}
 }
 
