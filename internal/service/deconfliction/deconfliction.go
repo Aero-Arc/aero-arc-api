@@ -22,7 +22,7 @@ type DeconflictionService struct {
 func NewDeconflictionService(
 	store durable.Store,
 	providers ...airspaceprovider.Provider,
-) *DeconflictionService {
+) (*DeconflictionService, error) {
 	return NewDeconflictionServiceWithClock(store, nil, providers...)
 }
 
@@ -30,7 +30,7 @@ func NewDeconflictionServiceWithClock(
 	store durable.Store,
 	now func() time.Time,
 	providers ...airspaceprovider.Provider,
-) *DeconflictionService {
+) (*DeconflictionService, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
@@ -41,9 +41,9 @@ func NewDeconflictionServiceWithClock(
 		}
 	}
 	if len(configured) == 0 {
-		panic("deconfliction airspace provider is required")
+		return nil, fmt.Errorf("deconfliction airspace provider is required")
 	}
-	return &DeconflictionService{durable: store, providers: configured, now: now}
+	return &DeconflictionService{durable: store, providers: configured, now: now}, nil
 }
 
 func (s *DeconflictionService) CheckIntent(ctx context.Context, intentID string) (domain.DeconflictionResult, error) {

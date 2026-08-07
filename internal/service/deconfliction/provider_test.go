@@ -9,6 +9,7 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider"
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/service/deconfliction"
+	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 )
 
@@ -20,12 +21,23 @@ type discoveryProvider struct {
 }
 
 func TestServiceRequiresProvider(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("NewDeconflictionService did not reject a nil provider")
-		}
-	}()
-	deconfliction.NewDeconflictionService(durablememory.NewStore())
+	if _, err := deconfliction.NewDeconflictionService(durablememory.NewStore()); err == nil {
+		t.Fatal("NewDeconflictionService did not reject an empty provider list")
+	}
+}
+
+func newProviderService(
+	t *testing.T,
+	store durable.Store,
+	now func() time.Time,
+	providers ...airspaceprovider.Provider,
+) *deconfliction.DeconflictionService {
+	t.Helper()
+	service, err := deconfliction.NewDeconflictionServiceWithClock(store, now, providers...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
 }
 
 func (p *discoveryProvider) ID() string {
@@ -65,9 +77,10 @@ func TestServiceDiscoversEvaluatesAndPersistsProviderIntents(t *testing.T) {
 	}}}
 	second := &discoveryProvider{id: "dss-two"}
 
-	result, err := deconfliction.NewDeconflictionServiceWithClock(
+	service := newProviderService(t,
 		store, func() time.Time { return now }, first, second,
-	).CheckIntent(ctx, intent.ID)
+	)
+	result, err := service.CheckIntent(ctx, intent.ID)
 	if err != nil {
 		t.Fatalf("CheckIntent returned error: %v", err)
 	}
@@ -108,9 +121,10 @@ func TestProviderFailureProducesIndeterminateFinding(t *testing.T) {
 	}
 	provider := &discoveryProvider{id: "unavailable-dss", err: errors.New("network unavailable")}
 
-	result, err := deconfliction.NewDeconflictionServiceWithClock(
+	service := newProviderService(t,
 		store, func() time.Time { return now }, provider,
-	).CheckIntent(ctx, intent.ID)
+	)
+	result, err := service.CheckIntent(ctx, intent.ID)
 	if err != nil {
 		t.Fatalf("CheckIntent returned error: %v", err)
 	}
@@ -153,9 +167,10 @@ func TestProviderPartialFailureStillEvaluatesReturnedCandidates(t *testing.T) {
 		}},
 	}
 
-	result, err := deconfliction.NewDeconflictionServiceWithClock(
+	service := newProviderService(t,
 		store, func() time.Time { return now }, provider,
-	).CheckIntent(ctx, intent.ID)
+	)
+	result, err := service.CheckIntent(ctx, intent.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
