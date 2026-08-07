@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
-	"github.com/Aero-Arc/aero-arc-api/internal/spatialindex"
+	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 )
 
 func TestAuthoritativeSpatialReadCheckSlice(t *testing.T) {
@@ -53,7 +53,7 @@ func TestAuthoritativeSpatialReadCheckSlice(t *testing.T) {
 	}
 
 	// Query through a second store instance to model another API replica.
-	candidates, err := observer.FindCandidates(ctx, spatialindex.Query{
+	candidates, err := observer.FindCandidates(ctx, durable.CandidateQuery{
 		ExcludeIntentID: target.IntentID,
 		Volumes:         []domain.OperationalVolume{target},
 	})
@@ -70,7 +70,7 @@ func TestAuthoritativeSpatialReadCheckSlice(t *testing.T) {
 	if err := store.ReplaceOperationalVolumes(ctx, overlap.IntentID, 1, []domain.OperationalVolume{replacement}); err != nil {
 		t.Fatal(err)
 	}
-	candidates, err = observer.FindCandidates(ctx, spatialindex.Query{
+	candidates, err = observer.FindCandidates(ctx, durable.CandidateQuery{
 		ExcludeIntentID: target.IntentID,
 		Volumes:         []domain.OperationalVolume{target},
 	})

@@ -7,7 +7,7 @@ import (
 
 	"github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider"
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
-	"github.com/Aero-Arc/aero-arc-api/internal/spatialindex"
+	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 )
 
@@ -55,7 +55,7 @@ func TestProviderReturnsCandidateFinderError(t *testing.T) {
 
 type failingCandidateFinder struct{}
 
-func (failingCandidateFinder) FindCandidates(context.Context, spatialindex.Query) ([]spatialindex.Candidate, error) {
+func (failingCandidateFinder) FindCandidates(context.Context, durable.CandidateQuery) ([]durable.Candidate, error) {
 	return nil, context.Canceled
 }
 

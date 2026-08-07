@@ -8,7 +8,6 @@ import (
 
 	"github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider"
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
-	"github.com/Aero-Arc/aero-arc-api/internal/spatialindex"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 )
 
@@ -16,7 +15,7 @@ import (
 // hydrates every result from that same authoritative store.
 type Provider struct {
 	durable operationalReader
-	spatial spatialindex.CandidateFinder
+	spatial durable.CandidateFinder
 }
 
 type operationalReader interface {
@@ -26,7 +25,7 @@ type operationalReader interface {
 
 func New(
 	durableStore operationalReader,
-	spatialIndex spatialindex.CandidateFinder,
+	spatialIndex durable.CandidateFinder,
 ) *Provider {
 	return &Provider{durable: durableStore, spatial: spatialIndex}
 }
@@ -42,7 +41,7 @@ func (p *Provider) FindOperationalIntents(
 	if p.durable == nil || p.spatial == nil {
 		return nil, fmt.Errorf("local spatial provider is not configured")
 	}
-	candidates, err := p.spatial.FindCandidates(ctx, spatialindex.Query{
+	candidates, err := p.spatial.FindCandidates(ctx, durable.CandidateQuery{
 		ExcludeIntentID: query.Intent.ID,
 		Volumes:         query.Volumes,
 	})

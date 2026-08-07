@@ -12,7 +12,6 @@ import (
 	"errors"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
-	"github.com/Aero-Arc/aero-arc-api/internal/spatialindex"
 )
 
 var (
@@ -20,9 +19,23 @@ var (
 	ErrVersionConflict = errors.New("version conflict")
 )
 
+type CandidateQuery struct {
+	ExcludeIntentID string
+	Volumes         []domain.OperationalVolume
+}
+
+type Candidate struct {
+	IntentID      string
+	IntentVersion int
+}
+
+type CandidateFinder interface {
+	FindCandidates(context.Context, CandidateQuery) ([]Candidate, error)
+}
+
 // Store defines the durable system-of-record operations used by the API.
 type Store interface {
-	spatialindex.CandidateFinder
+	CandidateFinder
 	UpsertOperator(ctx context.Context, operator domain.Operator) error
 	GetOperator(ctx context.Context, operatorID string) (domain.Operator, error)
 	ListOperators(ctx context.Context) ([]domain.Operator, error)

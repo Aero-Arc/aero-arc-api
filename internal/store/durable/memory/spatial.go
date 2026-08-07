@@ -6,24 +6,24 @@ import (
 	"strconv"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
-	"github.com/Aero-Arc/aero-arc-api/internal/spatialindex"
+	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 )
 
 // FindCandidates is the development-store equivalent of the PostGIS query. It
 // scans in memory and deliberately over-selects because final conflict checks
 // always hydrate and evaluate the authoritative records.
-func (s *Store) FindCandidates(_ context.Context, query spatialindex.Query) ([]spatialindex.Candidate, error) {
+func (s *Store) FindCandidates(_ context.Context, query durable.CandidateQuery) ([]durable.Candidate, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	unique := make(map[string]spatialindex.Candidate)
+	unique := make(map[string]durable.Candidate)
 	for _, volume := range s.operationalVolumes {
 		if volume.IntentID == query.ExcludeIntentID || !couldOverlap(query.Volumes, volume) {
 			continue
 		}
-		candidate := spatialindex.Candidate{IntentID: volume.IntentID, IntentVersion: volume.IntentVersion}
+		candidate := durable.Candidate{IntentID: volume.IntentID, IntentVersion: volume.IntentVersion}
 		unique[candidateKey(candidate)] = candidate
 	}
-	candidates := make([]spatialindex.Candidate, 0, len(unique))
+	candidates := make([]durable.Candidate, 0, len(unique))
 	for _, candidate := range unique {
 		candidates = append(candidates, candidate)
 	}
@@ -61,6 +61,6 @@ func dimensionsUsable(volume domain.OperationalVolume) bool {
 		volume.AltitudeRef != ""
 }
 
-func candidateKey(candidate spatialindex.Candidate) string {
+func candidateKey(candidate durable.Candidate) string {
 	return candidate.IntentID + "\x00" + strconv.Itoa(candidate.IntentVersion)
 }

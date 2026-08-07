@@ -6,13 +6,13 @@ import (
 	"fmt"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
-	"github.com/Aero-Arc/aero-arc-api/internal/spatialindex"
+	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 )
 
 // FindCandidates searches the authoritative operational volume rows. PostGIS
 // maintains the GiST index transactionally with those rows, so every API
 // replica observes one committed source of truth.
-func (s *Store) FindCandidates(ctx context.Context, query spatialindex.Query) ([]spatialindex.Candidate, error) {
+func (s *Store) FindCandidates(ctx context.Context, query durable.CandidateQuery) ([]durable.Candidate, error) {
 	targetVolumes := append([]domain.OperationalVolume(nil), query.Volumes...)
 	for index := range targetVolumes {
 		geometry, err := geometryJSON(targetVolumes[index].GeoJSON)
@@ -76,9 +76,9 @@ func (s *Store) FindCandidates(ctx context.Context, query spatialindex.Query) ([
 		return nil, fmt.Errorf("query PostGIS candidates: %w", err)
 	}
 	defer rows.Close()
-	candidates := make([]spatialindex.Candidate, 0)
+	candidates := make([]durable.Candidate, 0)
 	for rows.Next() {
-		var candidate spatialindex.Candidate
+		var candidate durable.Candidate
 		if err := rows.Scan(&candidate.IntentID, &candidate.IntentVersion); err != nil {
 			return nil, fmt.Errorf("scan PostGIS candidate: %w", err)
 		}
