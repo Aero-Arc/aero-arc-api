@@ -25,7 +25,7 @@ func TestServiceRequiresProvider(t *testing.T) {
 			t.Fatal("NewDeconflictionService did not reject a nil provider")
 		}
 	}()
-	deconfliction.NewDeconflictionService(durablememory.NewStore(), nil)
+	deconfliction.NewDeconflictionService(durablememory.NewStore())
 }
 
 func (p *discoveryProvider) ID() string {

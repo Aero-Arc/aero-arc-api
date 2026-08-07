@@ -211,7 +211,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		slog.Info("seeded demo data")
 	}
 	fleetService := service.NewFleetService(durableStore, telemetryStore, replayStore, registryClient)
-	deconflictionService := deconfliction.NewDeconflictionService(durableStore, providers[0], providers[1:]...)
+	deconflictionService := deconfliction.NewDeconflictionService(durableStore, providers...)
 	intentService := service.NewIntentService(durableStore, deconflictionService)
 	preflightService := service.NewPreflightService(durableStore)
 	conformanceService := service.NewConformanceService(durableStore, telemetryStore)

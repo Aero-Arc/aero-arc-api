@@ -21,30 +21,27 @@ type DeconflictionService struct {
 
 func NewDeconflictionService(
 	store durable.Store,
-	provider airspaceprovider.Provider,
-	additional ...airspaceprovider.Provider,
+	providers ...airspaceprovider.Provider,
 ) *DeconflictionService {
-	return NewDeconflictionServiceWithClock(store, nil, provider, additional...)
+	return NewDeconflictionServiceWithClock(store, nil, providers...)
 }
 
 func NewDeconflictionServiceWithClock(
 	store durable.Store,
 	now func() time.Time,
-	provider airspaceprovider.Provider,
-	additional ...airspaceprovider.Provider,
+	providers ...airspaceprovider.Provider,
 ) *DeconflictionService {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	if provider == nil {
-		panic("deconfliction airspace provider is required")
-	}
-	configured := make([]airspaceprovider.Provider, 0, 1+len(additional))
-	configured = append(configured, provider)
-	for _, candidate := range additional {
-		if candidate != nil {
-			configured = append(configured, candidate)
+	configured := make([]airspaceprovider.Provider, 0, len(providers))
+	for _, provider := range providers {
+		if provider != nil {
+			configured = append(configured, provider)
 		}
+	}
+	if len(configured) == 0 {
+		panic("deconfliction airspace provider is required")
 	}
 	return &DeconflictionService{durable: store, providers: configured, now: now}
 }
