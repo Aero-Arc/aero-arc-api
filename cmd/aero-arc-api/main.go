@@ -277,7 +277,7 @@ func newDurableStore(ctx context.Context, cfg *config.Config) (durable.Store, er
 
 func newAirspaceProviders(
 	cfg *config.Config,
-	durableStore durable.Store,
+	durableStore durable.OperationalStore,
 ) ([]airspaceprovider.Provider, error) {
 	providers := make([]airspaceprovider.Provider, 0, len(cfg.AirspaceProviders))
 	for _, name := range cfg.AirspaceProviders {

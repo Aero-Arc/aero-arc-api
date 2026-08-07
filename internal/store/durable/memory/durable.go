@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strconv"
 	"sync"
@@ -33,6 +34,8 @@ type Store struct {
 	personnel            map[string]domain.OperationsPersonnel
 	personnelAssignments []domain.PersonnelAssignment
 }
+
+var _ durable.OperationalStore = (*Store)(nil)
 
 func NewStore() *Store {
 	return &Store{
@@ -218,17 +221,31 @@ func (s *Store) ListMaintenanceEvents(_ context.Context, aircraftID string) ([]d
 func (s *Store) CreateOperationalIntent(_ context.Context, intent domain.OperationalIntent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.operationalIntents[operationalIntentKey(intent.ID, intent.Version)] = intent
+	key := operationalIntentKey(intent.ID, intent.Version)
+	if _, exists := s.operationalIntents[key]; exists {
+		return durable.ErrAlreadyExists
+	}
+	intent.Revision = 0
+	s.operationalIntents[key] = intent
 	return nil
 }
 
-func (s *Store) UpdateOperationalIntent(_ context.Context, intent domain.OperationalIntent) error {
+func (s *Store) UpdateOperationalIntent(_ context.Context, intent domain.OperationalIntent, expectedRevision int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.operationalIntentExists(intent.ID) {
+	key := operationalIntentKey(intent.ID, intent.Version)
+	current, exists := s.operationalIntents[key]
+	if !exists {
+		if s.operationalIntentExists(intent.ID) {
+			return durable.ErrVersionConflict
+		}
 		return durable.ErrNotFound
 	}
-	s.operationalIntents[operationalIntentKey(intent.ID, intent.Version)] = intent
+	if current.Revision != expectedRevision {
+		return durable.ErrVersionConflict
+	}
+	intent.Revision = expectedRevision + 1
+	s.operationalIntents[key] = intent
 	return nil
 }
 
@@ -300,6 +317,11 @@ func (s *Store) RecordOperationalVolume(_ context.Context, volume domain.Operati
 func (s *Store) ReplaceOperationalVolumes(_ context.Context, intentID string, intentVersion int, volumes []domain.OperationalVolume) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for _, volume := range volumes {
+		if volume.IntentID != intentID || volume.IntentVersion != intentVersion {
+			return fmt.Errorf("operational volume %q is outside replacement scope", volume.ID)
+		}
+	}
 	for key, volume := range s.operationalVolumes {
 		if volume.IntentID == intentID && volume.IntentVersion == intentVersion {
 			delete(s.operationalVolumes, key)
@@ -314,17 +336,34 @@ func (s *Store) ReplaceOperationalVolumes(_ context.Context, intentID string, in
 func (s *Store) ReplaceOperationalIntent(
 	_ context.Context,
 	expectedVersion int,
+	expectedRevision int64,
 	intent domain.OperationalIntent,
 	volumes []domain.OperationalVolume,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if intent.Version != expectedVersion && intent.Version != expectedVersion+1 {
+		return durable.ErrVersionConflict
+	}
+	for _, volume := range volumes {
+		if volume.IntentID != intent.ID || volume.IntentVersion != intent.Version {
+			return fmt.Errorf("operational volume %q is outside replacement scope", volume.ID)
+		}
+	}
 	current, ok := s.latestOperationalIntent(intent.ID)
 	if !ok {
 		return durable.ErrNotFound
 	}
 	if current.Version != expectedVersion {
 		return durable.ErrVersionConflict
+	}
+	if current.Revision != expectedRevision {
+		return durable.ErrVersionConflict
+	}
+	if intent.Version == current.Version {
+		intent.Revision = expectedRevision + 1
+	} else {
+		intent.Revision = 0
 	}
 	s.operationalIntents[operationalIntentKey(intent.ID, intent.Version)] = intent
 	for key, volume := range s.operationalVolumes {
@@ -665,6 +704,11 @@ func (s *Store) ListConflictFindings(_ context.Context, intentID string, intentV
 func (s *Store) ReplaceConflictFindings(_ context.Context, intentID string, intentVersion int, ruleVersion string, findings []domain.ConflictFinding) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for _, finding := range findings {
+		if finding.IntentID != intentID || finding.IntentVersion != intentVersion || finding.RuleVersion != ruleVersion {
+			return fmt.Errorf("conflict finding %q is outside replacement scope", finding.ID)
+		}
+	}
 	next := make([]domain.ConflictFinding, 0, len(s.conflictFindings)+len(findings))
 	for _, existing := range s.conflictFindings {
 		if existing.IntentID != intentID || existing.IntentVersion != intentVersion || existing.RuleVersion != ruleVersion {

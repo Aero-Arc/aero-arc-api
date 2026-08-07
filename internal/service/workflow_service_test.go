@@ -12,6 +12,19 @@ import (
 	telemetrymemory "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/memory"
 )
 
+func TestCreateIntentRejectsInvalidPlannedWindow(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	now := fixedWorkflowTime()
+	request := workflowIntentRequest(now)
+	request.PlannedEndAt = request.PlannedStartAt
+
+	_, err := NewIntentServiceWithClock(store, fixedClock(now), nil).CreateIntent(ctx, request)
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("CreateIntent error = %v, want ErrValidation", err)
+	}
+}
+
 func TestIntentLifecycleHappyPath(t *testing.T) {
 	ctx := context.Background()
 	store := durablememory.NewStore()

@@ -263,7 +263,7 @@ func TestDeconflictionIgnoresSelfAndNonCoordinatedStatuses(t *testing.T) {
 	} {
 		intent := createAcceptedIntentWithVolume(t, ctx, store, now, tc.id, "aircraft-2", "volume-"+tc.id, squareGeoJSON(), 10, 120, now)
 		intent.Status = tc.status
-		must(t, store.UpdateOperationalIntent(ctx, intent))
+		must(t, store.UpdateOperationalIntent(ctx, intent, intent.Revision))
 	}
 
 	result, err := newTestDeconflictionService(t, store, now).CheckIntent(ctx, target.ID)
@@ -432,7 +432,7 @@ func TestDeconflictionFindingsAreScopedByIntentVersion(t *testing.T) {
 		t.Fatalf("first posture = %q, want potential_conflict", first.Posture)
 	}
 	target.Version = 2
-	must(t, store.UpdateOperationalIntent(ctx, target))
+	must(t, store.ReplaceOperationalIntent(ctx, 1, target.Revision, target, nil))
 	must(t, store.RecordOperationalVolume(ctx, domain.OperationalVolume{
 		ID:            "volume-target",
 		OperatorID:    "operator-1",

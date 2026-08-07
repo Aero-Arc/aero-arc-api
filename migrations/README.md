@@ -10,7 +10,14 @@ columns live in the same authoritative tables. PostgreSQL updates the GiST
 spatial index in the same transaction as each volume write, so horizontally
 scaled API replicas do not coordinate an application-managed projection.
 
+Within an operational-intent version, an internal monotonic revision provides
+optimistic concurrency for lifecycle and draft updates. Intent-scoped advisory
+locks serialize volume and finding replacements across replicas.
+
 The other durable domain groups still use the embedded memory implementation
 in this vertical slice. A versioned migration runner and PostgreSQL tables for
 those groups should replace startup schema initialization and the fallback
 before production deployment.
+
+The production follow-up and acceptance criteria are tracked in
+`docs/deconfliction-postgis-next-steps.md`.

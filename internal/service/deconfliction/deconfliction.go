@@ -14,20 +14,20 @@ import (
 const deconflictionRuleVersion = "provider-aggregate-v1"
 
 type DeconflictionService struct {
-	durable   durable.Store
+	durable   durable.OperationalStore
 	providers []airspaceprovider.Provider
 	now       func() time.Time
 }
 
 func NewDeconflictionService(
-	store durable.Store,
+	store durable.OperationalStore,
 	providers ...airspaceprovider.Provider,
 ) (*DeconflictionService, error) {
 	return NewDeconflictionServiceWithClock(store, nil, providers...)
 }
 
 func NewDeconflictionServiceWithClock(
-	store durable.Store,
+	store durable.OperationalStore,
 	now func() time.Time,
 	providers ...airspaceprovider.Provider,
 ) (*DeconflictionService, error) {

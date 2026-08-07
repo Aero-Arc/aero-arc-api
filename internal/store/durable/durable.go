@@ -16,6 +16,7 @@ import (
 
 var (
 	ErrNotFound        = errors.New("not found")
+	ErrAlreadyExists   = errors.New("already exists")
 	ErrVersionConflict = errors.New("version conflict")
 )
 
@@ -29,9 +30,29 @@ type Candidate struct {
 	IntentVersion int
 }
 
+// OperationalStore is the durable boundary for the operational-intent and
+// deconfliction vertical slice. Production implementations must keep these
+// records and the spatial candidate index in one shared transactional store.
+type OperationalStore interface {
+	FindCandidates(context.Context, CandidateQuery) ([]Candidate, error)
+	CreateOperationalIntent(ctx context.Context, intent domain.OperationalIntent) error
+	UpdateOperationalIntent(ctx context.Context, intent domain.OperationalIntent, expectedRevision int64) error
+	GetOperationalIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error)
+	GetOperationalIntentVersion(ctx context.Context, intentID string, version int) (domain.OperationalIntent, error)
+	ListOperationalIntents(ctx context.Context, aircraftID string) ([]domain.OperationalIntent, error)
+	ListOperationalIntentVersions(ctx context.Context, intentID string) ([]domain.OperationalIntent, error)
+	RecordOperationalVolume(ctx context.Context, volume domain.OperationalVolume) error
+	ReplaceOperationalVolumes(ctx context.Context, intentID string, intentVersion int, volumes []domain.OperationalVolume) error
+	ReplaceOperationalIntent(ctx context.Context, expectedVersion int, expectedRevision int64, intent domain.OperationalIntent, volumes []domain.OperationalVolume) error
+	ListOperationalVolumes(ctx context.Context, intentID string) ([]domain.OperationalVolume, error)
+	RecordConflictFinding(ctx context.Context, finding domain.ConflictFinding) error
+	ListConflictFindings(ctx context.Context, intentID string, intentVersion int) ([]domain.ConflictFinding, error)
+	ReplaceConflictFindings(ctx context.Context, intentID string, intentVersion int, ruleVersion string, findings []domain.ConflictFinding) error
+}
+
 // Store defines the durable system-of-record operations used by the API.
 type Store interface {
-	FindCandidates(context.Context, CandidateQuery) ([]Candidate, error)
+	OperationalStore
 	UpsertOperator(ctx context.Context, operator domain.Operator) error
 	GetOperator(ctx context.Context, operatorID string) (domain.Operator, error)
 	ListOperators(ctx context.Context) ([]domain.Operator, error)
@@ -55,16 +76,6 @@ type Store interface {
 	RecordMaintenanceEvent(ctx context.Context, event domain.MaintenanceEvent) error
 	ListMaintenanceEvents(ctx context.Context, aircraftID string) ([]domain.MaintenanceEvent, error)
 
-	CreateOperationalIntent(ctx context.Context, intent domain.OperationalIntent) error
-	UpdateOperationalIntent(ctx context.Context, intent domain.OperationalIntent) error
-	GetOperationalIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error)
-	GetOperationalIntentVersion(ctx context.Context, intentID string, version int) (domain.OperationalIntent, error)
-	ListOperationalIntents(ctx context.Context, aircraftID string) ([]domain.OperationalIntent, error)
-	ListOperationalIntentVersions(ctx context.Context, intentID string) ([]domain.OperationalIntent, error)
-	RecordOperationalVolume(ctx context.Context, volume domain.OperationalVolume) error
-	ReplaceOperationalVolumes(ctx context.Context, intentID string, intentVersion int, volumes []domain.OperationalVolume) error
-	ReplaceOperationalIntent(ctx context.Context, expectedVersion int, intent domain.OperationalIntent, volumes []domain.OperationalVolume) error
-	ListOperationalVolumes(ctx context.Context, intentID string) ([]domain.OperationalVolume, error)
 	UpsertRegulatoryAuthorization(ctx context.Context, authorization domain.RegulatoryAuthorization) error
 	GetRegulatoryAuthorization(ctx context.Context, authorizationID string) (domain.RegulatoryAuthorization, error)
 	ListRegulatoryAuthorizations(ctx context.Context, operatorID string) ([]domain.RegulatoryAuthorization, error)
@@ -90,10 +101,6 @@ type Store interface {
 	RecordComplianceFinding(ctx context.Context, finding domain.ComplianceFinding) error
 	ListComplianceFindings(ctx context.Context, subjectType string, subjectID string) ([]domain.ComplianceFinding, error)
 	ListComplianceFindingsForIntent(ctx context.Context, intentID string) ([]domain.ComplianceFinding, error)
-	RecordConflictFinding(ctx context.Context, finding domain.ConflictFinding) error
-	ListConflictFindings(ctx context.Context, intentID string, intentVersion int) ([]domain.ConflictFinding, error)
-	ReplaceConflictFindings(ctx context.Context, intentID string, intentVersion int, ruleVersion string, findings []domain.ConflictFinding) error
-
 	UpsertOperationsPersonnel(ctx context.Context, person domain.OperationsPersonnel) error
 	GetOperationsPersonnel(ctx context.Context, personID string) (domain.OperationsPersonnel, error)
 	RecordPersonnelAssignment(ctx context.Context, assignment domain.PersonnelAssignment) error

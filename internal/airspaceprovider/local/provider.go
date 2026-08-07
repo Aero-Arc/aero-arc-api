@@ -14,10 +14,10 @@ import (
 // Provider uses the durable store's spatial query for candidate discovery and
 // hydrates every result from that same authoritative store.
 type Provider struct {
-	store durable.Store
+	store durable.OperationalStore
 }
 
-func New(store durable.Store) *Provider {
+func New(store durable.OperationalStore) *Provider {
 	return &Provider{store: store}
 }
 

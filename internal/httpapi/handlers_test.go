@@ -525,7 +525,7 @@ func TestHandleActivateOperationalIntentBlocksOnDeconflictionPotentialConflict(t
 		PlannedEndAt:        now.Add(time.Hour),
 		AcceptedAt:          timePtr(now),
 		UpdatedAt:           now,
-	}); err != nil {
+	}, 0); err != nil {
 		t.Fatalf("UpdateOperationalIntent returned error: %v", err)
 	}
 

@@ -134,6 +134,9 @@ func (s *IntentService) CreateIntent(ctx context.Context, req CreateIntentReques
 	if req.PlannedStartAt.IsZero() || req.PlannedEndAt.IsZero() {
 		return domain.OperationalIntent{}, fmt.Errorf("%w: planned start and end are required", ErrValidation)
 	}
+	if !req.PlannedStartAt.Before(req.PlannedEndAt) {
+		return domain.OperationalIntent{}, fmt.Errorf("%w: planned_start_at must be before planned_end_at", ErrValidation)
+	}
 
 	intent := domain.OperationalIntent{
 		ID:                  id,
@@ -244,6 +247,7 @@ func (s *IntentService) ModifyIntent(ctx context.Context, intentID string, req M
 	now := s.now().UTC()
 	result := ModifyIntentResult{}
 	sourceVersion := intent.Version
+	sourceRevision := intent.Revision
 	if intent.Status == domain.IntentStatusAccepted {
 		result.SupersedesIntentID = intent.ID
 		result.SupersedesVersion = intent.Version
@@ -273,11 +277,16 @@ func (s *IntentService) ModifyIntent(ctx context.Context, intentID string, req M
 		volumes = append(volumes, volume)
 	}
 
-	if err := s.durable.ReplaceOperationalIntent(ctx, sourceVersion, intent, volumes); err != nil {
+	if err := s.durable.ReplaceOperationalIntent(ctx, sourceVersion, sourceRevision, intent, volumes); err != nil {
 		if errors.Is(err, durable.ErrVersionConflict) {
 			return ModifyIntentResult{}, fmt.Errorf("%w: operational intent changed during modification", ErrInvalidTransition)
 		}
 		return ModifyIntentResult{}, fmt.Errorf("replace operational intent: %w", err)
+	}
+	if intent.Version == sourceVersion {
+		intent.Revision = sourceRevision + 1
+	} else {
+		intent.Revision = 0
 	}
 	result.Intent = intent
 	result.Volumes = volumes
@@ -323,12 +332,14 @@ func (s *IntentService) ActivateIntent(ctx context.Context, intentID string) (do
 	}
 
 	now := s.now().UTC()
+	expectedRevision := intent.Revision
 	intent.Status = domain.IntentStatusActive
 	intent.ActivatedAt = &now
 	intent.UpdatedAt = now
-	if err := s.durable.UpdateOperationalIntent(ctx, intent); err != nil {
+	if err := s.durable.UpdateOperationalIntent(ctx, intent, expectedRevision); err != nil {
 		return domain.OperationalIntent{}, fmt.Errorf("update operational intent: %w", err)
 	}
+	intent.Revision = expectedRevision + 1
 	return intent, nil
 }
 
@@ -362,14 +373,16 @@ func (s *IntentService) transitionIntent(ctx context.Context, intentID string, n
 	}
 
 	now := s.now().UTC()
+	expectedRevision := intent.Revision
 	intent.Status = next
 	intent.UpdatedAt = now
 	if mutate != nil {
 		mutate(&intent, now)
 	}
-	if err := s.durable.UpdateOperationalIntent(ctx, intent); err != nil {
+	if err := s.durable.UpdateOperationalIntent(ctx, intent, expectedRevision); err != nil {
 		return domain.OperationalIntent{}, fmt.Errorf("update operational intent: %w", err)
 	}
+	intent.Revision = expectedRevision + 1
 	return intent, nil
 }
 

@@ -28,6 +28,8 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
+var _ durable.OperationalStore = (*Store)(nil)
+
 func Open(ctx context.Context, databaseURL string) (*Store, error) {
 	if strings.TrimSpace(databaseURL) == "" {
 		return nil, fmt.Errorf("PostgreSQL database URL is required")
@@ -50,31 +52,80 @@ func Open(ctx context.Context, databaseURL string) (*Store, error) {
 func (s *Store) Close() { s.pool.Close() }
 
 func (s *Store) CreateOperationalIntent(ctx context.Context, intent domain.OperationalIntent) error {
-	return upsertIntent(ctx, s.pool, intent)
+	intent.Revision = 0
+	raw, err := json.Marshal(intent)
+	if err != nil {
+		return fmt.Errorf("encode operational intent: %w", err)
+	}
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO operational_intents (
+			id, version, revision, aircraft_id, planned_start_at, planned_end_at, updated_at, data
+		) VALUES ($1, $2, 0, $3, $4, $5, $6, $7)`,
+		intent.ID, intent.Version, intent.AircraftID, intent.PlannedStartAt, intent.PlannedEndAt, intent.UpdatedAt, raw)
+	if err == nil {
+		return nil
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return durable.ErrAlreadyExists
+	}
+	return fmt.Errorf("create operational intent: %w", err)
 }
 
-func (s *Store) UpdateOperationalIntent(ctx context.Context, intent domain.OperationalIntent) error {
-	var exists bool
-	if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM operational_intents WHERE id = $1)`, intent.ID).Scan(&exists); err != nil {
-		return fmt.Errorf("check operational intent: %w", err)
+func (s *Store) UpdateOperationalIntent(ctx context.Context, intent domain.OperationalIntent, expectedRevision int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin operational intent update: %w", err)
 	}
-	if !exists {
-		return durable.ErrNotFound
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockIntent(ctx, tx, intent.ID); err != nil {
+		return err
 	}
-	return upsertIntent(ctx, s.pool, intent)
+	raw, err := json.Marshal(intent)
+	if err != nil {
+		return fmt.Errorf("encode operational intent: %w", err)
+	}
+	tag, err := tx.Exec(ctx, `
+		UPDATE operational_intents SET
+			revision = revision + 1,
+			aircraft_id = $3,
+			planned_start_at = $4,
+			planned_end_at = $5,
+			updated_at = $6,
+			data = $7
+		WHERE id = $1 AND version = $2 AND revision = $8`,
+		intent.ID, intent.Version, intent.AircraftID, intent.PlannedStartAt, intent.PlannedEndAt,
+		intent.UpdatedAt, raw, expectedRevision)
+	if err != nil {
+		return fmt.Errorf("update operational intent: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM operational_intents WHERE id = $1)`, intent.ID).Scan(&exists); err != nil {
+			return fmt.Errorf("check operational intent after update conflict: %w", err)
+		}
+		if !exists {
+			return durable.ErrNotFound
+		}
+		return durable.ErrVersionConflict
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit operational intent update: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) GetOperationalIntent(ctx context.Context, id string) (domain.OperationalIntent, error) {
-	return scanIntent(s.pool.QueryRow(ctx, `SELECT data FROM operational_intents WHERE id = $1 ORDER BY version DESC, updated_at DESC LIMIT 1`, id))
+	return scanIntent(s.pool.QueryRow(ctx, `SELECT data, revision FROM operational_intents WHERE id = $1 ORDER BY version DESC, updated_at DESC LIMIT 1`, id))
 }
 
 func (s *Store) GetOperationalIntentVersion(ctx context.Context, id string, version int) (domain.OperationalIntent, error) {
-	return scanIntent(s.pool.QueryRow(ctx, `SELECT data FROM operational_intents WHERE id = $1 AND version = $2`, id, version))
+	return scanIntent(s.pool.QueryRow(ctx, `SELECT data, revision FROM operational_intents WHERE id = $1 AND version = $2`, id, version))
 }
 
 func (s *Store) ListOperationalIntents(ctx context.Context, aircraftID string) ([]domain.OperationalIntent, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT DISTINCT ON (id) data
+			SELECT DISTINCT ON (id) data, revision
 		FROM operational_intents
 		WHERE $1 = '' OR aircraft_id = $1
 		ORDER BY id, version DESC, updated_at DESC`, aircraftID)
@@ -90,7 +141,7 @@ func (s *Store) ListOperationalIntents(ctx context.Context, aircraftID string) (
 }
 
 func (s *Store) ListOperationalIntentVersions(ctx context.Context, id string) ([]domain.OperationalIntent, error) {
-	rows, err := s.pool.Query(ctx, `SELECT data FROM operational_intents WHERE id = $1 ORDER BY version, updated_at`, id)
+	rows, err := s.pool.Query(ctx, `SELECT data, revision FROM operational_intents WHERE id = $1 ORDER BY version, updated_at`, id)
 	if err != nil {
 		return nil, fmt.Errorf("list operational intent versions: %w", err)
 	}
@@ -98,15 +149,35 @@ func (s *Store) ListOperationalIntentVersions(ctx context.Context, id string) ([
 }
 
 func (s *Store) RecordOperationalVolume(ctx context.Context, volume domain.OperationalVolume) error {
-	return upsertVolume(ctx, s.pool, volume)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin operational volume write: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockIntent(ctx, tx, volume.IntentID); err != nil {
+		return err
+	}
+	if err := upsertVolume(ctx, tx, volume); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit operational volume write: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) ReplaceOperationalVolumes(ctx context.Context, id string, version int, volumes []domain.OperationalVolume) error {
+	if err := validateVolumeScope(id, version, volumes); err != nil {
+		return err
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin operational volume replacement: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockIntent(ctx, tx, id); err != nil {
+		return err
+	}
 	if err := replaceVolumes(ctx, tx, id, version, volumes); err != nil {
 		return err
 	}
@@ -116,7 +187,13 @@ func (s *Store) ReplaceOperationalVolumes(ctx context.Context, id string, versio
 	return nil
 }
 
-func (s *Store) ReplaceOperationalIntent(ctx context.Context, expectedVersion int, intent domain.OperationalIntent, volumes []domain.OperationalVolume) error {
+func (s *Store) ReplaceOperationalIntent(ctx context.Context, expectedVersion int, expectedRevision int64, intent domain.OperationalIntent, volumes []domain.OperationalVolume) error {
+	if intent.Version != expectedVersion && intent.Version != expectedVersion+1 {
+		return durable.ErrVersionConflict
+	}
+	if err := validateVolumeScope(intent.ID, intent.Version, volumes); err != nil {
+		return err
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin operational intent replacement: %w", err)
@@ -124,21 +201,26 @@ func (s *Store) ReplaceOperationalIntent(ctx context.Context, expectedVersion in
 	defer func() { _ = tx.Rollback(ctx) }()
 	// A transaction-scoped advisory lock gives every replica the same lock for
 	// this intent, including when a new version row is inserted.
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, intent.ID); err != nil {
-		return fmt.Errorf("lock operational intent: %w", err)
+	if err := lockIntent(ctx, tx, intent.ID); err != nil {
+		return err
 	}
 	var currentVersion int
-	err = tx.QueryRow(ctx, `SELECT version FROM operational_intents WHERE id = $1 ORDER BY version DESC LIMIT 1`, intent.ID).Scan(&currentVersion)
+	var currentRevision int64
+	err = tx.QueryRow(ctx, `SELECT version, revision FROM operational_intents WHERE id = $1 ORDER BY version DESC LIMIT 1`, intent.ID).Scan(&currentVersion, &currentRevision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return durable.ErrNotFound
 	}
 	if err != nil {
 		return fmt.Errorf("read current operational intent version: %w", err)
 	}
-	if currentVersion != expectedVersion {
+	if currentVersion != expectedVersion || currentRevision != expectedRevision {
 		return durable.ErrVersionConflict
 	}
-	if err := upsertIntent(ctx, tx, intent); err != nil {
+	nextRevision := int64(0)
+	if intent.Version == currentVersion {
+		nextRevision = currentRevision + 1
+	}
+	if err := upsertIntent(ctx, tx, intent, nextRevision); err != nil {
 		return err
 	}
 	if err := replaceVolumes(ctx, tx, intent.ID, intent.Version, volumes); err != nil {
@@ -175,7 +257,21 @@ func (s *Store) ListOperationalVolumes(ctx context.Context, intentID string) ([]
 }
 
 func (s *Store) RecordConflictFinding(ctx context.Context, finding domain.ConflictFinding) error {
-	return upsertFinding(ctx, s.pool, finding)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin conflict finding write: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockIntent(ctx, tx, finding.IntentID); err != nil {
+		return err
+	}
+	if err := upsertFinding(ctx, tx, finding); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit conflict finding write: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) ListConflictFindings(ctx context.Context, intentID string, intentVersion int) ([]domain.ConflictFinding, error) {
@@ -206,11 +302,17 @@ func (s *Store) ListConflictFindings(ctx context.Context, intentID string, inten
 }
 
 func (s *Store) ReplaceConflictFindings(ctx context.Context, intentID string, intentVersion int, ruleVersion string, findings []domain.ConflictFinding) error {
+	if err := validateFindingScope(intentID, intentVersion, ruleVersion, findings); err != nil {
+		return err
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin conflict finding replacement: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockIntent(ctx, tx, intentID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM conflict_findings WHERE intent_id = $1 AND intent_version = $2 AND rule_version = $3`, intentID, intentVersion, ruleVersion); err != nil {
 		return fmt.Errorf("clear conflict findings: %w", err)
 	}
@@ -229,19 +331,21 @@ type querier interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 }
 
-func upsertIntent(ctx context.Context, db querier, intent domain.OperationalIntent) error {
+func upsertIntent(ctx context.Context, db querier, intent domain.OperationalIntent, revision int64) error {
 	raw, err := json.Marshal(intent)
 	if err != nil {
 		return fmt.Errorf("encode operational intent: %w", err)
 	}
 	_, err = db.Exec(ctx, `
-		INSERT INTO operational_intents (id, version, aircraft_id, planned_start_at, updated_at, data)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (id, version) DO UPDATE SET
-			aircraft_id = EXCLUDED.aircraft_id,
-			planned_start_at = EXCLUDED.planned_start_at,
-			updated_at = EXCLUDED.updated_at,
-			data = EXCLUDED.data`, intent.ID, intent.Version, intent.AircraftID, intent.PlannedStartAt, intent.UpdatedAt, raw)
+			INSERT INTO operational_intents (id, version, revision, aircraft_id, planned_start_at, planned_end_at, updated_at, data)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			ON CONFLICT (id, version) DO UPDATE SET
+				revision = EXCLUDED.revision,
+				aircraft_id = EXCLUDED.aircraft_id,
+				planned_start_at = EXCLUDED.planned_start_at,
+				planned_end_at = EXCLUDED.planned_end_at,
+				updated_at = EXCLUDED.updated_at,
+				data = EXCLUDED.data`, intent.ID, intent.Version, revision, intent.AircraftID, intent.PlannedStartAt, intent.PlannedEndAt, intent.UpdatedAt, raw)
 	if err != nil {
 		return fmt.Errorf("write operational intent: %w", err)
 	}
@@ -324,7 +428,8 @@ func upsertFinding(ctx context.Context, db querier, finding domain.ConflictFindi
 
 func scanIntent(row pgx.Row) (domain.OperationalIntent, error) {
 	var raw []byte
-	if err := row.Scan(&raw); errors.Is(err, pgx.ErrNoRows) {
+	var revision int64
+	if err := row.Scan(&raw, &revision); errors.Is(err, pgx.ErrNoRows) {
 		return domain.OperationalIntent{}, durable.ErrNotFound
 	} else if err != nil {
 		return domain.OperationalIntent{}, fmt.Errorf("read operational intent: %w", err)
@@ -333,6 +438,7 @@ func scanIntent(row pgx.Row) (domain.OperationalIntent, error) {
 	if err := json.Unmarshal(raw, &intent); err != nil {
 		return domain.OperationalIntent{}, fmt.Errorf("decode operational intent: %w", err)
 	}
+	intent.Revision = revision
 	return intent, nil
 }
 
@@ -341,19 +447,48 @@ func readIntents(rows pgx.Rows) ([]domain.OperationalIntent, error) {
 	intents := make([]domain.OperationalIntent, 0)
 	for rows.Next() {
 		var raw []byte
-		if err := rows.Scan(&raw); err != nil {
+		var revision int64
+		if err := rows.Scan(&raw, &revision); err != nil {
 			return nil, fmt.Errorf("scan operational intent: %w", err)
 		}
 		var intent domain.OperationalIntent
 		if err := json.Unmarshal(raw, &intent); err != nil {
 			return nil, fmt.Errorf("decode operational intent: %w", err)
 		}
+		intent.Revision = revision
 		intents = append(intents, intent)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate operational intents: %w", err)
 	}
 	return intents, nil
+}
+
+func lockIntent(ctx context.Context, tx pgx.Tx, intentID string) error {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, intentID); err != nil {
+		return fmt.Errorf("lock operational intent %q: %w", intentID, err)
+	}
+	return nil
+}
+
+func validateVolumeScope(intentID string, intentVersion int, volumes []domain.OperationalVolume) error {
+	for _, volume := range volumes {
+		if volume.IntentID != intentID || volume.IntentVersion != intentVersion {
+			return fmt.Errorf("operational volume %q belongs to intent %q version %d, not intent %q version %d",
+				volume.ID, volume.IntentID, volume.IntentVersion, intentID, intentVersion)
+		}
+	}
+	return nil
+}
+
+func validateFindingScope(intentID string, intentVersion int, ruleVersion string, findings []domain.ConflictFinding) error {
+	for _, finding := range findings {
+		if finding.IntentID != intentID || finding.IntentVersion != intentVersion || finding.RuleVersion != ruleVersion {
+			return fmt.Errorf("conflict finding %q is outside intent %q version %d rule %q replacement scope",
+				finding.ID, intentID, intentVersion, ruleVersion)
+		}
+	}
+	return nil
 }
 
 func geometryJSON(raw string) (string, error) {
