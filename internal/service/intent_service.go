@@ -302,12 +302,24 @@ func (s *IntentService) SubmitIntent(ctx context.Context, intentID string) (doma
 }
 
 func (s *IntentService) AcceptIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error) {
-	return s.transitionIntent(ctx, intentID, domain.IntentStatusAccepted, map[domain.IntentStatus]bool{
-		domain.IntentStatusSubmitted: true,
-		domain.IntentStatusReview:    true,
-	}, func(intent *domain.OperationalIntent, now time.Time) {
-		intent.AcceptedAt = &now
-	})
+	intent, err := s.durable.GetOperationalIntent(ctx, intentID)
+	if err != nil {
+		return domain.OperationalIntent{}, fmt.Errorf("get operational intent: %w", err)
+	}
+	if intent.Status != domain.IntentStatusSubmitted && intent.Status != domain.IntentStatusReview {
+		return domain.OperationalIntent{}, fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, intent.Status, domain.IntentStatusAccepted)
+	}
+
+	now := s.now().UTC()
+	expectedRevision := intent.Revision
+	intent.Status = domain.IntentStatusAccepted
+	intent.AcceptedAt = &now
+	intent.UpdatedAt = now
+	if err := s.durable.AcceptOperationalIntent(ctx, intent, expectedRevision); err != nil {
+		return domain.OperationalIntent{}, fmt.Errorf("accept operational intent: %w", err)
+	}
+	intent.Revision = expectedRevision + 1
+	return intent, nil
 }
 
 func (s *IntentService) ActivateIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error) {

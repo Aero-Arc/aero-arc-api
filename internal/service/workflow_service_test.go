@@ -370,6 +370,61 @@ func TestModifyAcceptedIntentCreatesDraftNextVersion(t *testing.T) {
 	}
 }
 
+func TestAcceptReplacementSupersedesPriorAcceptedVersion(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+
+	intents := NewIntentServiceWithClock(store, fixedClock(now), nil)
+	intent := seedSubmittedIntentWithVolume(t, ctx, store, now)
+	intent, err := intents.AcceptIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatalf("AcceptIntent v1 returned error: %v", err)
+	}
+	result, err := intents.ModifyIntent(ctx, intent.ID, ModifyIntentRequest{
+		Reason:          "operator_adjustment",
+		ExpectedVersion: intent.Version,
+		Volumes: []AddOperationalVolumeRequest{{
+			ID:           "volume-v2",
+			Sequence:     1,
+			GeoJSON:      eastSquareGeoJSON(),
+			MinAltitudeM: float64Ptr(30.48),
+			MaxAltitudeM: float64Ptr(76.2),
+			AltitudeRef:  domain.AltitudeReferenceAGL,
+			StartsAt:     now,
+			EndsAt:       now.Add(time.Hour),
+			VolumeType:   domain.OperationalVolumeLoiter,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ModifyIntent returned error: %v", err)
+	}
+	if _, err := intents.SubmitIntent(ctx, result.Intent.ID); err != nil {
+		t.Fatalf("SubmitIntent v2 returned error: %v", err)
+	}
+
+	acceptedAt := now.Add(10 * time.Minute)
+	intents = NewIntentServiceWithClock(store, fixedClock(acceptedAt), nil)
+	accepted, err := intents.AcceptIntent(ctx, result.Intent.ID)
+	if err != nil {
+		t.Fatalf("AcceptIntent v2 returned error: %v", err)
+	}
+	if accepted.Version != 2 || accepted.Status != domain.IntentStatusAccepted {
+		t.Fatalf("accepted replacement = %#v, want accepted v2", accepted)
+	}
+	prior, err := store.GetOperationalIntentVersion(ctx, intent.ID, 1)
+	if err != nil {
+		t.Fatalf("GetOperationalIntentVersion v1 returned error: %v", err)
+	}
+	if prior.Status != domain.IntentStatusSuperseded {
+		t.Fatalf("v1 status = %q, want superseded", prior.Status)
+	}
+	if prior.SupersededAt == nil || !prior.SupersededAt.Equal(acceptedAt) {
+		t.Fatalf("v1 superseded_at = %v, want %v", prior.SupersededAt, acceptedAt)
+	}
+}
+
 func TestModifyActiveIntentBlocked(t *testing.T) {
 	ctx := context.Background()
 	store := durablememory.NewStore()

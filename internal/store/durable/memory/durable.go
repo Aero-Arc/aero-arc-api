@@ -245,6 +245,31 @@ func (s *Store) UpdateOperationalIntent(_ context.Context, intent domain.Operati
 	return nil
 }
 
+func (s *Store) AcceptOperationalIntent(_ context.Context, intent domain.OperationalIntent, expectedRevision int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, exists := s.latestOperationalIntent(intent.ID)
+	if !exists {
+		return durable.ErrNotFound
+	}
+	if current.Version != intent.Version || current.Revision != expectedRevision {
+		return durable.ErrVersionConflict
+	}
+	intent.Revision = expectedRevision + 1
+	s.operationalIntents[operationalIntentKey(intent.ID, intent.Version)] = intent
+	for key, prior := range s.operationalIntents {
+		if prior.ID != intent.ID || prior.Version >= intent.Version || prior.Status != domain.IntentStatusAccepted {
+			continue
+		}
+		prior.Status = domain.IntentStatusSuperseded
+		prior.SupersededAt = intent.AcceptedAt
+		prior.UpdatedAt = intent.UpdatedAt
+		prior.Revision++
+		s.operationalIntents[key] = prior
+	}
+	return nil
+}
+
 func (s *Store) GetOperationalIntent(_ context.Context, intentID string) (domain.OperationalIntent, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

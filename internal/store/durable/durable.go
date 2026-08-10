@@ -37,6 +37,7 @@ type OperationalStore interface {
 	FindCandidates(context.Context, CandidateQuery) ([]Candidate, error)
 	CreateOperationalIntent(ctx context.Context, intent domain.OperationalIntent) error
 	UpdateOperationalIntent(ctx context.Context, intent domain.OperationalIntent, expectedRevision int64) error
+	AcceptOperationalIntent(ctx context.Context, intent domain.OperationalIntent, expectedRevision int64) error
 	GetOperationalIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error)
 	GetOperationalIntentVersion(ctx context.Context, intentID string, version int) (domain.OperationalIntent, error)
 	ListOperationalIntents(ctx context.Context, aircraftID string) ([]domain.OperationalIntent, error)

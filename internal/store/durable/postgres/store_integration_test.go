@@ -181,6 +181,46 @@ func TestUpdateOperationalIntentRejectsSupersededVersion(t *testing.T) {
 	}
 }
 
+func TestAcceptOperationalIntentSupersedesPriorAcceptedVersion(t *testing.T) {
+	ctx, store, _ := integrationStores(t)
+	now := time.Date(2026, time.August, 9, 12, 0, 0, 0, time.UTC)
+	v1 := integrationIntent("accepted-replacement-intent", now)
+	v1.Status = domain.IntentStatusAccepted
+	v1.AcceptedAt = &now
+	if err := store.CreateOperationalIntent(ctx, v1); err != nil {
+		t.Fatal(err)
+	}
+	v2 := v1
+	v2.Version = 2
+	v2.Status = domain.IntentStatusSubmitted
+	v2.AcceptedAt = nil
+	if err := store.ReplaceOperationalIntent(ctx, v1.Version, v1.Revision, v2, nil); err != nil {
+		t.Fatal(err)
+	}
+	acceptedAt := now.Add(time.Minute)
+	v2.Status = domain.IntentStatusAccepted
+	v2.AcceptedAt = &acceptedAt
+	v2.UpdatedAt = acceptedAt
+	if err := store.AcceptOperationalIntent(ctx, v2, v2.Revision); err != nil {
+		t.Fatal(err)
+	}
+
+	storedV1, err := store.GetOperationalIntentVersion(ctx, v1.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedV1.Status != domain.IntentStatusSuperseded || storedV1.SupersededAt == nil || !storedV1.SupersededAt.Equal(acceptedAt) {
+		t.Fatalf("stored v1 = %#v, want superseded at %v", storedV1, acceptedAt)
+	}
+	storedV2, err := store.GetOperationalIntentVersion(ctx, v2.ID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedV2.Status != domain.IntentStatusAccepted || storedV2.Revision != 1 {
+		t.Fatalf("stored v2 = %#v, want accepted revision 1", storedV2)
+	}
+}
+
 func TestConcurrentFindingReplacementsDoNotMerge(t *testing.T) {
 	ctx, first, second := integrationStores(t)
 	now := time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC)

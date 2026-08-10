@@ -119,6 +119,56 @@ func (s *Store) UpdateOperationalIntent(ctx context.Context, intent domain.Opera
 	return nil
 }
 
+func (s *Store) AcceptOperationalIntent(ctx context.Context, intent domain.OperationalIntent, expectedRevision int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin operational intent acceptance: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockIntent(ctx, tx, intent.ID); err != nil {
+		return err
+	}
+	var currentVersion int
+	var currentRevision int64
+	err = tx.QueryRow(ctx, `SELECT version, revision FROM operational_intents WHERE id = $1 ORDER BY version DESC LIMIT 1`, intent.ID).Scan(&currentVersion, &currentRevision)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return durable.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("read current operational intent before acceptance: %w", err)
+	}
+	if currentVersion != intent.Version || currentRevision != expectedRevision {
+		return durable.ErrVersionConflict
+	}
+	if err := upsertIntent(ctx, tx, intent, expectedRevision+1); err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT data, revision
+		FROM operational_intents
+		WHERE id = $1 AND version < $2 AND data->>'status' = $3
+		ORDER BY version`, intent.ID, intent.Version, domain.IntentStatusAccepted)
+	if err != nil {
+		return fmt.Errorf("list accepted operational intent versions: %w", err)
+	}
+	priorIntents, err := readIntents(rows)
+	if err != nil {
+		return err
+	}
+	for _, prior := range priorIntents {
+		prior.Status = domain.IntentStatusSuperseded
+		prior.SupersededAt = intent.AcceptedAt
+		prior.UpdatedAt = intent.UpdatedAt
+		if err := upsertIntent(ctx, tx, prior, prior.Revision+1); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit operational intent acceptance: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) GetOperationalIntent(ctx context.Context, id string) (domain.OperationalIntent, error) {
 	return scanIntent(s.pool.QueryRow(ctx, `SELECT data, revision FROM operational_intents WHERE id = $1 ORDER BY version DESC, updated_at DESC LIMIT 1`, id))
 }
