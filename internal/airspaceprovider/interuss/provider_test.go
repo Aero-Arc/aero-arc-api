@@ -340,8 +340,28 @@ func TestPeerHTTPClientEnforcesRedirectAndAddressPolicy(t *testing.T) {
 	if err := insecure.CheckRedirect(local, nil); err != nil {
 		t.Fatalf("local development redirect rejected: %v", err)
 	}
-	if publicPeerIP(net.ParseIP("127.0.0.1")) || !publicPeerIP(net.ParseIP("8.8.8.8")) {
-		t.Fatal("peer address classification is incorrect")
+	for _, raw := range []string{
+		"0.0.0.0",
+		"127.0.0.1",
+		"100.64.0.1",
+		"192.0.2.1",
+		"198.18.0.1",
+		"198.51.100.1",
+		"203.0.113.1",
+		"2001:db8::1",
+		"3fff::1",
+		"5f00::1",
+		"4000::1",
+		"::ffff:127.0.0.1",
+	} {
+		if publicPeerIP(net.ParseIP(raw)) {
+			t.Errorf("special-use peer address %q unexpectedly accepted", raw)
+		}
+	}
+	for _, raw := range []string{"8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"} {
+		if !publicPeerIP(net.ParseIP(raw)) {
+			t.Errorf("public peer address %q unexpectedly rejected", raw)
+		}
 	}
 }
 

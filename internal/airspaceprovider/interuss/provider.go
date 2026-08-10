@@ -27,6 +27,44 @@ const (
 	metersPerDegree = 110_000.0
 )
 
+var (
+	globalIPv6PeerPrefix = netip.MustParsePrefix("2000::/3")
+	// Peer USS endpoints must not use IANA special-purpose address space,
+	// including ranges that may be routed inside an administrative domain. Keep
+	// this list aligned with the IANA IPv4 and IPv6 special-purpose registries.
+	specialUsePeerPrefixes = []netip.Prefix{
+		netip.MustParsePrefix("0.0.0.0/8"),
+		netip.MustParsePrefix("10.0.0.0/8"),
+		netip.MustParsePrefix("100.64.0.0/10"),
+		netip.MustParsePrefix("127.0.0.0/8"),
+		netip.MustParsePrefix("169.254.0.0/16"),
+		netip.MustParsePrefix("172.16.0.0/12"),
+		netip.MustParsePrefix("192.0.0.0/24"),
+		netip.MustParsePrefix("192.0.2.0/24"),
+		netip.MustParsePrefix("192.31.196.0/24"),
+		netip.MustParsePrefix("192.52.193.0/24"),
+		netip.MustParsePrefix("192.88.99.0/24"),
+		netip.MustParsePrefix("192.168.0.0/16"),
+		netip.MustParsePrefix("192.175.48.0/24"),
+		netip.MustParsePrefix("198.18.0.0/15"),
+		netip.MustParsePrefix("198.51.100.0/24"),
+		netip.MustParsePrefix("203.0.113.0/24"),
+		netip.MustParsePrefix("240.0.0.0/4"),
+		netip.MustParsePrefix("64:ff9b::/96"),
+		netip.MustParsePrefix("64:ff9b:1::/48"),
+		netip.MustParsePrefix("100::/64"),
+		netip.MustParsePrefix("100:0:0:1::/64"),
+		netip.MustParsePrefix("2001::/23"),
+		netip.MustParsePrefix("2001:db8::/32"),
+		netip.MustParsePrefix("2002::/16"),
+		netip.MustParsePrefix("2620:4f:8000::/48"),
+		netip.MustParsePrefix("3fff::/20"),
+		netip.MustParsePrefix("5f00::/16"),
+		netip.MustParsePrefix("fc00::/7"),
+		netip.MustParsePrefix("fe80::/10"),
+	}
+)
+
 type scdReader interface {
 	QueryOperationalIntentReferences(context.Context, scdv1.Volume4D) ([]scdv1.OperationalIntentReference, error)
 	GetOperationalIntent(context.Context, scdv1.OperationalIntentReference) (*scdv1.OperationalIntent, error)
@@ -258,11 +296,16 @@ func publicPeerIP(ip net.IP) bool {
 }
 
 func publicPeerAddr(address netip.Addr) bool {
-	return address.IsGlobalUnicast() &&
-		!address.IsPrivate() &&
-		!address.IsLoopback() &&
-		!address.IsLinkLocalUnicast() &&
-		!netip.MustParsePrefix("100.64.0.0/10").Contains(address)
+	address = address.Unmap()
+	if !address.IsGlobalUnicast() || address.Is6() && !globalIPv6PeerPrefix.Contains(address) {
+		return false
+	}
+	for _, prefix := range specialUsePeerPrefixes {
+		if prefix.Contains(address) {
+			return false
+		}
+	}
+	return true
 }
 
 func toSCDVolume(volume domain.OperationalVolume) (scdv1.Volume4D, error) {
