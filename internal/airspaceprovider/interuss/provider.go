@@ -154,6 +154,9 @@ func (p *Provider) FindOperationalIntents(ctx context.Context, query airspacepro
 				queryErrors = append(queryErrors, fmt.Errorf("read DSS reference: %w", err))
 				continue
 			}
+			if id == query.Intent.ID {
+				continue
+			}
 			if current, exists := references[id]; !exists || reference.Version > current.Version {
 				references[id] = reference
 			}

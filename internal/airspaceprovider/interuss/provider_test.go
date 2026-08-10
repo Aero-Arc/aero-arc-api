@@ -24,6 +24,7 @@ type fakeClient struct {
 	intents    map[string]*scdv1.OperationalIntent
 	failures   map[string]error
 	queries    int
+	gets       []string
 }
 
 func TestNewBuildsConfiguredProvider(t *testing.T) {
@@ -49,10 +50,38 @@ func (c *fakeClient) GetOperationalIntent(_ context.Context, reference scdv1.Ope
 	if err != nil {
 		return nil, err
 	}
+	c.gets = append(c.gets, key)
 	if failure := c.failures[key]; failure != nil {
 		return nil, failure
 	}
 	return c.intents[key], nil
+}
+
+func TestProviderExcludesTargetIntentReference(t *testing.T) {
+	now := time.Date(2026, time.July, 30, 12, 0, 0, 0, time.UTC)
+	target := testReference(t, "11111111-1111-4111-8111-111111111111", 3)
+	peer := testReference(t, "22222222-2222-4222-8222-222222222222", 1)
+	client := &fakeClient{
+		references: []scdv1.OperationalIntentReference{target, peer},
+		intents: map[string]*scdv1.OperationalIntent{
+			mustReferenceKey(t, peer): testSCDIntent(t, peer, testVolume(now)),
+		},
+	}
+
+	records, err := (&Provider{reader: client}).FindOperationalIntents(context.Background(), airspaceprovider.Query{
+		Intent:  domain.OperationalIntent{ID: "11111111-1111-4111-8111-111111111111"},
+		Volumes: []domain.OperationalVolume{testVolume(now)},
+	})
+	if err != nil {
+		t.Fatalf("FindOperationalIntents returned error: %v", err)
+	}
+	if len(records) != 1 || records[0].Source.ReferenceID != "22222222-2222-4222-8222-222222222222" {
+		t.Fatalf("records = %#v, want only peer intent", records)
+	}
+	peerKey := mustReferenceKey(t, peer)
+	if len(client.gets) != 1 || client.gets[0] != peerKey {
+		t.Fatalf("fetched references = %#v, want only %q", client.gets, peerKey)
+	}
 }
 
 func TestProviderQueriesEachTargetAndDeduplicatesReferences(t *testing.T) {
