@@ -1,23 +1,23 @@
 # Migrations
 
 PostgreSQL 14 with PostGIS 3.5 is the selected local target for the
-deconfliction vertical slice. The application still runs its durable store in
-`memory` mode and does not yet include a migration runner.
+deconfliction vertical slice. The PostgreSQL durable store initializes its
+idempotent schema from `internal/store/durable/postgres/schema.sql` when
+`AERO_API_DURABLE_STORE=postgres` is selected.
 
-The first migration set should:
+Operational intents, versions, volumes, conflict findings, and PostGIS search
+columns live in the same authoritative tables. PostgreSQL updates the GiST
+spatial index in the same transaction as each volume write, so horizontally
+scaled API replicas do not coordinate an application-managed projection.
 
-- enable the `postgis` extension;
-- create version-aware operational intent records;
-- store operational volumes as SRID 4326 `geometry(Polygon, 4326)` values;
-- retain altitude reference, altitude band, and half-open time-window fields;
-- persist conflict findings by intent ID, intent version, and rule version;
-- add GiST spatial indexes and supporting time/status indexes; and
-- create the remaining durable-store tables required by the `durable.Store`
-  interface.
+Within an operational-intent version, an internal monotonic revision provides
+optimistic concurrency for lifecycle and draft updates. Intent-scoped advisory
+locks serialize volume and finding replacements across replicas.
 
-Migrations must complete before the API starts using the PostgreSQL durable
-store. The Compose image initializes PostGIS for local development, but schema
-creation should remain explicit and version-controlled here.
+The other durable domain groups still use the embedded memory implementation
+in this vertical slice. A versioned migration runner and PostgreSQL tables for
+those groups should replace startup schema initialization and the fallback
+before production deployment.
 
-Migration tooling and the production upgrade/rollback policy still need to be
-selected before the first schema is added.
+The production follow-up and acceptance criteria are tracked in
+`docs/deconfliction-postgis-next-steps.md`.

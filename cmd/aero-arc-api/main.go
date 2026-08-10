@@ -10,6 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider"
+	interussprovider "github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider/interuss"
+	localprovider "github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider/local"
 	"github.com/Aero-Arc/aero-arc-api/internal/config"
 	"github.com/Aero-Arc/aero-arc-api/internal/httpapi"
 	"github.com/Aero-Arc/aero-arc-api/internal/registry"
@@ -18,6 +21,7 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/service/deconfliction"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
+	durablepostgres "github.com/Aero-Arc/aero-arc-api/internal/store/durable/postgres"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/replay"
 	replaymemory "github.com/Aero-Arc/aero-arc-api/internal/store/replay/memory"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/telemetry"
@@ -51,12 +55,19 @@ func newCommand() *cli.Command {
 						Usage:   "HTTP listen address",
 						Sources: cli.EnvVars("AERO_API_ADDR"),
 					},
+					&cli.StringSliceFlag{
+						Name:    "airspace-provider",
+						Value:   append([]string(nil), defaults.AirspaceProviders...),
+						Usage:   "airspace source; repeat for local and interuss",
+						Sources: cli.EnvVars("AERO_API_AIRSPACE_PROVIDERS"),
+					},
 					&cli.StringFlag{
 						Name:    "durable-store",
 						Value:   defaults.DurableStore,
-						Usage:   "durable store mode",
+						Usage:   "durable store mode: memory or postgres",
 						Sources: cli.EnvVars("AERO_API_DURABLE_STORE"),
 					},
+					&cli.StringFlag{Name: "database-url", Usage: "PostgreSQL/PostGIS URL", Sources: cli.EnvVars("AERO_API_DATABASE_URL")},
 					&cli.StringFlag{
 						Name:    "telemetry-store",
 						Value:   defaults.TelemetryStore,
@@ -66,6 +77,13 @@ func newCommand() *cli.Command {
 					&cli.StringFlag{Name: "influxdb-host", Usage: "InfluxDB 3 host URL", Sources: cli.EnvVars("AERO_API_INFLUXDB_HOST")},
 					&cli.StringFlag{Name: "influxdb-token", Usage: "InfluxDB 3 access token", Sources: cli.EnvVars("AERO_API_INFLUXDB_TOKEN")},
 					&cli.StringFlag{Name: "influxdb-database", Usage: "InfluxDB 3 database", Sources: cli.EnvVars("AERO_API_INFLUXDB_DATABASE")},
+					&cli.StringFlag{Name: "dss-base-url", Usage: "InterUSS DSS base URL", Sources: cli.EnvVars("AERO_API_DSS_BASE_URL")},
+					&cli.StringFlag{Name: "dss-static-token", Usage: "static DSS bearer token", Sources: cli.EnvVars("AERO_API_DSS_STATIC_TOKEN")},
+					&cli.StringFlag{Name: "dss-oauth-token-url", Usage: "local dummy OAuth token URL", Sources: cli.EnvVars("AERO_API_DSS_OAUTH_TOKEN_URL")},
+					&cli.StringFlag{Name: "dss-oauth-audience", Value: defaults.DSSOAuthAudience, Usage: "DSS OAuth audience", Sources: cli.EnvVars("AERO_API_DSS_OAUTH_AUDIENCE")},
+					&cli.StringFlag{Name: "dss-oauth-issuer", Value: defaults.DSSOAuthIssuer, Usage: "DSS OAuth issuer", Sources: cli.EnvVars("AERO_API_DSS_OAUTH_ISSUER")},
+					&cli.StringFlag{Name: "dss-oauth-subject", Value: defaults.DSSOAuthSubject, Usage: "stable Aero Arc USS identity", Sources: cli.EnvVars("AERO_API_DSS_OAUTH_SUBJECT")},
+					&cli.BoolFlag{Name: "dss-allow-insecure-peer-urls", Usage: "allow HTTP and private peer USS URLs for local development", Sources: cli.EnvVars("AERO_API_DSS_ALLOW_INSECURE_PEER_URLS")},
 					&cli.StringFlag{
 						Name:    "replay-store",
 						Value:   defaults.ReplayStore,
@@ -111,19 +129,28 @@ func newCommand() *cli.Command {
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					cfg := &config.Config{
-						Addr:                cmd.String("addr"),
-						DurableStore:        cmd.String("durable-store"),
-						TelemetryStore:      cmd.String("telemetry-store"),
-						InfluxDBHost:        cmd.String("influxdb-host"),
-						InfluxDBToken:       cmd.String("influxdb-token"),
-						InfluxDBDatabase:    cmd.String("influxdb-database"),
-						ReplayStore:         cmd.String("replay-store"),
-						RegistryMode:        cmd.String("registry-mode"),
-						RegistryAddress:     cmd.String("registry-addr"),
-						RegistryDialTimeout: cmd.Duration("registry-dial-timeout"),
-						RequestTimeout:      cmd.Duration("request-timeout"),
-						Seed:                cmd.String("seed"),
-						Debug:               cmd.Bool("debug"),
+						Addr:                     cmd.String("addr"),
+						DurableStore:             cmd.String("durable-store"),
+						DatabaseURL:              cmd.String("database-url"),
+						AirspaceProviders:        cmd.StringSlice("airspace-provider"),
+						TelemetryStore:           cmd.String("telemetry-store"),
+						InfluxDBHost:             cmd.String("influxdb-host"),
+						InfluxDBToken:            cmd.String("influxdb-token"),
+						InfluxDBDatabase:         cmd.String("influxdb-database"),
+						DSSBaseURL:               cmd.String("dss-base-url"),
+						DSSStaticToken:           cmd.String("dss-static-token"),
+						DSSOAuthTokenURL:         cmd.String("dss-oauth-token-url"),
+						DSSOAuthAudience:         cmd.String("dss-oauth-audience"),
+						DSSOAuthIssuer:           cmd.String("dss-oauth-issuer"),
+						DSSOAuthSubject:          cmd.String("dss-oauth-subject"),
+						DSSAllowInsecurePeerURLs: cmd.Bool("dss-allow-insecure-peer-urls"),
+						ReplayStore:              cmd.String("replay-store"),
+						RegistryMode:             cmd.String("registry-mode"),
+						RegistryAddress:          cmd.String("registry-addr"),
+						RegistryDialTimeout:      cmd.Duration("registry-dial-timeout"),
+						RequestTimeout:           cmd.Duration("request-timeout"),
+						Seed:                     cmd.String("seed"),
+						Debug:                    cmd.Bool("debug"),
 					}
 					if err := cfg.Validate(); err != nil {
 						return err
@@ -151,7 +178,14 @@ func run(ctx context.Context, cfg *config.Config) error {
 		}
 	}()
 
-	durableStore, err := newDurableStore(cfg.DurableStore)
+	durableStore, err := newDurableStore(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	if closer, ok := durableStore.(interface{ Close() }); ok {
+		defer closer.Close()
+	}
+	providers, err := newAirspaceProviders(cfg, durableStore)
 	if err != nil {
 		return err
 	}
@@ -177,7 +211,10 @@ func run(ctx context.Context, cfg *config.Config) error {
 		slog.Info("seeded demo data")
 	}
 	fleetService := service.NewFleetService(durableStore, telemetryStore, replayStore, registryClient)
-	deconflictionService := deconfliction.NewDeconflictionService(durableStore)
+	deconflictionService, err := deconfliction.NewDeconflictionService(durableStore, providers...)
+	if err != nil {
+		return err
+	}
 	intentService := service.NewIntentService(durableStore, deconflictionService)
 	preflightService := service.NewPreflightService(durableStore)
 	conformanceService := service.NewConformanceService(durableStore, telemetryStore)
@@ -193,6 +230,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		slog.Info("starting aero-arc-api",
 			slog.String("http_addr", cfg.Addr),
 			slog.String("durable_store", cfg.DurableStore),
+			slog.Any("airspace_providers", cfg.AirspaceProviders),
 			slog.String("telemetry_store", cfg.TelemetryStore),
 			slog.String("replay_store", cfg.ReplayStore),
 			slog.String("registry_mode", cfg.RegistryMode),
@@ -226,13 +264,53 @@ func run(ctx context.Context, cfg *config.Config) error {
 	return nil
 }
 
-func newDurableStore(mode string) (durable.Store, error) {
-	switch mode {
-	case "memory":
+func newDurableStore(ctx context.Context, cfg *config.Config) (durable.Store, error) {
+	switch cfg.DurableStore {
+	case config.DurableStoreMemory:
 		return durablememory.NewStore(), nil
+	case config.DurableStorePostgres:
+		return durablepostgres.Open(ctx, cfg.DatabaseURL)
 	default:
-		return nil, fmt.Errorf("unsupported durable store %q", mode)
+		return nil, fmt.Errorf("unsupported durable store %q", cfg.DurableStore)
 	}
+}
+
+func newAirspaceProviders(
+	cfg *config.Config,
+	durableStore durable.OperationalStore,
+) ([]airspaceprovider.Provider, error) {
+	providers := make([]airspaceprovider.Provider, 0, len(cfg.AirspaceProviders))
+	for _, name := range cfg.AirspaceProviders {
+		switch name {
+		case airspaceprovider.ProviderLocal:
+			providers = append(providers, localprovider.New(durableStore))
+		case airspaceprovider.ProviderInterUSS:
+			provider, err := newInterUSSProvider(cfg)
+			if err != nil {
+				return nil, err
+			}
+			providers = append(providers, provider)
+		default:
+			return nil, fmt.Errorf("unsupported airspace provider %q", name)
+		}
+	}
+	if len(providers) == 0 {
+		return nil, fmt.Errorf("at least one airspace provider is required")
+	}
+	return providers, nil
+}
+
+func newInterUSSProvider(cfg *config.Config) (airspaceprovider.Provider, error) {
+	return interussprovider.New(interussprovider.Config{
+		BaseURL:               cfg.DSSBaseURL,
+		StaticToken:           cfg.DSSStaticToken,
+		OAuthTokenURL:         cfg.DSSOAuthTokenURL,
+		OAuthAudience:         cfg.DSSOAuthAudience,
+		OAuthIssuer:           cfg.DSSOAuthIssuer,
+		OAuthSubject:          cfg.DSSOAuthSubject,
+		AllowInsecurePeerURLs: cfg.DSSAllowInsecurePeerURLs,
+		RequestTimeout:        cfg.RequestTimeout,
+	})
 }
 
 func newTelemetryStore(cfg *config.Config) (telemetry.Store, error) {

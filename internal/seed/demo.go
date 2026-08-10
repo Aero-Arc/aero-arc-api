@@ -2,6 +2,7 @@ package seed
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -21,7 +22,7 @@ type liveStateWriter interface {
 	SetLiveAircraftState(ctx context.Context, state domain.LiveAircraftState) error
 }
 
-// Demo populates in-memory stores with representative local-development data.
+// Demo populates configured stores with representative local-development data.
 // It is intentionally opt-in and should not be enabled for production runs.
 func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, replayStore any, registryClient any) error {
 	now := time.Now().UTC().Truncate(time.Second)
@@ -259,7 +260,7 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 		},
 	}
 	for _, item := range intents {
-		if err := durableStore.CreateOperationalIntent(ctx, item); err != nil {
+		if err := durableStore.CreateOperationalIntent(ctx, item); err != nil && !errors.Is(err, durable.ErrAlreadyExists) {
 			return fmt.Errorf("seed operational intent %s: %w", item.ID, err)
 		}
 	}

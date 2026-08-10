@@ -4,6 +4,7 @@ import "time"
 
 type OperationalIntent struct {
 	ID                  string             `json:"id"`
+	Revision            int64              `json:"-"`
 	OperatorID          string             `json:"operator_id,omitempty"`
 	AircraftID          string             `json:"aircraft_id"`
 	AuthorizationID     string             `json:"authorization_id,omitempty"`

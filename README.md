@@ -12,7 +12,10 @@ directly.
 - Registry: live topology, liveness, relay placement, and last-known connected
   state.
 - Durable store: aircraft, batteries, battery installations, maintenance events,
-  flight records, operational intents, and conformance events.
+  flight records, operational intents and volumes, conflict findings, and
+  conformance events.
+- PostGIS indexes: transactionally maintained indexes over authoritative
+  operational volumes for local conflict-candidate discovery.
 - Telemetry store: queryable time-series telemetry samples.
 - Replay store: raw replay manifests and log chunk locations.
 
@@ -62,11 +65,10 @@ containers without deleting the data:
 docker compose down
 ```
 
-The API's durable store is still configured as `memory`: the current
-application does not yet contain a PostgreSQL store implementation or consume a
-PostgreSQL connection string. The `depends_on` health condition therefore
-provides a hard startup dependency, while wiring the deconfliction workflow to
-PostGIS remains application work.
+Compose uses PostgreSQL with PostGIS as the authoritative store for operational
+intents, volumes, and conflict findings. Spatial indexes are maintained by
+PostgreSQL in the same transactions as volume writes. Other durable domain
+groups remain in memory during this vertical slice.
 
 Configuration is available through flags or environment variables:
 
@@ -74,6 +76,7 @@ Configuration is available through flags or environment variables:
 go run ./cmd/aero-arc-api start \
   --addr :8080 \
   --durable-store memory \
+  --airspace-provider local \
   --telemetry-store memory \
   --replay-store memory \
   --registry-mode memory \
@@ -84,6 +87,7 @@ go run ./cmd/aero-arc-api start \
 ```bash
 AERO_API_ADDR=:8080
 AERO_API_DURABLE_STORE=memory
+AERO_API_AIRSPACE_PROVIDERS=local
 AERO_API_TELEMETRY_STORE=memory
 AERO_API_REPLAY_STORE=memory
 AERO_API_REGISTRY_MODE=memory
@@ -102,6 +106,41 @@ memory telemetry store.
 
 `AERO_API_REGISTRY_MODE=grpc` connects to the real `aero-arc-registry` gRPC
 service. Durable and replay stores still run in `memory` mode in this scaffold.
+
+## Deconfliction Read/Check Slice
+
+Set `AERO_API_DURABLE_STORE=postgres` and `AERO_API_DATABASE_URL` to persist
+the deconfliction slice in PostgreSQL and use PostGIS for local spatial
+candidate discovery. The required schema is initialized automatically.
+
+Airspace sources are explicit and composable. `local` queries authoritative
+operational volumes through PostGIS. `interuss` queries
+DSS references for each submitted WGS84 volume and fetches full details from
+each managing USS. Peer failures produce an indeterminate, blocking finding
+while successfully retrieved peers are still evaluated.
+
+For a local InterUSS stack:
+
+```bash
+AERO_API_DURABLE_STORE=postgres
+AERO_API_DATABASE_URL='postgres://aero_arc:aero_arc_dev@localhost:5432/aero_arc?sslmode=disable'
+AERO_API_AIRSPACE_PROVIDERS='local,interuss'
+AERO_API_DSS_BASE_URL='http://localhost:8082'
+AERO_API_DSS_OAUTH_TOKEN_URL='http://localhost:8085/token'
+AERO_API_DSS_OAUTH_AUDIENCE='localhost'
+AERO_API_DSS_OAUTH_ISSUER='localhost'
+AERO_API_DSS_OAUTH_SUBJECT='aero-arc-api'
+AERO_API_DSS_ALLOW_INSECURE_PEER_URLS=true
+```
+
+Use `AERO_API_DSS_STATIC_TOKEN` instead of the dummy OAuth settings when a
+bearer token is managed externally. WGS84 polygon volumes are supported in this
+slice. Malformed local geometry is rejected when written; unsupported SCD
+geometry or altitude references, peer failures, and antimeridian-crossing
+geometry fail closed as indeterminate findings.
+
+Peer USS URLs require HTTPS and public network addresses by default. Enable
+`AERO_API_DSS_ALLOW_INSECURE_PEER_URLS` only for a trusted local InterUSS stack.
 
 Set `--debug` or `AERO_API_DEBUG=true` to enable debug-level operation logs.
 Debug mode logs each HTTP request with method, path, status, and duration, plus
@@ -156,18 +195,24 @@ Operational workflows:
 
 ### Current Deconfliction Behavior
 
-The current deconfliction service uses the configured durable store and defaults
-to a local airspace provider. In `memory` mode it:
+The deconfliction service combines the providers named by
+`AERO_API_AIRSPACE_PROVIDERS`. The local provider uses PostGIS indexes over the
+authoritative operational-volume table for broad-phase geometry, time, and
+altitude filtering, then loads the candidate intent version and volumes. The
+evaluator:
 
-- evaluates the latest version of an operational intent;
+- evaluates the target's latest version while retaining an accepted candidate
+  version when a newer draft is being edited;
 - compares overlapping time windows and compatible altitude references;
 - accepts inline GeoJSON `Polygon` geometry;
 - compares polygon bounding boxes rather than exact polygon intersections; and
-- persists version-scoped conflict findings in memory.
+- persists version-scoped conflict findings in the configured operational
+  store.
 
-PostGIS is running in the local Compose stack, but the API does not query it
-yet. Exact spatial predicates, durable findings, and dependency-aware readiness
-belong to the PostgreSQL/PostGIS store implementation.
+InterUSS SCD discovery is optional and must be selected explicitly. When
+selected, DSS references are queried and full operational-intent details are
+retrieved directly from each managing USS. Unsupported or unavailable peer data
+fails closed.
 
 ## Demo Data
 
@@ -217,7 +262,8 @@ make check
 
 ## TODO
 
-- Add real durable store implementations for TiDB/Postgres.
+- Migrate the remaining in-memory durable domain groups to PostgreSQL and add a
+  versioned migration runner before production deployment.
 - Harden the InfluxDB telemetry schema and production query integration.
 - Add real replay storage backed by S3/object storage manifests and log chunks.
 - Expand registry mapping once aircraft-to-agent identity is finalized. For now,

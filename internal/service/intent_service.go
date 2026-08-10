@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
-	deconflictionservice "github.com/Aero-Arc/aero-arc-api/internal/service/deconfliction"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 )
 
@@ -108,23 +107,19 @@ type ModifyIntentResult struct {
 	SupersedesVersion  int                        `json:"supersedes_version,omitempty"`
 }
 
-func NewIntentService(durableStore durable.Store, deconfliction ...DeconflictionChecker) *IntentService {
-	return NewIntentServiceWithClock(durableStore, nil, deconfliction...)
+func NewIntentService(durableStore durable.Store, deconfliction DeconflictionChecker) *IntentService {
+	return NewIntentServiceWithClock(durableStore, nil, deconfliction)
 }
 
-func NewIntentServiceWithClock(durableStore durable.Store, now func() time.Time, deconfliction ...DeconflictionChecker) *IntentService {
+func NewIntentServiceWithClock(durableStore durable.Store, now func() time.Time, deconfliction DeconflictionChecker) *IntentService {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	service := &IntentService{
+	return &IntentService{
 		durable:       durableStore,
 		now:           now,
-		deconfliction: deconflictionservice.NewDeconflictionServiceWithClock(durableStore, now),
+		deconfliction: deconfliction,
 	}
-	if len(deconfliction) > 0 {
-		service.deconfliction = deconfliction[0]
-	}
-	return service
 }
 
 func (s *IntentService) CreateIntent(ctx context.Context, req CreateIntentRequest) (domain.OperationalIntent, error) {
@@ -138,6 +133,9 @@ func (s *IntentService) CreateIntent(ctx context.Context, req CreateIntentReques
 	}
 	if req.PlannedStartAt.IsZero() || req.PlannedEndAt.IsZero() {
 		return domain.OperationalIntent{}, fmt.Errorf("%w: planned start and end are required", ErrValidation)
+	}
+	if !req.PlannedStartAt.Before(req.PlannedEndAt) {
+		return domain.OperationalIntent{}, fmt.Errorf("%w: planned_start_at must be before planned_end_at", ErrValidation)
 	}
 
 	intent := domain.OperationalIntent{
@@ -249,6 +247,7 @@ func (s *IntentService) ModifyIntent(ctx context.Context, intentID string, req M
 	now := s.now().UTC()
 	result := ModifyIntentResult{}
 	sourceVersion := intent.Version
+	sourceRevision := intent.Revision
 	if intent.Status == domain.IntentStatusAccepted {
 		result.SupersedesIntentID = intent.ID
 		result.SupersedesVersion = intent.Version
@@ -278,11 +277,16 @@ func (s *IntentService) ModifyIntent(ctx context.Context, intentID string, req M
 		volumes = append(volumes, volume)
 	}
 
-	if err := s.durable.UpdateOperationalIntent(ctx, intent); err != nil {
-		return ModifyIntentResult{}, fmt.Errorf("update operational intent: %w", err)
+	if err := s.durable.ReplaceOperationalIntent(ctx, sourceVersion, sourceRevision, intent, volumes); err != nil {
+		if errors.Is(err, durable.ErrVersionConflict) {
+			return ModifyIntentResult{}, fmt.Errorf("%w: operational intent changed during modification", ErrInvalidTransition)
+		}
+		return ModifyIntentResult{}, fmt.Errorf("replace operational intent: %w", err)
 	}
-	if err := s.durable.ReplaceOperationalVolumes(ctx, intent.ID, intent.Version, volumes); err != nil {
-		return ModifyIntentResult{}, fmt.Errorf("replace operational volumes: %w", err)
+	if intent.Version == sourceVersion {
+		intent.Revision = sourceRevision + 1
+	} else {
+		intent.Revision = 0
 	}
 	result.Intent = intent
 	result.Volumes = volumes
@@ -298,12 +302,24 @@ func (s *IntentService) SubmitIntent(ctx context.Context, intentID string) (doma
 }
 
 func (s *IntentService) AcceptIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error) {
-	return s.transitionIntent(ctx, intentID, domain.IntentStatusAccepted, map[domain.IntentStatus]bool{
-		domain.IntentStatusSubmitted: true,
-		domain.IntentStatusReview:    true,
-	}, func(intent *domain.OperationalIntent, now time.Time) {
-		intent.AcceptedAt = &now
-	})
+	intent, err := s.durable.GetOperationalIntent(ctx, intentID)
+	if err != nil {
+		return domain.OperationalIntent{}, fmt.Errorf("get operational intent: %w", err)
+	}
+	if intent.Status != domain.IntentStatusSubmitted && intent.Status != domain.IntentStatusReview {
+		return domain.OperationalIntent{}, fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, intent.Status, domain.IntentStatusAccepted)
+	}
+
+	now := s.now().UTC()
+	expectedRevision := intent.Revision
+	intent.Status = domain.IntentStatusAccepted
+	intent.AcceptedAt = &now
+	intent.UpdatedAt = now
+	if err := s.durable.AcceptOperationalIntent(ctx, intent, expectedRevision); err != nil {
+		return domain.OperationalIntent{}, fmt.Errorf("accept operational intent: %w", err)
+	}
+	intent.Revision = expectedRevision + 1
+	return intent, nil
 }
 
 func (s *IntentService) ActivateIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error) {
@@ -328,12 +344,14 @@ func (s *IntentService) ActivateIntent(ctx context.Context, intentID string) (do
 	}
 
 	now := s.now().UTC()
+	expectedRevision := intent.Revision
 	intent.Status = domain.IntentStatusActive
 	intent.ActivatedAt = &now
 	intent.UpdatedAt = now
-	if err := s.durable.UpdateOperationalIntent(ctx, intent); err != nil {
+	if err := s.durable.UpdateOperationalIntent(ctx, intent, expectedRevision); err != nil {
 		return domain.OperationalIntent{}, fmt.Errorf("update operational intent: %w", err)
 	}
+	intent.Revision = expectedRevision + 1
 	return intent, nil
 }
 
@@ -367,14 +385,16 @@ func (s *IntentService) transitionIntent(ctx context.Context, intentID string, n
 	}
 
 	now := s.now().UTC()
+	expectedRevision := intent.Revision
 	intent.Status = next
 	intent.UpdatedAt = now
 	if mutate != nil {
 		mutate(&intent, now)
 	}
-	if err := s.durable.UpdateOperationalIntent(ctx, intent); err != nil {
+	if err := s.durable.UpdateOperationalIntent(ctx, intent, expectedRevision); err != nil {
 		return domain.OperationalIntent{}, fmt.Errorf("update operational intent: %w", err)
 	}
+	intent.Revision = expectedRevision + 1
 	return intent, nil
 }
 

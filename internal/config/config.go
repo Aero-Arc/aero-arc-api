@@ -2,50 +2,78 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider"
+)
+
+const (
+	DurableStoreMemory   = "memory"
+	DurableStorePostgres = "postgres"
+
+	AirspaceProviderLocal    = airspaceprovider.ProviderLocal
+	AirspaceProviderInterUSS = airspaceprovider.ProviderInterUSS
 )
 
 const (
 	defaultAddr                = ":8080"
-	defaultDurableStore        = "memory"
+	defaultDurableStore        = DurableStoreMemory
 	defaultTelemetryStore      = "memory"
 	defaultReplayStore         = "memory"
 	defaultRegistryMode        = "memory"
 	defaultRegistryAddress     = "localhost:50051"
 	defaultRegistryDialTimeout = 5 * time.Second
 	defaultRequestTimeout      = 3 * time.Second
+	defaultDSSOAuthAudience    = "localhost"
+	defaultDSSOAuthIssuer      = "localhost"
+	defaultDSSOAuthSubject     = "aero-arc-api"
 	defaultSeed                = ""
 	defaultDebug               = false
 )
 
 type Config struct {
-	Addr                string
-	DurableStore        string
-	TelemetryStore      string
-	InfluxDBHost        string
-	InfluxDBToken       string
-	InfluxDBDatabase    string
-	ReplayStore         string
-	RegistryMode        string
-	RegistryAddress     string
-	RegistryDialTimeout time.Duration
-	RequestTimeout      time.Duration
-	Seed                string
-	Debug               bool
+	Addr                     string
+	DurableStore             string
+	DatabaseURL              string
+	AirspaceProviders        []string
+	TelemetryStore           string
+	InfluxDBHost             string
+	InfluxDBToken            string
+	InfluxDBDatabase         string
+	DSSBaseURL               string
+	DSSStaticToken           string
+	DSSOAuthTokenURL         string
+	DSSOAuthAudience         string
+	DSSOAuthIssuer           string
+	DSSOAuthSubject          string
+	DSSAllowInsecurePeerURLs bool
+	ReplayStore              string
+	RegistryMode             string
+	RegistryAddress          string
+	RegistryDialTimeout      time.Duration
+	RequestTimeout           time.Duration
+	Seed                     string
+	Debug                    bool
 }
 
 func Defaults() *Config {
 	return &Config{
 		Addr:                defaultAddr,
 		DurableStore:        defaultDurableStore,
+		AirspaceProviders:   []string{AirspaceProviderLocal},
 		TelemetryStore:      defaultTelemetryStore,
 		ReplayStore:         defaultReplayStore,
 		RegistryMode:        defaultRegistryMode,
 		RegistryAddress:     defaultRegistryAddress,
 		RegistryDialTimeout: defaultRegistryDialTimeout,
 		RequestTimeout:      defaultRequestTimeout,
+		DSSOAuthAudience:    defaultDSSOAuthAudience,
+		DSSOAuthIssuer:      defaultDSSOAuthIssuer,
+		DSSOAuthSubject:     defaultDSSOAuthSubject,
 		Seed:                defaultSeed,
 		Debug:               defaultDebug,
 	}
@@ -56,15 +84,26 @@ func Load() (*Config, error) {
 
 	applyStringEnv("AERO_API_ADDR", &cfg.Addr)
 	applyStringEnv("AERO_API_DURABLE_STORE", &cfg.DurableStore)
+	applyStringEnv("AERO_API_DATABASE_URL", &cfg.DatabaseURL)
+	applyStringSliceEnv("AERO_API_AIRSPACE_PROVIDERS", &cfg.AirspaceProviders)
 	applyStringEnv("AERO_API_TELEMETRY_STORE", &cfg.TelemetryStore)
 	applyStringEnv("AERO_API_INFLUXDB_HOST", &cfg.InfluxDBHost)
 	applyStringEnv("AERO_API_INFLUXDB_TOKEN", &cfg.InfluxDBToken)
 	applyStringEnv("AERO_API_INFLUXDB_DATABASE", &cfg.InfluxDBDatabase)
+	applyStringEnv("AERO_API_DSS_BASE_URL", &cfg.DSSBaseURL)
+	applyStringEnv("AERO_API_DSS_STATIC_TOKEN", &cfg.DSSStaticToken)
+	applyStringEnv("AERO_API_DSS_OAUTH_TOKEN_URL", &cfg.DSSOAuthTokenURL)
+	applyStringEnv("AERO_API_DSS_OAUTH_AUDIENCE", &cfg.DSSOAuthAudience)
+	applyStringEnv("AERO_API_DSS_OAUTH_ISSUER", &cfg.DSSOAuthIssuer)
+	applyStringEnv("AERO_API_DSS_OAUTH_SUBJECT", &cfg.DSSOAuthSubject)
 	applyStringEnv("AERO_API_REPLAY_STORE", &cfg.ReplayStore)
 	applyStringEnv("AERO_API_REGISTRY_MODE", &cfg.RegistryMode)
 	applyStringEnv("AERO_API_REGISTRY_ADDR", &cfg.RegistryAddress)
 	applyStringEnv("AERO_API_SEED", &cfg.Seed)
 	if err := applyBoolEnv("AERO_API_DEBUG", &cfg.Debug); err != nil {
+		return nil, err
+	}
+	if err := applyBoolEnv("AERO_API_DSS_ALLOW_INSECURE_PEER_URLS", &cfg.DSSAllowInsecurePeerURLs); err != nil {
 		return nil, err
 	}
 	if err := applyDurationEnv("AERO_API_REGISTRY_DIAL_TIMEOUT", &cfg.RegistryDialTimeout); err != nil {
@@ -85,9 +124,40 @@ func (cfg *Config) Validate() error {
 	if cfg.Addr == "" {
 		return fmt.Errorf("AERO_API_ADDR cannot be empty")
 	}
-	if cfg.DurableStore != "memory" {
-		// TODO: support tidb and postgres durable stores.
+	if cfg.DurableStore != DurableStoreMemory && cfg.DurableStore != DurableStorePostgres {
 		return fmt.Errorf("unsupported durable store %q", cfg.DurableStore)
+	}
+	providers := make(map[string]struct{}, len(cfg.AirspaceProviders))
+	for index, provider := range cfg.AirspaceProviders {
+		provider = strings.TrimSpace(provider)
+		cfg.AirspaceProviders[index] = provider
+		switch provider {
+		case AirspaceProviderLocal, AirspaceProviderInterUSS:
+		case "":
+			return fmt.Errorf("AERO_API_AIRSPACE_PROVIDERS cannot contain an empty provider")
+		default:
+			return fmt.Errorf("unsupported airspace provider %q", provider)
+		}
+		if _, exists := providers[provider]; exists {
+			return fmt.Errorf("duplicate airspace provider %q", provider)
+		}
+		providers[provider] = struct{}{}
+	}
+	if len(providers) == 0 {
+		return fmt.Errorf("AERO_API_AIRSPACE_PROVIDERS must configure at least one provider")
+	}
+	if cfg.DurableStore == DurableStorePostgres && cfg.DatabaseURL == "" {
+		return fmt.Errorf("AERO_API_DATABASE_URL is required when durable store is postgres")
+	}
+	if cfg.DurableStore != DurableStorePostgres && cfg.DatabaseURL != "" {
+		return fmt.Errorf("AERO_API_DATABASE_URL requires durable store postgres")
+	}
+	_, interussEnabled := providers[AirspaceProviderInterUSS]
+	if interussEnabled && cfg.DSSBaseURL == "" {
+		return fmt.Errorf("AERO_API_DSS_BASE_URL is required when airspace provider interuss is enabled")
+	}
+	if !interussEnabled && (cfg.DSSBaseURL != "" || cfg.DSSStaticToken != "" || cfg.DSSOAuthTokenURL != "" || cfg.DSSAllowInsecurePeerURLs) {
+		return fmt.Errorf("InterUSS DSS configuration requires airspace provider interuss")
 	}
 	if cfg.TelemetryStore != "memory" && cfg.TelemetryStore != "influxdb" {
 		return fmt.Errorf("unsupported telemetry store %q", cfg.TelemetryStore)
@@ -121,6 +191,22 @@ func (cfg *Config) Validate() error {
 	if cfg.RequestTimeout <= 0 {
 		return fmt.Errorf("AERO_API_REQUEST_TIMEOUT must be > 0")
 	}
+	for name, value := range map[string]string{
+		"AERO_API_DATABASE_URL":        cfg.DatabaseURL,
+		"AERO_API_DSS_BASE_URL":        cfg.DSSBaseURL,
+		"AERO_API_DSS_OAUTH_TOKEN_URL": cfg.DSSOAuthTokenURL,
+	} {
+		if value == "" {
+			continue
+		}
+		parsed, err := url.ParseRequestURI(value)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return fmt.Errorf("%s must be an absolute URL", name)
+		}
+	}
+	if cfg.DSSStaticToken != "" && cfg.DSSOAuthTokenURL != "" {
+		return fmt.Errorf("AERO_API_DSS_STATIC_TOKEN and AERO_API_DSS_OAUTH_TOKEN_URL are mutually exclusive")
+	}
 	switch cfg.Seed {
 	case "", "none", "demo":
 	default:
@@ -133,6 +219,12 @@ func (cfg *Config) Validate() error {
 func applyStringEnv(key string, dst *string) {
 	if v := os.Getenv(key); v != "" {
 		*dst = v
+	}
+}
+
+func applyStringSliceEnv(key string, dst *[]string) {
+	if value := os.Getenv(key); value != "" {
+		*dst = strings.Split(value, ",")
 	}
 }
 

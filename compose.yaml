@@ -27,11 +27,16 @@ services:
       dockerfile: Dockerfile
     environment:
       AERO_API_ADDR: ":8080"
-      AERO_API_DURABLE_STORE: "memory"
+      AERO_API_DURABLE_STORE: "postgres"
+      AERO_API_AIRSPACE_PROVIDERS: ${AERO_API_AIRSPACE_PROVIDERS:-local}
+      AERO_API_DATABASE_URL: "postgres://${POSTGRES_USER:-aero_arc}:${POSTGRES_PASSWORD:-aero_arc_dev}@postgis:5432/${POSTGRES_DB:-aero_arc}?sslmode=disable"
       AERO_API_TELEMETRY_STORE: "memory"
       AERO_API_REPLAY_STORE: "memory"
       AERO_API_REGISTRY_MODE: "memory"
       AERO_API_REGISTRY_ADDR: "localhost:50051"
+      AERO_API_DSS_BASE_URL: ${AERO_API_DSS_BASE_URL:-}
+      AERO_API_DSS_OAUTH_TOKEN_URL: ${AERO_API_DSS_OAUTH_TOKEN_URL:-}
+      AERO_API_DSS_ALLOW_INSECURE_PEER_URLS: ${AERO_API_DSS_ALLOW_INSECURE_PEER_URLS:-false}
     depends_on:
       postgis:
         condition: service_healthy

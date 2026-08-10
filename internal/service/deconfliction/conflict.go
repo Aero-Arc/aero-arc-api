@@ -30,8 +30,14 @@ func evaluateConflicts(intent domain.OperationalIntent, volumes []domain.Operati
 					findings = append(findings, evaluatedFinding(intent, peer.source, peer.status, volume.ID, peer.intent.ID, peer.intent.Version, peer.volume.ID, peer.message))
 					continue
 				}
-				if timeWindowsOverlap(volume.StartsAt, volume.EndsAt, peer.volume.StartsAt, peer.volume.EndsAt) &&
-					altitudeBandsOverlap(volume.MinAltitudeM, volume.MaxAltitudeM, peer.volume.MinAltitudeM, peer.volume.MaxAltitudeM) {
+				if !timeWindowsOverlap(volume.StartsAt, volume.EndsAt, peer.volume.StartsAt, peer.volume.EndsAt) {
+					continue
+				}
+				if volume.AltitudeRef != peer.volume.AltitudeRef {
+					findings = append(findings, evaluatedFinding(intent, peer.source, domain.ConflictFindingStatusIndeterminate, volume.ID, peer.intent.ID, peer.intent.Version, peer.volume.ID, "operational volume altitude references differ and cannot be compared locally"))
+					continue
+				}
+				if altitudeBandsOverlap(volume.MinAltitudeM, volume.MaxAltitudeM, peer.volume.MinAltitudeM, peer.volume.MaxAltitudeM) {
 					findings = append(findings, evaluatedFinding(intent, peer.source, peer.status, volume.ID, peer.intent.ID, peer.intent.Version, peer.volume.ID, peer.message))
 				}
 				continue
@@ -107,7 +113,7 @@ func evaluatedFinding(intent domain.OperationalIntent, source airspaceprovider.S
 		sourceID += ":" + source.ReferenceID
 	}
 	sourceType := domain.ConflictFindingSourceExternal
-	if source.ProviderID == "local_durable_store" || source.ProviderID == "deconfliction_service" {
+	if source.Local || source.ProviderID == "deconfliction_service" {
 		sourceType = domain.ConflictFindingSourceLocal
 	}
 	return domain.ConflictFinding{
@@ -134,6 +140,12 @@ func evaluateVolume(volume domain.OperationalVolume) (geoBounds, domain.Conflict
 	if err != nil {
 		return geoBounds{}, domain.ConflictFindingStatusIndeterminate, err.Error()
 	}
+	if volume.BufferMeters != nil {
+		bounds, err = bounds.expanded(*volume.BufferMeters)
+		if err != nil {
+			return geoBounds{}, domain.ConflictFindingStatusIndeterminate, err.Error()
+		}
+	}
 	return bounds, domain.ConflictFindingStatusClear, ""
 }
 
@@ -159,6 +171,32 @@ func volumeDimensionError(volume domain.OperationalVolume) string {
 type geoBounds struct {
 	minLat, maxLat float64
 	minLon, maxLon float64
+}
+
+func (bounds geoBounds) expanded(meters float64) (geoBounds, error) {
+	if meters < 0 {
+		return geoBounds{}, fmt.Errorf("operational volume has a negative geometry buffer")
+	}
+	if meters == 0 {
+		return bounds, nil
+	}
+	// Deliberately low so the envelope over-approximates WGS84 distances.
+	const metersPerDegree = 110_000.0
+	latitudeDelta := meters / metersPerDegree
+	maxAbsLatitude := math.Max(math.Abs(bounds.minLat), math.Abs(bounds.maxLat))
+	cosLatitude := math.Cos((maxAbsLatitude + latitudeDelta) * math.Pi / 180)
+	if cosLatitude < 0.01 {
+		cosLatitude = 0.01
+	}
+	longitudeDelta := meters / (metersPerDegree * cosLatitude)
+	bounds.minLat = math.Max(-90, bounds.minLat-latitudeDelta)
+	bounds.maxLat = math.Min(90, bounds.maxLat+latitudeDelta)
+	bounds.minLon -= longitudeDelta
+	bounds.maxLon += longitudeDelta
+	if bounds.minLon < -180 || bounds.maxLon > 180 {
+		return geoBounds{}, fmt.Errorf("operational volume buffer crosses the antimeridian")
+	}
+	return bounds, nil
 }
 
 func (bounds geoBounds) overlaps(other geoBounds) bool {
@@ -209,6 +247,9 @@ func geoJSONBounds(raw string) (geoBounds, error) {
 	}
 	if firstLon != lastLon || firstLat != lastLat {
 		return geoBounds{}, fmt.Errorf("operational volume GeoJSON polygon exterior ring is not closed")
+	}
+	if bounds.maxLon-bounds.minLon > 180 {
+		return geoBounds{}, fmt.Errorf("operational volume GeoJSON polygon crosses the antimeridian")
 	}
 	return bounds, nil
 }

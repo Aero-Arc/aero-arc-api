@@ -14,16 +14,23 @@ import (
 const deconflictionRuleVersion = "provider-aggregate-v1"
 
 type DeconflictionService struct {
-	durable   durable.Store
+	durable   durable.OperationalStore
 	providers []airspaceprovider.Provider
 	now       func() time.Time
 }
 
-func NewDeconflictionService(store durable.Store, providers ...airspaceprovider.Provider) *DeconflictionService {
+func NewDeconflictionService(
+	store durable.OperationalStore,
+	providers ...airspaceprovider.Provider,
+) (*DeconflictionService, error) {
 	return NewDeconflictionServiceWithClock(store, nil, providers...)
 }
 
-func NewDeconflictionServiceWithClock(store durable.Store, now func() time.Time, providers ...airspaceprovider.Provider) *DeconflictionService {
+func NewDeconflictionServiceWithClock(
+	store durable.OperationalStore,
+	now func() time.Time,
+	providers ...airspaceprovider.Provider,
+) (*DeconflictionService, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
@@ -34,9 +41,9 @@ func NewDeconflictionServiceWithClock(store durable.Store, now func() time.Time,
 		}
 	}
 	if len(configured) == 0 {
-		configured = append(configured, airspaceprovider.NewLocalStoreAirspaceProvider(store))
+		return nil, fmt.Errorf("deconfliction airspace provider is required")
 	}
-	return &DeconflictionService{durable: store, providers: configured, now: now}
+	return &DeconflictionService{durable: store, providers: configured, now: now}, nil
 }
 
 func (s *DeconflictionService) CheckIntent(ctx context.Context, intentID string) (domain.DeconflictionResult, error) {
@@ -107,7 +114,6 @@ func (s *DeconflictionService) discoverOperationalIntents(
 				Message:  fmt.Sprintf("airspace provider %q could not be queried: %v", provider.ID(), err),
 				SourceID: provider.ID(),
 			})
-			continue
 		}
 
 		for _, record := range discovered {
