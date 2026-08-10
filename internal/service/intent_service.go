@@ -9,6 +9,7 @@ import (
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
+	"github.com/google/uuid"
 )
 
 var (
@@ -39,6 +40,14 @@ type IntentService struct {
 
 type DeconflictionChecker interface {
 	CheckIntent(ctx context.Context, intentID string) (domain.DeconflictionResult, error)
+}
+
+type DeconflictionCoordinator interface {
+	DeconflictionChecker
+	PublishingEnabled() bool
+	PublicationRequest(domain.OperationalIntent, domain.OperationalIntentExternalState) domain.OperationalIntentPublication
+	GetPublication(context.Context, string) (domain.OperationalIntentPublication, error)
+	ReconcileIntent(context.Context, string) error
 }
 
 type CreateIntentRequest struct {
@@ -126,7 +135,14 @@ func (s *IntentService) CreateIntent(ctx context.Context, req CreateIntentReques
 	now := s.now().UTC()
 	id := strings.TrimSpace(req.ID)
 	if id == "" {
-		id = fmt.Sprintf("intent-%d", now.UnixNano())
+		id = uuid.NewString()
+	} else {
+		parsed, err := uuid.Parse(id)
+		if err != nil || parsed.Version() != 4 {
+			return domain.OperationalIntent{}, fmt.Errorf("%w: id must be a UUIDv4", ErrValidation)
+		} else {
+			id = parsed.String()
+		}
 	}
 	if strings.TrimSpace(req.AircraftID) == "" {
 		return domain.OperationalIntent{}, fmt.Errorf("%w: aircraft_id is required", ErrValidation)
@@ -315,7 +331,12 @@ func (s *IntentService) AcceptIntent(ctx context.Context, intentID string) (doma
 	intent.Status = domain.IntentStatusAccepted
 	intent.AcceptedAt = &now
 	intent.UpdatedAt = now
-	if err := s.durable.AcceptOperationalIntent(ctx, intent, expectedRevision); err != nil {
+	if coordinator, ok := s.deconfliction.(DeconflictionCoordinator); ok && coordinator.PublishingEnabled() {
+		publication := coordinator.PublicationRequest(intent, domain.OperationalIntentExternalStateAccepted)
+		if err := s.durable.AcceptOperationalIntentAndRequestPublication(ctx, intent, expectedRevision, publication); err != nil {
+			return domain.OperationalIntent{}, fmt.Errorf("accept operational intent and request DSS publication: %w", err)
+		}
+	} else if err := s.durable.AcceptOperationalIntent(ctx, intent, expectedRevision); err != nil {
 		return domain.OperationalIntent{}, fmt.Errorf("accept operational intent: %w", err)
 	}
 	intent.Revision = expectedRevision + 1
@@ -342,6 +363,25 @@ func (s *IntentService) ActivateIntent(ctx context.Context, intentID string) (do
 	if err := s.activationReadiness(ctx, intent); err != nil {
 		return domain.OperationalIntent{}, err
 	}
+	if coordinator, ok := s.deconfliction.(DeconflictionCoordinator); ok && coordinator.PublishingEnabled() {
+		publication, err := coordinator.GetPublication(ctx, intent.ID)
+		if err != nil || publication.PublishedIntentVersion != intent.Version ||
+			publication.ConfirmedState != domain.OperationalIntentExternalStateAccepted ||
+			publication.SyncStatus != domain.PublicationSyncConfirmed {
+			return domain.OperationalIntent{}, fmt.Errorf("%w: intent is not DSS-confirmed as Accepted", ErrActivationBlocked)
+		}
+		request := coordinator.PublicationRequest(intent, domain.OperationalIntentExternalStateActivated)
+		if err := s.durable.RequestOperationalIntentPublication(ctx, request); err != nil {
+			return domain.OperationalIntent{}, fmt.Errorf("request DSS activation: %w", err)
+		}
+		if err := coordinator.ReconcileIntent(ctx, intent.ID); err != nil {
+			return domain.OperationalIntent{}, fmt.Errorf("%w: coordinate DSS activation: %v", ErrActivationBlocked, err)
+		}
+		publication, err = coordinator.GetPublication(ctx, intent.ID)
+		if err != nil || publication.ConfirmedState != domain.OperationalIntentExternalStateActivated || publication.PublishedIntentVersion != intent.Version {
+			return domain.OperationalIntent{}, fmt.Errorf("%w: DSS activation is not confirmed", ErrActivationBlocked)
+		}
+	}
 
 	now := s.now().UTC()
 	expectedRevision := intent.Revision
@@ -356,15 +396,15 @@ func (s *IntentService) ActivateIntent(ctx context.Context, intentID string) (do
 }
 
 func (s *IntentService) CompleteIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error) {
-	return s.transitionIntent(ctx, intentID, domain.IntentStatusComplete, map[domain.IntentStatus]bool{
+	return s.transitionIntentWithPublication(ctx, intentID, domain.IntentStatusComplete, map[domain.IntentStatus]bool{
 		domain.IntentStatusActive: true,
 	}, func(intent *domain.OperationalIntent, now time.Time) {
 		intent.CompletedAt = &now
-	})
+	}, domain.OperationalIntentExternalStateWithdrawn)
 }
 
 func (s *IntentService) CancelIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error) {
-	return s.transitionIntent(ctx, intentID, domain.IntentStatusCanceled, map[domain.IntentStatus]bool{
+	return s.transitionIntentWithPublication(ctx, intentID, domain.IntentStatusCanceled, map[domain.IntentStatus]bool{
 		domain.IntentStatusDraft:     true,
 		domain.IntentStatusSubmitted: true,
 		domain.IntentStatusReview:    true,
@@ -372,7 +412,32 @@ func (s *IntentService) CancelIntent(ctx context.Context, intentID string) (doma
 		domain.IntentStatusActive:    true,
 	}, func(intent *domain.OperationalIntent, now time.Time) {
 		intent.CanceledAt = &now
-	})
+	}, domain.OperationalIntentExternalStateWithdrawn)
+}
+
+func (s *IntentService) transitionIntentWithPublication(ctx context.Context, intentID string, next domain.IntentStatus, allowed map[domain.IntentStatus]bool, mutate func(*domain.OperationalIntent, time.Time), desired domain.OperationalIntentExternalState) (domain.OperationalIntent, error) {
+	coordinator, enabled := s.deconfliction.(DeconflictionCoordinator)
+	if !enabled || !coordinator.PublishingEnabled() {
+		return s.transitionIntent(ctx, intentID, next, allowed, mutate)
+	}
+	intent, err := s.durable.GetOperationalIntent(ctx, intentID)
+	if err != nil {
+		return domain.OperationalIntent{}, fmt.Errorf("get operational intent: %w", err)
+	}
+	if !allowed[intent.Status] {
+		return domain.OperationalIntent{}, fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, intent.Status, next)
+	}
+	now := s.now().UTC()
+	expectedRevision := intent.Revision
+	intent.Status = next
+	intent.UpdatedAt = now
+	mutate(&intent, now)
+	publication := coordinator.PublicationRequest(intent, desired)
+	if err := s.durable.UpdateOperationalIntentAndRequestPublication(ctx, intent, expectedRevision, publication); err != nil {
+		return domain.OperationalIntent{}, fmt.Errorf("update operational intent and request DSS withdrawal: %w", err)
+	}
+	intent.Revision = expectedRevision + 1
+	return intent, nil
 }
 
 func (s *IntentService) transitionIntent(ctx context.Context, intentID string, next domain.IntentStatus, allowed map[domain.IntentStatus]bool, mutate func(*domain.OperationalIntent, time.Time)) (domain.OperationalIntent, error) {

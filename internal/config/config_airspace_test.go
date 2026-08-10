@@ -89,3 +89,25 @@ func TestValidateAirspaceConfiguration(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateUSSWriteConfiguration(t *testing.T) {
+	cfg := Defaults()
+	cfg.AirspaceProviders = []string{AirspaceProviderInterUSS}
+	cfg.DSSBaseURL = "http://localhost:8082"
+	cfg.USSBaseURL = "https://uss.example"
+	cfg.USSJWTPublicKeyFile = "/keys/auth.pem"
+	cfg.USSJWTIssuer = "issuer"
+	cfg.USSJWTAudience = "aero-arc"
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg.USSBaseURL = "http://localhost:8080"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate accepted an insecure USS URL without the development override")
+	}
+	cfg.DSSAllowInsecurePeerURLs = true
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate rejected local insecure USS URL: %v", err)
+	}
+}

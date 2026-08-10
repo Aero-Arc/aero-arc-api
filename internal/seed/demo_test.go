@@ -73,7 +73,7 @@ func TestDemoPopulatesDashboardStores(t *testing.T) {
 		t.Fatalf("hawk operating limit count = %d, want 4", len(hawkLimits))
 	}
 
-	volumes, err := durable.ListOperationalVolumes(ctx, "intent-2041")
+	volumes, err := durable.ListOperationalVolumes(ctx, "20410000-0000-4000-8000-000000000000")
 	if err != nil {
 		t.Fatalf("ListOperationalVolumes returned error: %v", err)
 	}
@@ -130,15 +130,15 @@ func TestDemoPopulatesDashboardStores(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAircraftDashboard eagle returned error: %v", err)
 	}
-	if eagleDashboard.CurrentIntent == nil || eagleDashboard.CurrentIntent.ID != "intent-2041" {
-		t.Fatalf("eagle current intent = %#v, want intent-2041", eagleDashboard.CurrentIntent)
+	if eagleDashboard.CurrentIntent == nil || eagleDashboard.CurrentIntent.ID != "20410000-0000-4000-8000-000000000000" {
+		t.Fatalf("eagle current intent = %#v, want 20410000-0000-4000-8000-000000000000", eagleDashboard.CurrentIntent)
 	}
 	falconDashboard, err := fleet.GetAircraftDashboard(ctx, "aircraft-falcon-3")
 	if err != nil {
 		t.Fatalf("GetAircraftDashboard falcon returned error: %v", err)
 	}
-	if falconDashboard.CurrentIntent == nil || falconDashboard.CurrentIntent.ID != "intent-2042" {
-		t.Fatalf("falcon current intent = %#v, want intent-2042", falconDashboard.CurrentIntent)
+	if falconDashboard.CurrentIntent == nil || falconDashboard.CurrentIntent.ID != "20420000-0000-4000-8000-000000000000" {
+		t.Fatalf("falcon current intent = %#v, want 20420000-0000-4000-8000-000000000000", falconDashboard.CurrentIntent)
 	}
 
 	manifest, err := replay.GetReplayManifest(ctx, "flight-2041-a")

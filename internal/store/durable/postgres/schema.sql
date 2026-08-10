@@ -118,3 +118,58 @@ $$;
 
 CREATE INDEX IF NOT EXISTS conflict_findings_intent_rule_idx
     ON conflict_findings (intent_id, intent_version, rule_version, evaluated_at DESC);
+
+CREATE TABLE IF NOT EXISTS operational_intent_publications (
+    intent_id text PRIMARY KEY,
+    revision bigint NOT NULL DEFAULT 0 CHECK (revision >= 0),
+    desired_intent_version integer NOT NULL CHECK (desired_intent_version > 0),
+    published_intent_version integer CHECK (published_intent_version > 0),
+    desired_state text NOT NULL,
+    sync_status text NOT NULL,
+    next_attempt_at timestamptz NOT NULL,
+    lease_until timestamptz,
+    updated_at timestamptz NOT NULL,
+    data jsonb NOT NULL,
+    FOREIGN KEY (intent_id, desired_intent_version)
+        REFERENCES operational_intents (id, version) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS operational_intent_publications_due_idx
+    ON operational_intent_publications (next_attempt_at, lease_until)
+    WHERE sync_status IN ('pending', 'retrying');
+
+CREATE TABLE IF NOT EXISTS peer_notifications (
+    id text PRIMARY KEY,
+    revision bigint NOT NULL DEFAULT 0 CHECK (revision >= 0),
+    intent_id text NOT NULL,
+    intent_version integer NOT NULL CHECK (intent_version > 0),
+    uss_base_url text NOT NULL,
+    next_attempt_at timestamptz NOT NULL,
+    delivered_at timestamptz,
+    lease_until timestamptz,
+    updated_at timestamptz NOT NULL,
+    data jsonb NOT NULL,
+    FOREIGN KEY (intent_id, intent_version)
+        REFERENCES operational_intents (id, version) ON DELETE CASCADE
+);
+
+ALTER TABLE peer_notifications
+    ADD COLUMN IF NOT EXISTS revision bigint NOT NULL DEFAULT 0 CHECK (revision >= 0),
+    ADD COLUMN IF NOT EXISTS lease_until timestamptz;
+
+DROP INDEX IF EXISTS peer_notifications_due_idx;
+CREATE INDEX IF NOT EXISTS peer_notifications_due_idx
+    ON peer_notifications (next_attempt_at, lease_until)
+    WHERE delivered_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS received_peer_notifications (
+    id text PRIMARY KEY,
+    intent_id text NOT NULL,
+    manager text NOT NULL,
+    intent_version integer,
+    received_at timestamptz NOT NULL,
+    data jsonb NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS received_peer_notifications_intent_idx
+    ON received_peer_notifications (intent_id, received_at);

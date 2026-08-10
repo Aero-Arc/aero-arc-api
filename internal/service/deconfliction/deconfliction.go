@@ -14,9 +14,11 @@ import (
 const deconflictionRuleVersion = "provider-aggregate-v1"
 
 type DeconflictionService struct {
-	durable   durable.OperationalStore
-	providers []airspaceprovider.Provider
-	now       func() time.Time
+	durable      durable.OperationalStore
+	coordination durable.CoordinationStore
+	providers    []airspaceprovider.Provider
+	publisher    airspaceprovider.Publisher
+	now          func() time.Time
 }
 
 func NewDeconflictionService(
@@ -43,7 +45,17 @@ func NewDeconflictionServiceWithClock(
 	if len(configured) == 0 {
 		return nil, fmt.Errorf("deconfliction airspace provider is required")
 	}
-	return &DeconflictionService{durable: store, providers: configured, now: now}, nil
+	service := &DeconflictionService{durable: store, providers: configured, now: now}
+	service.coordination, _ = store.(durable.CoordinationStore)
+	for _, provider := range configured {
+		if publisher, ok := provider.(airspaceprovider.Publisher); ok {
+			if service.publisher != nil {
+				return nil, fmt.Errorf("only one deconfliction publisher may be configured")
+			}
+			service.publisher = publisher
+		}
+	}
+	return service, nil
 }
 
 func (s *DeconflictionService) CheckIntent(ctx context.Context, intentID string) (domain.DeconflictionResult, error) {
@@ -52,6 +64,11 @@ func (s *DeconflictionService) CheckIntent(ctx context.Context, intentID string)
 		return domain.DeconflictionResult{}, err
 	}
 
+	result, _, err := s.check(ctx, intent, volumes)
+	return result, err
+}
+
+func (s *DeconflictionService) check(ctx context.Context, intent domain.OperationalIntent, volumes []domain.OperationalVolume) (domain.DeconflictionResult, []airspaceprovider.OperationalIntent, error) {
 	checkedAt := s.now().UTC()
 	result := newResult(intent, checkedAt)
 	if len(volumes) == 0 {
@@ -61,14 +78,16 @@ func (s *DeconflictionService) CheckIntent(ctx context.Context, intentID string)
 			Status:     domain.ConflictFindingStatusIndeterminate,
 			Message:    "intent has no operational volumes to check",
 		})
-		return s.finalize(ctx, result)
+		finalized, err := s.finalize(ctx, result)
+		return finalized, nil, err
 	}
 
 	records, providerFindings := s.discoverOperationalIntents(ctx, intent, volumes)
 	result.Findings = append(result.Findings, providerFindings...)
 	result.Findings = append(result.Findings, evaluateConflicts(intent, volumes, records)...)
 
-	return s.finalize(ctx, result)
+	finalized, err := s.finalize(ctx, result)
+	return finalized, records, err
 }
 
 func (s *DeconflictionService) loadIntent(ctx context.Context, intentID string) (domain.OperationalIntent, []domain.OperationalVolume, error) {

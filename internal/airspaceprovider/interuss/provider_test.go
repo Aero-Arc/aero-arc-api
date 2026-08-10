@@ -84,6 +84,32 @@ func TestProviderExcludesTargetIntentReference(t *testing.T) {
 	}
 }
 
+func TestProviderUsesPeerDetailsOVNForAirspaceKey(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	reference := testReference(t, "11111111-1111-4111-8111-111111111111", 2)
+	peerReference := reference
+	peerReference.Ovn = &scdv1.OperationalIntentReference_Ovn{}
+	if err := peerReference.Ovn.FromEntityOVN("peer-ovn"); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeClient{
+		references: []scdv1.OperationalIntentReference{reference},
+		intents: map[string]*scdv1.OperationalIntent{
+			mustReferenceKey(t, reference): testSCDIntent(t, peerReference, testVolume(now)),
+		},
+	}
+	records, err := (&Provider{reader: client}).FindOperationalIntents(context.Background(), airspaceprovider.Query{
+		Intent:  domain.OperationalIntent{ID: "22222222-2222-4222-8222-222222222222"},
+		Volumes: []domain.OperationalVolume{testVolume(now)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Source.OVN != "peer-ovn" {
+		t.Fatalf("records = %#v", records)
+	}
+}
+
 func TestProviderQueriesEachTargetAndDeduplicatesReferences(t *testing.T) {
 	now := time.Date(2026, time.July, 30, 12, 0, 0, 0, time.UTC)
 	reference := testReference(t, "11111111-1111-4111-8111-111111111111", 3)

@@ -18,6 +18,7 @@ type Server struct {
 	deconfliction  *deconfliction.DeconflictionService
 	requestTimeout time.Duration
 	debug          bool
+	ussAuthorizer  USSAuthorizer
 }
 
 func New(fleet *service.FleetService, requestTimeout time.Duration) *Server {
@@ -43,6 +44,11 @@ func (s *Server) WithDebug(debug bool) *Server {
 	return s
 }
 
+func (s *Server) WithUSSAuthorizer(authorizer USSAuthorizer) *Server {
+	s.ussAuthorizer = authorizer
+	return s
+}
+
 func (s *Server) Handler() http.Handler {
 	app := mach.New()
 	app.Use(mach.CORSWithConfig(mach.CORSConfig{
@@ -56,6 +62,10 @@ func (s *Server) Handler() http.Handler {
 
 	app.GET("/healthz", s.handleHealthz)
 	app.GET("/readyz", s.handleReadyz)
+	if s.deconfliction != nil && s.deconfliction.PublishingEnabled() {
+		app.GET("/uss/v1/operational_intents/{entity_id}", s.handleGetUSSOperationalIntent)
+		app.POST("/uss/v1/operational_intents", s.handleNotifyUSSOperationalIntentChanged)
+	}
 
 	api := app.Group("/api/v1")
 	api.GET("/overview", s.handleGetOverviewDashboard)
@@ -82,6 +92,7 @@ func (s *Server) Handler() http.Handler {
 		if s.deconfliction != nil {
 			api.POST("/operational-intents/{intent_id}/deconfliction/check", s.handleCheckOperationalIntentDeconfliction)
 			api.GET("/operational-intents/{intent_id}/conflicts", s.handleListOperationalIntentConflicts)
+			api.GET("/operational-intents/{intent_id}/coordination", s.handleGetOperationalIntentCoordination)
 		}
 		api.POST("/operational-intents/{intent_id}/accept", s.handleAcceptOperationalIntent)
 		api.POST("/operational-intents/{intent_id}/activate", s.handleActivateOperationalIntent)

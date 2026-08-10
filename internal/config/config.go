@@ -51,6 +51,10 @@ type Config struct {
 	DSSOAuthIssuer           string
 	DSSOAuthSubject          string
 	DSSAllowInsecurePeerURLs bool
+	USSBaseURL               string
+	USSJWTPublicKeyFile      string
+	USSJWTIssuer             string
+	USSJWTAudience           string
 	ReplayStore              string
 	RegistryMode             string
 	RegistryAddress          string
@@ -96,6 +100,10 @@ func Load() (*Config, error) {
 	applyStringEnv("AERO_API_DSS_OAUTH_AUDIENCE", &cfg.DSSOAuthAudience)
 	applyStringEnv("AERO_API_DSS_OAUTH_ISSUER", &cfg.DSSOAuthIssuer)
 	applyStringEnv("AERO_API_DSS_OAUTH_SUBJECT", &cfg.DSSOAuthSubject)
+	applyStringEnv("AERO_API_USS_BASE_URL", &cfg.USSBaseURL)
+	applyStringEnv("AERO_API_USS_JWT_PUBLIC_KEY_FILE", &cfg.USSJWTPublicKeyFile)
+	applyStringEnv("AERO_API_USS_JWT_ISSUER", &cfg.USSJWTIssuer)
+	applyStringEnv("AERO_API_USS_JWT_AUDIENCE", &cfg.USSJWTAudience)
 	applyStringEnv("AERO_API_REPLAY_STORE", &cfg.ReplayStore)
 	applyStringEnv("AERO_API_REGISTRY_MODE", &cfg.RegistryMode)
 	applyStringEnv("AERO_API_REGISTRY_ADDR", &cfg.RegistryAddress)
@@ -159,6 +167,15 @@ func (cfg *Config) Validate() error {
 	if !interussEnabled && (cfg.DSSBaseURL != "" || cfg.DSSStaticToken != "" || cfg.DSSOAuthTokenURL != "" || cfg.DSSAllowInsecurePeerURLs) {
 		return fmt.Errorf("InterUSS DSS configuration requires airspace provider interuss")
 	}
+	if cfg.USSBaseURL != "" && !interussEnabled {
+		return fmt.Errorf("AERO_API_USS_BASE_URL requires airspace provider interuss")
+	}
+	if cfg.USSBaseURL != "" && (cfg.USSJWTPublicKeyFile == "" || cfg.USSJWTIssuer == "" || cfg.USSJWTAudience == "") {
+		return fmt.Errorf("AERO_API_USS_JWT_PUBLIC_KEY_FILE, AERO_API_USS_JWT_ISSUER, and AERO_API_USS_JWT_AUDIENCE are required when USS publication is enabled")
+	}
+	if cfg.USSBaseURL == "" && (cfg.USSJWTPublicKeyFile != "" || cfg.USSJWTIssuer != "" || cfg.USSJWTAudience != "") {
+		return fmt.Errorf("USS JWT configuration requires AERO_API_USS_BASE_URL")
+	}
 	if cfg.TelemetryStore != "memory" && cfg.TelemetryStore != "influxdb" {
 		return fmt.Errorf("unsupported telemetry store %q", cfg.TelemetryStore)
 	}
@@ -195,6 +212,7 @@ func (cfg *Config) Validate() error {
 		"AERO_API_DATABASE_URL":        cfg.DatabaseURL,
 		"AERO_API_DSS_BASE_URL":        cfg.DSSBaseURL,
 		"AERO_API_DSS_OAUTH_TOKEN_URL": cfg.DSSOAuthTokenURL,
+		"AERO_API_USS_BASE_URL":        cfg.USSBaseURL,
 	} {
 		if value == "" {
 			continue
@@ -202,6 +220,15 @@ func (cfg *Config) Validate() error {
 		parsed, err := url.ParseRequestURI(value)
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 			return fmt.Errorf("%s must be an absolute URL", name)
+		}
+	}
+	if cfg.USSBaseURL != "" {
+		parsed, _ := url.Parse(cfg.USSBaseURL)
+		if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return fmt.Errorf("AERO_API_USS_BASE_URL must contain only a scheme, host, port, and optional path")
+		}
+		if parsed.Scheme != "https" && !cfg.DSSAllowInsecurePeerURLs {
+			return fmt.Errorf("AERO_API_USS_BASE_URL must use HTTPS unless insecure peer URLs are enabled for local development")
 		}
 	}
 	if cfg.DSSStaticToken != "" && cfg.DSSOAuthTokenURL != "" {

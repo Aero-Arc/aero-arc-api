@@ -81,6 +81,16 @@ func (s *Store) UpdateOperationalIntent(ctx context.Context, intent domain.Opera
 	if err := lockIntent(ctx, tx, intent.ID); err != nil {
 		return err
 	}
+	if err := updateOperationalIntentTx(ctx, tx, intent, expectedRevision); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit operational intent update: %w", err)
+	}
+	return nil
+}
+
+func updateOperationalIntentTx(ctx context.Context, tx pgx.Tx, intent domain.OperationalIntent, expectedRevision int64) error {
 	raw, err := json.Marshal(intent)
 	if err != nil {
 		return fmt.Errorf("encode operational intent: %w", err)
@@ -113,9 +123,6 @@ func (s *Store) UpdateOperationalIntent(ctx context.Context, intent domain.Opera
 		}
 		return durable.ErrVersionConflict
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit operational intent update: %w", err)
-	}
 	return nil
 }
 
@@ -128,9 +135,19 @@ func (s *Store) AcceptOperationalIntent(ctx context.Context, intent domain.Opera
 	if err := lockIntent(ctx, tx, intent.ID); err != nil {
 		return err
 	}
+	if err := acceptOperationalIntentTx(ctx, tx, intent, expectedRevision); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit operational intent acceptance: %w", err)
+	}
+	return nil
+}
+
+func acceptOperationalIntentTx(ctx context.Context, tx pgx.Tx, intent domain.OperationalIntent, expectedRevision int64) error {
 	var currentVersion int
 	var currentRevision int64
-	err = tx.QueryRow(ctx, `SELECT version, revision FROM operational_intents WHERE id = $1 ORDER BY version DESC LIMIT 1`, intent.ID).Scan(&currentVersion, &currentRevision)
+	err := tx.QueryRow(ctx, `SELECT version, revision FROM operational_intents WHERE id = $1 ORDER BY version DESC LIMIT 1`, intent.ID).Scan(&currentVersion, &currentRevision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return durable.ErrNotFound
 	}
@@ -162,9 +179,6 @@ func (s *Store) AcceptOperationalIntent(ctx context.Context, intent domain.Opera
 		if err := upsertIntent(ctx, tx, prior, prior.Revision+1); err != nil {
 			return err
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit operational intent acceptance: %w", err)
 	}
 	return nil
 }

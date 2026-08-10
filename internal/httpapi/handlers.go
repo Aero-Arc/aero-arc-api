@@ -371,6 +371,17 @@ func (s *Server) handleListOperationalIntentConflicts(c *mach.Context) {
 	writeJSON(c, http.StatusOK, map[string]any{"findings": findings})
 }
 
+func (s *Server) handleGetOperationalIntentCoordination(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	publication, err := s.deconfliction.GetPublication(ctx, c.Param("intent_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, publication)
+}
+
 func (s *Server) handleAcceptOperationalIntent(c *mach.Context) {
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
