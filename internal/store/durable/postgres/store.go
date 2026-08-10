@@ -93,7 +93,11 @@ func (s *Store) UpdateOperationalIntent(ctx context.Context, intent domain.Opera
 			planned_end_at = $5,
 			updated_at = $6,
 			data = $7
-		WHERE id = $1 AND version = $2 AND revision = $8`,
+		WHERE id = $1 AND version = $2 AND revision = $8
+			AND NOT EXISTS (
+				SELECT 1 FROM operational_intents newer
+				WHERE newer.id = $1 AND newer.version > $2
+			)`,
 		intent.ID, intent.Version, intent.AircraftID, intent.PlannedStartAt, intent.PlannedEndAt,
 		intent.UpdatedAt, raw, expectedRevision)
 	if err != nil {

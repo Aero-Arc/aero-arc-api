@@ -233,19 +233,15 @@ func (s *Store) CreateOperationalIntent(_ context.Context, intent domain.Operati
 func (s *Store) UpdateOperationalIntent(_ context.Context, intent domain.OperationalIntent, expectedRevision int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := operationalIntentKey(intent.ID, intent.Version)
-	current, exists := s.operationalIntents[key]
+	current, exists := s.latestOperationalIntent(intent.ID)
 	if !exists {
-		if s.operationalIntentExists(intent.ID) {
-			return durable.ErrVersionConflict
-		}
 		return durable.ErrNotFound
 	}
-	if current.Revision != expectedRevision {
+	if current.Version != intent.Version || current.Revision != expectedRevision {
 		return durable.ErrVersionConflict
 	}
 	intent.Revision = expectedRevision + 1
-	s.operationalIntents[key] = intent
+	s.operationalIntents[operationalIntentKey(intent.ID, intent.Version)] = intent
 	return nil
 }
 
@@ -405,15 +401,6 @@ func operationalIntentKey(intentID string, version int) string {
 
 func conformanceSummaryKey(summary domain.ConformanceSummary) string {
 	return summary.IntentID + ":" + strconv.Itoa(summary.IntentVersion)
-}
-
-func (s *Store) operationalIntentExists(intentID string) bool {
-	for _, intent := range s.operationalIntents {
-		if intent.ID == intentID {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *Store) latestOperationalIntent(intentID string) (domain.OperationalIntent, bool) {

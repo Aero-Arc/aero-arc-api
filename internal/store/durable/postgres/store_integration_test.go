@@ -151,6 +151,36 @@ func TestConcurrentIntentUpdatesUseOptimisticRevision(t *testing.T) {
 	}
 }
 
+func TestUpdateOperationalIntentRejectsSupersededVersion(t *testing.T) {
+	ctx, store, _ := integrationStores(t)
+	now := time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC)
+	v1 := integrationIntent("superseded-intent", now)
+	v1.Status = domain.IntentStatusAccepted
+	if err := store.CreateOperationalIntent(ctx, v1); err != nil {
+		t.Fatal(err)
+	}
+	v2 := v1
+	v2.Version = 2
+	v2.Status = domain.IntentStatusDraft
+	if err := store.ReplaceOperationalIntent(ctx, v1.Version, v1.Revision, v2, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	stale := v1
+	stale.Status = domain.IntentStatusActive
+	stale.UpdatedAt = now.Add(time.Minute)
+	if err := store.UpdateOperationalIntent(ctx, stale, v1.Revision); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("superseded update error = %v, want ErrVersionConflict", err)
+	}
+	stored, err := store.GetOperationalIntentVersion(ctx, v1.ID, v1.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != domain.IntentStatusAccepted || stored.Revision != 0 {
+		t.Fatalf("superseded version changed: %#v", stored)
+	}
+}
+
 func TestConcurrentFindingReplacementsDoNotMerge(t *testing.T) {
 	ctx, first, second := integrationStores(t)
 	now := time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC)
