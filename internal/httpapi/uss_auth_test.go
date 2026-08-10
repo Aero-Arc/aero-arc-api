@@ -3,7 +3,11 @@ package httpapi
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -35,5 +39,43 @@ func TestUSSJWTAuthorizerValidatesScopeAndSubject(t *testing.T) {
 	}
 	if _, err := authorizer.Authorize(request, "different.scope"); err == nil {
 		t.Fatal("Authorize accepted a token without the required scope")
+	}
+	claims.ExpiresAt = nil
+	raw, err = jwt.NewWithClaims(jwt.SigningMethodRS256, claims).SignedString(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+raw)
+	if _, err := authorizer.Authorize(request, ussStrategicCoordinationScope); err == nil {
+		t.Fatal("Authorize accepted a token without an expiration")
+	}
+}
+
+func TestNewUSSJWTAuthorizerReadsRSAPublicKey(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "uss-public.pem")
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	authorizer, err := NewUSSJWTAuthorizer(path, "issuer", "aero-arc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authorizer.publicKey.N.Cmp(privateKey.N) != 0 {
+		t.Fatal("authorizer loaded a different public key")
+	}
+	invalidPath := filepath.Join(t.TempDir(), "invalid.pem")
+	if err := os.WriteFile(invalidPath, []byte("not PEM"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewUSSJWTAuthorizer(invalidPath, "issuer", "aero-arc"); err == nil {
+		t.Fatal("NewUSSJWTAuthorizer accepted invalid PEM")
 	}
 }

@@ -56,7 +56,7 @@ func (s *Server) handleGetUSSOperationalIntent(c *mach.Context) {
 	}
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
-	published, err := s.deconfliction.GetPublishedOperationalIntent(ctx, entityID, version)
+	publication, volumes, err := s.deconfliction.GetPublishedOperationalIntent(ctx, entityID, version)
 	if errors.Is(err, durable.ErrNotFound) {
 		writeError(c, http.StatusNotFound, "operational intent is not published")
 		return
@@ -65,7 +65,7 @@ func (s *Server) handleGetUSSOperationalIntent(c *mach.Context) {
 		writeServiceError(c, err)
 		return
 	}
-	intent, err := interussprovider.PublishedOperationalIntent(published.Publication.ReferenceJSON, published.Volumes)
+	intent, err := interussprovider.PublishedOperationalIntent(publication.ReferenceJSON, volumes)
 	if err != nil {
 		writeServiceError(c, err)
 		return

@@ -32,7 +32,7 @@ func PublishedOperationalIntent(referenceJSON []byte, volumes []domain.Operation
 		}
 	}
 	if (reference.State == scdv1.Accepted || reference.State == scdv1.Activated) && len(offNominal) > 0 {
-		return scdv1.OperationalIntent{}, fmt.Errorf("Accepted and Activated intents cannot publish off-nominal volumes")
+		return scdv1.OperationalIntent{}, fmt.Errorf("accepted and activated intents cannot publish off-nominal volumes")
 	}
 	priority := scdv1.Priority(0)
 	details := scdv1.OperationalIntentDetails{Priority: &priority}

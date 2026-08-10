@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -19,12 +20,6 @@ const (
 	publicationLease = 30 * time.Second
 	publicationBatch = 20
 )
-
-type PublishedOperationalIntent struct {
-	Publication domain.OperationalIntentPublication
-	Intent      domain.OperationalIntent
-	Volumes     []domain.OperationalVolume
-}
 
 func (s *DeconflictionService) PublishingEnabled() bool {
 	return s.publisher != nil && s.publisher.PublicationEnabled() && s.coordination != nil
@@ -52,25 +47,21 @@ func (s *DeconflictionService) RecordReceivedPeerNotification(ctx context.Contex
 	return s.coordination.RecordReceivedPeerNotification(ctx, notification)
 }
 
-func (s *DeconflictionService) GetPublishedOperationalIntent(ctx context.Context, intentID string, dssVersion int) (PublishedOperationalIntent, error) {
+func (s *DeconflictionService) GetPublishedOperationalIntent(ctx context.Context, intentID string, dssVersion int) (domain.OperationalIntentPublication, []domain.OperationalVolume, error) {
 	publication, err := s.GetPublication(ctx, intentID)
 	if err != nil {
-		return PublishedOperationalIntent{}, err
+		return domain.OperationalIntentPublication{}, nil, err
 	}
 	if publication.PublishedIntentVersion == 0 || publication.OVN == "" ||
 		publication.SyncStatus == domain.PublicationSyncWithdrawn ||
 		dssVersion > 0 && publication.DSSVersion != dssVersion {
-		return PublishedOperationalIntent{}, durable.ErrNotFound
-	}
-	intent, err := s.durable.GetOperationalIntentVersion(ctx, intentID, publication.PublishedIntentVersion)
-	if err != nil {
-		return PublishedOperationalIntent{}, err
+		return domain.OperationalIntentPublication{}, nil, durable.ErrNotFound
 	}
 	volumes, err := s.durable.ListOperationalVolumes(ctx, intentID)
 	if err != nil {
-		return PublishedOperationalIntent{}, err
+		return domain.OperationalIntentPublication{}, nil, err
 	}
-	return PublishedOperationalIntent{Publication: publication, Intent: intent, Volumes: volumesForVersion(volumes, intent.Version)}, nil
+	return publication, volumesForVersion(volumes, publication.PublishedIntentVersion), nil
 }
 
 func (s *DeconflictionService) ReconcileIntent(ctx context.Context, intentID string) error {
@@ -90,8 +81,7 @@ func (s *DeconflictionService) RunPublicationWorker(ctx context.Context) {
 	defer ticker.Stop()
 	for {
 		if err := s.ReconcileDue(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			// The durable retry state is the source of truth; callers may expose
-			// worker errors through their normal structured logger/metrics layer.
+			slog.WarnContext(ctx, "DSS publication reconciliation failed", slog.String("error", err.Error()))
 		}
 		select {
 		case <-ctx.Done():
@@ -116,7 +106,10 @@ func (s *DeconflictionService) ReconcileDue(ctx context.Context) error {
 			reconcileErrors = append(reconcileErrors, fmt.Errorf("reconcile intent %s: %w", publication.IntentID, err))
 		}
 	}
-	return errors.Join(errors.Join(reconcileErrors...), s.DeliverDuePeerNotifications(ctx))
+	if err := s.DeliverDuePeerNotifications(ctx); err != nil {
+		reconcileErrors = append(reconcileErrors, err)
+	}
+	return errors.Join(reconcileErrors...)
 }
 
 func (s *DeconflictionService) reconcileClaimed(ctx context.Context, publication domain.OperationalIntentPublication) error {
@@ -149,11 +142,12 @@ func (s *DeconflictionService) reconcileClaimed(ctx context.Context, publication
 		publication.PublishedIntentVersion = 0
 		publication.ConfirmedAt = &now
 		publication.UpdatedAt = now
-		if err := s.coordination.UpdateOperationalIntentPublication(ctx, publication, expectedRevision); err != nil {
-			return err
-		}
 		request := airspaceprovider.PublicationRequest{Intent: domain.OperationalIntent{ID: publication.IntentID, Version: publication.DesiredIntentVersion}}
-		return s.enqueuePeerNotifications(ctx, request, receipt, true)
+		notifications, err := s.buildPeerNotifications(request, receipt, true)
+		if err != nil {
+			return s.recordPublicationFailure(ctx, publication, expectedRevision, err, false)
+		}
+		return s.coordination.ConfirmOperationalIntentPublication(ctx, publication, expectedRevision, notifications)
 	}
 
 	intent, err := s.durable.GetOperationalIntentVersion(ctx, publication.IntentID, publication.DesiredIntentVersion)
@@ -215,10 +209,11 @@ func (s *DeconflictionService) reconcileClaimed(ctx context.Context, publication
 	publication.ConfirmedAt = &now
 	publication.LastError = ""
 	publication.UpdatedAt = now
-	if err := s.coordination.UpdateOperationalIntentPublication(ctx, publication, expectedRevision); err != nil {
-		return err
+	notifications, err := s.buildPeerNotifications(request, receipt, false)
+	if err != nil {
+		return s.recordPublicationFailure(ctx, publication, expectedRevision, err, false)
 	}
-	return s.enqueuePeerNotifications(ctx, request, receipt, false)
+	return s.coordination.ConfirmOperationalIntentPublication(ctx, publication, expectedRevision, notifications)
 }
 
 func permanentPublicationError(err error) bool {
@@ -226,21 +221,17 @@ func permanentPublicationError(err error) bool {
 	if !errors.As(err, &responseErr) {
 		return false
 	}
-	switch responseErr.StatusCode {
-	case 400, 401, 403, 409, 413:
-		return true
-	default:
-		return false
-	}
+	return responseErr.StatusCode == 400 || responseErr.StatusCode == 401 ||
+		responseErr.StatusCode == 403 || responseErr.StatusCode == 413
 }
 
-func (s *DeconflictionService) enqueuePeerNotifications(ctx context.Context, request airspaceprovider.PublicationRequest, receipt airspaceprovider.PublicationReceipt, deleted bool) error {
+func (s *DeconflictionService) buildPeerNotifications(request airspaceprovider.PublicationRequest, receipt airspaceprovider.PublicationReceipt, deleted bool) ([]domain.PeerNotification, error) {
 	now := s.now().UTC()
 	notifications := make([]domain.PeerNotification, 0, len(receipt.Subscribers))
 	for _, subscriber := range receipt.Subscribers {
 		payload, err := s.publisher.BuildPeerNotification(request, receipt, subscriber, deleted)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		digest := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%s", request.Intent.ID, receipt.Version, subscriber.USSBaseURL)))
 		notifications = append(notifications, domain.PeerNotification{
@@ -249,7 +240,7 @@ func (s *DeconflictionService) enqueuePeerNotifications(ctx context.Context, req
 			Payload: payload, NextAttemptAt: now, CreatedAt: now, UpdatedAt: now,
 		})
 	}
-	return s.coordination.EnqueuePeerNotifications(ctx, notifications)
+	return notifications, nil
 }
 
 func (s *DeconflictionService) DeliverDuePeerNotifications(ctx context.Context) error {

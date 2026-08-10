@@ -136,7 +136,7 @@ CREATE TABLE IF NOT EXISTS operational_intent_publications (
 
 CREATE INDEX IF NOT EXISTS operational_intent_publications_due_idx
     ON operational_intent_publications (next_attempt_at, lease_until)
-    WHERE sync_status IN ('pending', 'retrying');
+    WHERE sync_status IN ('pending', 'processing', 'retrying');
 
 CREATE TABLE IF NOT EXISTS peer_notifications (
     id text PRIMARY KEY,
@@ -153,11 +153,6 @@ CREATE TABLE IF NOT EXISTS peer_notifications (
         REFERENCES operational_intents (id, version) ON DELETE CASCADE
 );
 
-ALTER TABLE peer_notifications
-    ADD COLUMN IF NOT EXISTS revision bigint NOT NULL DEFAULT 0 CHECK (revision >= 0),
-    ADD COLUMN IF NOT EXISTS lease_until timestamptz;
-
-DROP INDEX IF EXISTS peer_notifications_due_idx;
 CREATE INDEX IF NOT EXISTS peer_notifications_due_idx
     ON peer_notifications (next_attempt_at, lease_until)
     WHERE delivered_at IS NULL;

@@ -141,7 +141,7 @@ func (s *Store) ClaimDueOperationalIntentPublications(ctx context.Context, now, 
 	defer func() { _ = tx.Rollback(ctx) }()
 	rows, err := tx.Query(ctx, `
 		SELECT data, revision FROM operational_intent_publications
-		WHERE sync_status IN ('pending', 'retrying')
+		WHERE sync_status IN ('pending', 'processing', 'retrying')
 		  AND next_attempt_at <= $1
 		  AND (lease_until IS NULL OR lease_until <= $1)
 		ORDER BY next_attempt_at, intent_id
@@ -175,13 +175,17 @@ func claimPublication(publication *domain.OperationalIntentPublication, now, lea
 }
 
 func (s *Store) UpdateOperationalIntentPublication(ctx context.Context, publication domain.OperationalIntentPublication, expectedRevision int64) error {
+	return updateOperationalIntentPublication(ctx, s.pool, publication, expectedRevision)
+}
+
+func updateOperationalIntentPublication(ctx context.Context, db querier, publication domain.OperationalIntentPublication, expectedRevision int64) error {
 	publication.Revision = expectedRevision + 1
 	publication.LeaseUntil = nil
 	raw, err := json.Marshal(publication)
 	if err != nil {
 		return fmt.Errorf("encode publication: %w", err)
 	}
-	tag, err := s.pool.Exec(ctx, `
+	tag, err := db.Exec(ctx, `
 		UPDATE operational_intent_publications SET
 			revision = $3, desired_intent_version = $4,
 			published_intent_version = NULLIF($5, 0), desired_state = $6,
@@ -200,18 +204,31 @@ func (s *Store) UpdateOperationalIntentPublication(ctx context.Context, publicat
 	return nil
 }
 
-func (s *Store) EnqueuePeerNotifications(ctx context.Context, notifications []domain.PeerNotification) error {
+func (s *Store) ConfirmOperationalIntentPublication(ctx context.Context, publication domain.OperationalIntentPublication, expectedRevision int64, notifications []domain.PeerNotification) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("begin peer notification enqueue: %w", err)
+		return fmt.Errorf("begin publication confirmation: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := updateOperationalIntentPublication(ctx, tx, publication, expectedRevision); err != nil {
+		return err
+	}
+	if err := enqueuePeerNotifications(ctx, tx, notifications); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit publication confirmation: %w", err)
+	}
+	return nil
+}
+
+func enqueuePeerNotifications(ctx context.Context, db querier, notifications []domain.PeerNotification) error {
 	for _, notification := range notifications {
 		raw, err := json.Marshal(notification)
 		if err != nil {
 			return fmt.Errorf("encode peer notification: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `
+		if _, err := db.Exec(ctx, `
 			INSERT INTO peer_notifications (id, revision, intent_id, intent_version, uss_base_url, next_attempt_at, delivered_at, lease_until, updated_at, data)
 			VALUES ($1,0,$2,$3,$4,$5,$6,$7,$8,$9)
 			ON CONFLICT (id) DO NOTHING`, notification.ID, notification.IntentID,
@@ -219,9 +236,6 @@ func (s *Store) EnqueuePeerNotifications(ctx context.Context, notifications []do
 			notification.DeliveredAt, notification.LeaseUntil, notification.UpdatedAt, raw); err != nil {
 			return fmt.Errorf("enqueue peer notification: %w", err)
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit peer notifications: %w", err)
 	}
 	return nil
 }
