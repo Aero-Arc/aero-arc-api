@@ -69,7 +69,7 @@ func TestProviderQueriesEachTargetAndDeduplicatesReferences(t *testing.T) {
 	second := target
 	second.ID = "target-two"
 
-	records, err := NewWithClient(client).FindOperationalIntents(context.Background(), airspaceprovider.Query{
+	records, err := (&Provider{reader: client}).FindOperationalIntents(context.Background(), airspaceprovider.Query{
 		Intent:  domain.OperationalIntent{ID: "target"},
 		Volumes: []domain.OperationalVolume{target, second},
 	})
@@ -106,7 +106,7 @@ func TestProviderReturnsSuccessfulPeersWithPartialFailure(t *testing.T) {
 		},
 	}
 
-	records, err := NewWithClient(client).FindOperationalIntents(context.Background(), airspaceprovider.Query{
+	records, err := (&Provider{reader: client}).FindOperationalIntents(context.Background(), airspaceprovider.Query{
 		Intent:  domain.OperationalIntent{ID: "target"},
 		Volumes: []domain.OperationalVolume{testVolume(now)},
 	})
@@ -123,7 +123,7 @@ func TestProviderRejectsUnsupportedTargetAltitudeReference(t *testing.T) {
 	volume.AltitudeRef = domain.AltitudeReferenceAGL
 	client := &fakeClient{}
 
-	records, err := NewWithClient(client).FindOperationalIntents(context.Background(), airspaceprovider.Query{
+	records, err := (&Provider{reader: client}).FindOperationalIntents(context.Background(), airspaceprovider.Query{
 		Intent: domain.OperationalIntent{ID: "target"}, Volumes: []domain.OperationalVolume{volume},
 	})
 	if err == nil || !strings.Contains(err.Error(), "not supported by SCD") {
@@ -146,7 +146,7 @@ func TestProviderRejectsMismatchedPeerReference(t *testing.T) {
 		},
 	}
 
-	records, err := NewWithClient(client).FindOperationalIntents(context.Background(), airspaceprovider.Query{
+	records, err := (&Provider{reader: client}).FindOperationalIntents(context.Background(), airspaceprovider.Query{
 		Intent:  domain.OperationalIntent{ID: "target"},
 		Volumes: []domain.OperationalVolume{testVolume(now)},
 	})
@@ -164,7 +164,7 @@ func TestProviderRejectsMissingStateRequiredVolumes(t *testing.T) {
 		},
 	}
 
-	records, err := NewWithClient(client).FindOperationalIntents(context.Background(), airspaceprovider.Query{
+	records, err := (&Provider{reader: client}).FindOperationalIntents(context.Background(), airspaceprovider.Query{
 		Intent:  domain.OperationalIntent{ID: "target"},
 		Volumes: []domain.OperationalVolume{testVolume(time.Now().UTC())},
 	})
@@ -193,7 +193,7 @@ func TestPeerURLPolicy(t *testing.T) {
 	}
 }
 
-func TestClientAdapterUsesDSSAndPeerEndpoints(t *testing.T) {
+func TestSCDClientUsesDSSAndPeerEndpoints(t *testing.T) {
 	now := time.Date(2026, time.July, 30, 12, 0, 0, 0, time.UTC)
 	reference := testReference(t, "11111111-1111-4111-8111-111111111111", 3)
 	if err := reference.UssBaseUrl.FromUssBaseURL("http://peer.example"); err != nil {
@@ -219,22 +219,22 @@ func TestClientAdapterUsesDSSAndPeerEndpoints(t *testing.T) {
 		}
 	})
 	client := testDSSClient(t, transport)
-	adapter := NewClientWithPeer(client, client, true)
+	scd := &scdClient{dssClient: client, peerUSSClient: client, allowInsecurePeerURLs: true}
 	area, err := toSCDVolume(testVolume(now))
 	if err != nil {
 		t.Fatal(err)
 	}
-	references, err := adapter.QueryOperationalIntentReferences(context.Background(), area)
+	references, err := scd.QueryOperationalIntentReferences(context.Background(), area)
 	if err != nil || len(references) != 1 {
 		t.Fatalf("references = %#v, error = %v", references, err)
 	}
-	details, err := adapter.GetOperationalIntent(context.Background(), references[0])
+	details, err := scd.GetOperationalIntent(context.Background(), references[0])
 	if err != nil || details.Reference.Version != 3 {
 		t.Fatalf("details = %#v, error = %v", details, err)
 	}
 }
 
-func TestClientAdapterReportsDSSResponseFailures(t *testing.T) {
+func TestSCDClientReportsDSSResponseFailures(t *testing.T) {
 	area, err := toSCDVolume(testVolume(time.Now().UTC()))
 	if err != nil {
 		t.Fatal(err)
@@ -271,8 +271,8 @@ func TestClientAdapterReportsDSSResponseFailures(t *testing.T) {
 				copy := *test.response
 				return &copy, nil
 			}))
-			adapter := NewClientWithPeer(client, client, true)
-			_, err := adapter.QueryOperationalIntentReferences(context.Background(), area)
+			scd := &scdClient{dssClient: client, peerUSSClient: client, allowInsecurePeerURLs: true}
+			_, err := scd.QueryOperationalIntentReferences(context.Background(), area)
 			if err == nil {
 				t.Fatal("expected query error")
 			}
@@ -290,7 +290,7 @@ func TestClientAdapterReportsDSSResponseFailures(t *testing.T) {
 }
 
 func TestPeerHTTPClientEnforcesRedirectAndAddressPolicy(t *testing.T) {
-	secure := NewPeerHTTPClient(time.Second, false)
+	secure := newPeerHTTPClient(time.Second, false)
 	private, err := http.NewRequest(http.MethodGet, "https://127.0.0.1/intent", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -303,7 +303,7 @@ func TestPeerHTTPClientEnforcesRedirectAndAddressPolicy(t *testing.T) {
 		t.Fatalf("redirect limit error = %v", err)
 	}
 
-	insecure := NewPeerHTTPClient(time.Second, true)
+	insecure := newPeerHTTPClient(time.Second, true)
 	local, err := http.NewRequest(http.MethodGet, "http://localhost:8080/intent", nil)
 	if err != nil {
 		t.Fatal(err)

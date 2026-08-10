@@ -27,13 +27,13 @@ const (
 	metersPerDegree = 110_000.0
 )
 
-type Client interface {
+type scdReader interface {
 	QueryOperationalIntentReferences(context.Context, scdv1.Volume4D) ([]scdv1.OperationalIntentReference, error)
 	GetOperationalIntent(context.Context, scdv1.OperationalIntentReference) (*scdv1.OperationalIntent, error)
 }
 
 type Provider struct {
-	client Client
+	reader scdReader
 }
 
 type Config struct {
@@ -47,10 +47,11 @@ type Config struct {
 	RequestTimeout        time.Duration
 }
 
-// New constructs an InterUSS provider and the DSS and peer clients it uses.
+// New constructs an InterUSS provider with separate HTTP policies for the
+// configured DSS and the peer USS URLs returned by that DSS.
 func New(cfg Config) (*Provider, error) {
 	dssHTTPClient := &http.Client{Timeout: cfg.RequestTimeout}
-	peerHTTPClient := NewPeerHTTPClient(cfg.RequestTimeout, cfg.AllowInsecurePeerURLs)
+	peerHTTPClient := newPeerHTTPClient(cfg.RequestTimeout, cfg.AllowInsecurePeerURLs)
 	var tokenSource dss.TokenSource
 	switch {
 	case cfg.StaticToken != "":
@@ -65,7 +66,7 @@ func New(cfg Config) (*Provider, error) {
 			HTTPClient:       dssHTTPClient,
 		}
 	}
-	queryClient, err := dss.NewClient(dss.Config{
+	dssClient, err := dss.NewClient(dss.Config{
 		BaseURL:     cfg.BaseURL,
 		TokenSource: tokenSource,
 		HTTPClient:  dssHTTPClient,
@@ -73,35 +74,24 @@ func New(cfg Config) (*Provider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configure InterUSS DSS client: %w", err)
 	}
-	peerClient, err := dss.NewClient(dss.Config{
+	peerUSSClient, err := dss.NewClient(dss.Config{
 		BaseURL:     cfg.BaseURL,
 		TokenSource: tokenSource,
 		HTTPClient:  peerHTTPClient,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("configure InterUSS peer client: %w", err)
+		return nil, fmt.Errorf("configure InterUSS peer USS client: %w", err)
 	}
-	return NewWithClient(NewClientWithPeer(
-		queryClient, peerClient, cfg.AllowInsecurePeerURLs,
-	)), nil
+	return &Provider{reader: &scdClient{
+		dssClient:             dssClient,
+		peerUSSClient:         peerUSSClient,
+		allowInsecurePeerURLs: cfg.AllowInsecurePeerURLs,
+	}}, nil
 }
 
-// NewWithClient constructs a provider around an injected client.
-func NewWithClient(client Client) *Provider {
-	return &Provider{client: client}
-}
-
-func NewClientWithPeer(queryClient, peerClient *dss.Client, allowInsecurePeerURLs bool) Client {
-	return &clientAdapter{
-		queryClient:           queryClient,
-		peerClient:            peerClient,
-		allowInsecurePeerURLs: allowInsecurePeerURLs,
-	}
-}
-
-// NewPeerHTTPClient blocks peer USS connections to local and private networks
+// newPeerHTTPClient blocks peer USS connections to local and private networks
 // unless explicitly enabled for a local development stack.
-func NewPeerHTTPClient(timeout time.Duration, allowInsecurePeerURLs bool) *http.Client {
+func newPeerHTTPClient(timeout time.Duration, allowInsecurePeerURLs bool) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if !allowInsecurePeerURLs {
 		// A proxy could resolve or reach a private target on the client's behalf.
@@ -141,7 +131,7 @@ func (p *Provider) ID() string {
 }
 
 func (p *Provider) FindOperationalIntents(ctx context.Context, query airspaceprovider.Query) ([]airspaceprovider.OperationalIntent, error) {
-	if p.client == nil {
+	if p.reader == nil {
 		return nil, fmt.Errorf("InterUSS client is not configured")
 	}
 
@@ -153,7 +143,7 @@ func (p *Provider) FindOperationalIntents(ctx context.Context, query airspacepro
 			queryErrors = append(queryErrors, fmt.Errorf("target volume %q: %w", volume.ID, err))
 			continue
 		}
-		found, err := p.client.QueryOperationalIntentReferences(ctx, area)
+		found, err := p.reader.QueryOperationalIntentReferences(ctx, area)
 		if err != nil {
 			queryErrors = append(queryErrors, fmt.Errorf("query target volume %d: %w", index, err))
 			continue
@@ -179,7 +169,7 @@ func (p *Provider) FindOperationalIntents(ctx context.Context, query airspacepro
 	for _, id := range keys {
 		reference := references[id]
 		key := fmt.Sprintf("%s:%d", id, reference.Version)
-		intent, err := p.client.GetOperationalIntent(ctx, reference)
+		intent, err := p.reader.GetOperationalIntent(ctx, reference)
 		if err != nil {
 			queryErrors = append(queryErrors, fmt.Errorf("get operational intent %s: %w", key, err))
 			continue
@@ -194,14 +184,14 @@ func (p *Provider) FindOperationalIntents(ctx context.Context, query airspacepro
 	return records, errors.Join(queryErrors...)
 }
 
-type clientAdapter struct {
-	queryClient           *dss.Client
-	peerClient            *dss.Client
+type scdClient struct {
+	dssClient             *dss.Client
+	peerUSSClient         *dss.Client
 	allowInsecurePeerURLs bool
 }
 
-func (c *clientAdapter) QueryOperationalIntentReferences(ctx context.Context, area scdv1.Volume4D) ([]scdv1.OperationalIntentReference, error) {
-	response, err := c.queryClient.SCDv1.QueryOperationalIntentReferencesWithResponse(
+func (c *scdClient) QueryOperationalIntentReferences(ctx context.Context, area scdv1.Volume4D) ([]scdv1.OperationalIntentReference, error) {
+	response, err := c.dssClient.SCDv1.QueryOperationalIntentReferencesWithResponse(
 		ctx,
 		scdv1.QueryOperationalIntentReferencesJSONRequestBody{AreaOfInterest: &area},
 	)
@@ -221,7 +211,7 @@ func (c *clientAdapter) QueryOperationalIntentReferences(ctx context.Context, ar
 	return response.JSON200.OperationalIntentReferences, nil
 }
 
-func (c *clientAdapter) GetOperationalIntent(ctx context.Context, reference scdv1.OperationalIntentReference) (*scdv1.OperationalIntent, error) {
+func (c *scdClient) GetOperationalIntent(ctx context.Context, reference scdv1.OperationalIntentReference) (*scdv1.OperationalIntent, error) {
 	baseURL, err := reference.UssBaseUrl.AsUssBaseURL()
 	if err != nil {
 		return nil, fmt.Errorf("read peer USS base URL: %w", err)
@@ -229,7 +219,7 @@ func (c *clientAdapter) GetOperationalIntent(ctx context.Context, reference scdv
 	if err := validatePeerURL(baseURL, c.allowInsecurePeerURLs); err != nil {
 		return nil, err
 	}
-	return c.peerClient.GetOperationalIntent(ctx, reference)
+	return c.peerUSSClient.GetOperationalIntent(ctx, reference)
 }
 
 func validatePeerURL(raw string, allowInsecure bool) error {
