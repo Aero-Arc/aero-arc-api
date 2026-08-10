@@ -187,7 +187,7 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 
 	intents := []domain.OperationalIntent{
 		{
-			ID:                  "intent-2041",
+			ID:                  "20410000-0000-4000-8000-000000000000",
 			OperatorID:          "operator-demo",
 			AircraftID:          "aircraft-eagle-7",
 			AuthorizationID:     "auth-permit-1",
@@ -211,7 +211,7 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 			UpdatedAt:           now.Add(-2 * time.Minute),
 		},
 		{
-			ID:                  "intent-2042",
+			ID:                  "20420000-0000-4000-8000-000000000000",
 			OperatorID:          "operator-demo",
 			AircraftID:          "aircraft-falcon-3",
 			AuthorizationID:     "auth-permit-1",
@@ -235,7 +235,7 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 			UpdatedAt:           now.Add(-45 * time.Minute),
 		},
 		{
-			ID:                  "intent-2043",
+			ID:                  "20430000-0000-4000-8000-000000000000",
 			OperatorID:          "operator-demo",
 			AircraftID:          "aircraft-raven-5",
 			AuthorizationID:     "auth-demo-1",
@@ -269,7 +269,7 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 		{
 			ID:            "volume-2041-route",
 			OperatorID:    "operator-demo",
-			IntentID:      "intent-2041",
+			IntentID:      "20410000-0000-4000-8000-000000000000",
 			IntentVersion: 3,
 			Sequence:      1,
 			GeoJSON:       `{"type":"Polygon","coordinates":[[[-97.51545,35.46645],[-97.51400,35.46645],[-97.51400,35.46815],[-97.51545,35.46815],[-97.51545,35.46645]]]}`,
@@ -286,7 +286,7 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 		{
 			ID:            "volume-2042-grid",
 			OperatorID:    "operator-demo",
-			IntentID:      "intent-2042",
+			IntentID:      "20420000-0000-4000-8000-000000000000",
 			IntentVersion: 1,
 			Sequence:      1,
 			GeoJSON:       `{"type":"Polygon","coordinates":[[[-97.42720,35.53150],[-97.42555,35.53150],[-97.42555,35.53310],[-97.42720,35.53310],[-97.42720,35.53150]]]}`,
@@ -303,7 +303,7 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 		{
 			ID:            "volume-2043-demo-route",
 			OperatorID:    "operator-demo",
-			IntentID:      "intent-2043",
+			IntentID:      "20430000-0000-4000-8000-000000000000",
 			IntentVersion: 2,
 			Sequence:      1,
 			GeoJSON:       `{"type":"Polygon","coordinates":[[[-97.49150,35.48700],[-97.48940,35.48700],[-97.48940,35.48920],[-97.49150,35.48920],[-97.49150,35.48700]]]}`,
@@ -325,10 +325,10 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 	}
 
 	preflightChecks := []domain.PreflightCheck{
-		{ID: "preflight-2041-weather", OperatorID: "operator-demo", IntentID: "intent-2041", IntentVersion: 3, AircraftID: "aircraft-eagle-7", Category: domain.PreflightCheckWeather, Source: "weather-feed", Status: domain.PreflightStatusClear, Summary: "Winds 8 kt, visibility 10 sm.", RequirementCode: "WX-001", RuleVersion: "2026.06", ValidUntil: timePtr(now.Add(45 * time.Minute)), EvidenceRecordID: "evidence-preflight-2041", CapturedAt: now.Add(-30 * time.Minute)},
-		{ID: "preflight-2041-airspace", OperatorID: "operator-demo", IntentID: "intent-2041", IntentVersion: 3, AircraftID: "aircraft-eagle-7", Category: domain.PreflightCheckAirspace, Source: "airspace-review", Status: domain.PreflightStatusClear, Summary: "Operating volume remains inside approved corridor.", RequirementCode: "AIR-022", RuleVersion: "2026.06", ValidUntil: timePtr(now.Add(90 * time.Minute)), EvidenceRecordID: "evidence-preflight-2041", CapturedAt: now.Add(-28 * time.Minute)},
-		{ID: "preflight-2042-remote-id", OperatorID: "operator-demo", IntentID: "intent-2042", IntentVersion: 1, AircraftID: "aircraft-falcon-3", Category: domain.PreflightCheckRemoteID, Source: "rid-monitor", Status: domain.PreflightStatusReview, Summary: "Remote ID degraded on previous heartbeat.", RequirementCode: "RID-010", RuleVersion: "2026.06", ValidUntil: timePtr(now.Add(40 * time.Minute)), EvidenceRecordID: "evidence-preflight-2042", CapturedAt: now.Add(-20 * time.Minute)},
-		{ID: "preflight-2043-maintenance", OperatorID: "operator-demo", IntentID: "intent-2043", IntentVersion: 2, AircraftID: "aircraft-raven-5", Category: domain.PreflightCheckMaintenance, Source: "maintenance-control", Status: domain.PreflightStatusBlocked, Summary: "Lighting repair requires qualified maintainer return-to-service sign-off.", RequirementCode: "MX-RTS", RuleVersion: "2026.06", Blocking: true, EvidenceRecordID: "evidence-maint-raven-5", CapturedAt: now.Add(-16 * time.Minute)},
+		{ID: "preflight-2041-weather", OperatorID: "operator-demo", IntentID: "20410000-0000-4000-8000-000000000000", IntentVersion: 3, AircraftID: "aircraft-eagle-7", Category: domain.PreflightCheckWeather, Source: "weather-feed", Status: domain.PreflightStatusClear, Summary: "Winds 8 kt, visibility 10 sm.", RequirementCode: "WX-001", RuleVersion: "2026.06", ValidUntil: timePtr(now.Add(45 * time.Minute)), EvidenceRecordID: "evidence-preflight-2041", CapturedAt: now.Add(-30 * time.Minute)},
+		{ID: "preflight-2041-airspace", OperatorID: "operator-demo", IntentID: "20410000-0000-4000-8000-000000000000", IntentVersion: 3, AircraftID: "aircraft-eagle-7", Category: domain.PreflightCheckAirspace, Source: "airspace-review", Status: domain.PreflightStatusClear, Summary: "Operating volume remains inside approved corridor.", RequirementCode: "AIR-022", RuleVersion: "2026.06", ValidUntil: timePtr(now.Add(90 * time.Minute)), EvidenceRecordID: "evidence-preflight-2041", CapturedAt: now.Add(-28 * time.Minute)},
+		{ID: "preflight-2042-remote-id", OperatorID: "operator-demo", IntentID: "20420000-0000-4000-8000-000000000000", IntentVersion: 1, AircraftID: "aircraft-falcon-3", Category: domain.PreflightCheckRemoteID, Source: "rid-monitor", Status: domain.PreflightStatusReview, Summary: "Remote ID degraded on previous heartbeat.", RequirementCode: "RID-010", RuleVersion: "2026.06", ValidUntil: timePtr(now.Add(40 * time.Minute)), EvidenceRecordID: "evidence-preflight-2042", CapturedAt: now.Add(-20 * time.Minute)},
+		{ID: "preflight-2043-maintenance", OperatorID: "operator-demo", IntentID: "20430000-0000-4000-8000-000000000000", IntentVersion: 2, AircraftID: "aircraft-raven-5", Category: domain.PreflightCheckMaintenance, Source: "maintenance-control", Status: domain.PreflightStatusBlocked, Summary: "Lighting repair requires qualified maintainer return-to-service sign-off.", RequirementCode: "MX-RTS", RuleVersion: "2026.06", Blocking: true, EvidenceRecordID: "evidence-maint-raven-5", CapturedAt: now.Add(-16 * time.Minute)},
 	}
 	for _, item := range preflightChecks {
 		if err := durableStore.RecordPreflightCheck(ctx, item); err != nil {
@@ -337,8 +337,8 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 	}
 
 	maintenanceEvents := []domain.MaintenanceEvent{
-		{ID: "mx-falcon-battery", OperatorID: "operator-demo", AircraftID: "aircraft-falcon-3", IntentID: "intent-2042", EventType: "battery_health", Severity: domain.SeverityWarning, Status: domain.MaintenanceStatusDueSoon, Title: "Battery pack B-104 below preferred SOH", Notes: "Pack is usable but should be swapped before extended sorties.", Owner: "M. Owens", DueAt: timePtr(now.Add(24 * time.Hour)), OpenedAt: now.AddDate(0, 0, -2)},
-		{ID: "mx-raven-lighting", OperatorID: "operator-demo", AircraftID: "aircraft-raven-5", IntentID: "intent-2043", EventType: "lighting", Severity: domain.SeverityCritical, Status: domain.MaintenanceStatusOpen, Title: "Anti-collision lighting repair RTS", Notes: "Intermittent anti-collision lighting during preflight test.", Owner: "Unassigned", DueAt: timePtr(now.Add(-6 * time.Hour)), CorrectiveAction: "Replaced lighting controller; awaiting operational check attachment.", OpenedAt: now.AddDate(0, 0, -3)},
+		{ID: "mx-falcon-battery", OperatorID: "operator-demo", AircraftID: "aircraft-falcon-3", IntentID: "20420000-0000-4000-8000-000000000000", EventType: "battery_health", Severity: domain.SeverityWarning, Status: domain.MaintenanceStatusDueSoon, Title: "Battery pack B-104 below preferred SOH", Notes: "Pack is usable but should be swapped before extended sorties.", Owner: "M. Owens", DueAt: timePtr(now.Add(24 * time.Hour)), OpenedAt: now.AddDate(0, 0, -2)},
+		{ID: "mx-raven-lighting", OperatorID: "operator-demo", AircraftID: "aircraft-raven-5", IntentID: "20430000-0000-4000-8000-000000000000", EventType: "lighting", Severity: domain.SeverityCritical, Status: domain.MaintenanceStatusOpen, Title: "Anti-collision lighting repair RTS", Notes: "Intermittent anti-collision lighting during preflight test.", Owner: "Unassigned", DueAt: timePtr(now.Add(-6 * time.Hour)), CorrectiveAction: "Replaced lighting controller; awaiting operational check attachment.", OpenedAt: now.AddDate(0, 0, -3)},
 	}
 	for _, item := range maintenanceEvents {
 		if err := durableStore.RecordMaintenanceEvent(ctx, item); err != nil {
@@ -346,15 +346,15 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 		}
 	}
 
-	flight := domain.FlightRecord{ID: "flight-2041-a", OperatorID: "operator-demo", AircraftID: "aircraft-eagle-7", IntentID: "intent-2041", IntentVersion: 3, StartedAt: now.Add(-18 * time.Minute), Origin: "West Yard", Destination: "Pad B", Status: domain.FlightStatusActive, MissionType: "pipeline_patrol", TelemetryURI: "memory://flight-2041-a", SampleCount: 5}
+	flight := domain.FlightRecord{ID: "flight-2041-a", OperatorID: "operator-demo", AircraftID: "aircraft-eagle-7", IntentID: "20410000-0000-4000-8000-000000000000", IntentVersion: 3, StartedAt: now.Add(-18 * time.Minute), Origin: "West Yard", Destination: "Pad B", Status: domain.FlightStatusActive, MissionType: "pipeline_patrol", TelemetryURI: "memory://flight-2041-a", SampleCount: 5}
 	if err := durableStore.CreateFlightRecord(ctx, flight); err != nil {
 		return fmt.Errorf("seed flight record %s: %w", flight.ID, err)
 	}
 
 	summaries := []domain.ConformanceSummary{
-		{ID: "conf-2041", OperatorID: "operator-demo", IntentID: "intent-2041", IntentVersion: 3, FlightID: "flight-2041-a", AircraftID: "aircraft-eagle-7", Status: domain.ConformanceStatusConforming, Score: float64Ptr(0.987), AlertCount: 1, ReportabilityStatus: domain.ReportabilityStatusNo, UpdatedAt: now.Add(-90 * time.Second)},
-		{ID: "conf-2042", OperatorID: "operator-demo", IntentID: "intent-2042", IntentVersion: 1, AircraftID: "aircraft-falcon-3", Status: domain.ConformanceStatusUnknown, AlertCount: 0, ReportabilityStatus: domain.ReportabilityStatusNo, UpdatedAt: now.Add(-45 * time.Minute)},
-		{ID: "conf-2043", OperatorID: "operator-demo", IntentID: "intent-2043", IntentVersion: 2, AircraftID: "aircraft-raven-5", Status: domain.ConformanceStatusContingent, Score: float64Ptr(0), AlertCount: 0, ReportabilityStatus: domain.ReportabilityStatusReview, UpdatedAt: now.Add(-1 * time.Hour)},
+		{ID: "conf-2041", OperatorID: "operator-demo", IntentID: "20410000-0000-4000-8000-000000000000", IntentVersion: 3, FlightID: "flight-2041-a", AircraftID: "aircraft-eagle-7", Status: domain.ConformanceStatusConforming, Score: float64Ptr(0.987), AlertCount: 1, ReportabilityStatus: domain.ReportabilityStatusNo, UpdatedAt: now.Add(-90 * time.Second)},
+		{ID: "conf-2042", OperatorID: "operator-demo", IntentID: "20420000-0000-4000-8000-000000000000", IntentVersion: 1, AircraftID: "aircraft-falcon-3", Status: domain.ConformanceStatusUnknown, AlertCount: 0, ReportabilityStatus: domain.ReportabilityStatusNo, UpdatedAt: now.Add(-45 * time.Minute)},
+		{ID: "conf-2043", OperatorID: "operator-demo", IntentID: "20430000-0000-4000-8000-000000000000", IntentVersion: 2, AircraftID: "aircraft-raven-5", Status: domain.ConformanceStatusContingent, Score: float64Ptr(0), AlertCount: 0, ReportabilityStatus: domain.ReportabilityStatusReview, UpdatedAt: now.Add(-1 * time.Hour)},
 	}
 	for _, item := range summaries {
 		if err := durableStore.UpsertConformanceSummary(ctx, item); err != nil {
@@ -363,8 +363,8 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 	}
 
 	events := []domain.ConformanceEvent{
-		{ID: "conf-event-2041-lateral", OperatorID: "operator-demo", IntentID: "intent-2041", IntentVersion: 3, FlightID: "flight-2041-a", AircraftID: "aircraft-eagle-7", Severity: domain.SeverityAdvisory, EventCode: domain.ConformanceEventIntentExit, ExpectedVolumeID: "volume-2041-route", Message: "Lateral drift 18 ft beyond advisory band; returned inside corridor.", Latitude: float64Ptr(35.46712), Longitude: float64Ptr(-97.51481), AltitudeM: float64Ptr(82), AltitudeRef: domain.AltitudeReferenceAGL, ObservedValue: float64Ptr(18), ThresholdValue: float64Ptr(15), DeviationMeters: float64Ptr(5.5), DeviationSeconds: float64Ptr(12), OccurredAt: now.Add(-9 * time.Minute)},
-		{ID: "conf-event-2037-link", OperatorID: "operator-demo", IntentID: "intent-2037", FlightID: "flight-2037-a", AircraftID: "aircraft-falcon-3", Severity: domain.SeverityWarning, EventCode: domain.ConformanceEventTelemetryLoss, Message: "Lost telemetry link for 11 seconds on previous flight.", DeviationSeconds: float64Ptr(11), OccurredAt: now.Add(-28 * time.Hour)},
+		{ID: "conf-event-2041-lateral", OperatorID: "operator-demo", IntentID: "20410000-0000-4000-8000-000000000000", IntentVersion: 3, FlightID: "flight-2041-a", AircraftID: "aircraft-eagle-7", Severity: domain.SeverityAdvisory, EventCode: domain.ConformanceEventIntentExit, ExpectedVolumeID: "volume-2041-route", Message: "Lateral drift 18 ft beyond advisory band; returned inside corridor.", Latitude: float64Ptr(35.46712), Longitude: float64Ptr(-97.51481), AltitudeM: float64Ptr(82), AltitudeRef: domain.AltitudeReferenceAGL, ObservedValue: float64Ptr(18), ThresholdValue: float64Ptr(15), DeviationMeters: float64Ptr(5.5), DeviationSeconds: float64Ptr(12), OccurredAt: now.Add(-9 * time.Minute)},
+		{ID: "conf-event-2037-link", OperatorID: "operator-demo", IntentID: "20370000-0000-4000-8000-000000000000", FlightID: "flight-2037-a", AircraftID: "aircraft-falcon-3", Severity: domain.SeverityWarning, EventCode: domain.ConformanceEventTelemetryLoss, Message: "Lost telemetry link for 11 seconds on previous flight.", DeviationSeconds: float64Ptr(11), OccurredAt: now.Add(-28 * time.Hour)},
 	}
 	for _, item := range events {
 		if err := durableStore.RecordConformanceEvent(ctx, item); err != nil {
@@ -373,10 +373,10 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 	}
 
 	evidence := []domain.EvidenceRecord{
-		{ID: "evidence-flight-2041", OperatorID: "operator-demo", Type: domain.EvidenceRecordFlight, IntentID: "intent-2041", IntentVersion: 3, FlightID: "flight-2041-a", AircraftID: "aircraft-eagle-7", Status: domain.EvidenceStatusComplete, Title: "Flight record AA-OP-2041", Summary: "Active flight record with replay manifest.", ObjectURI: "memory://evidence/flight-2041", Hash: "77e3f0demo", HashAlgorithm: "sha256", SchemaVersion: "2026.06", GeneratedBy: "aero-arc-api", SourceSystem: "flight-recorder", RetentionUntil: timePtr(now.AddDate(1, 0, 0)), CreatedAt: now.Add(-14 * time.Minute), UpdatedAt: now.Add(-2 * time.Minute)},
-		{ID: "evidence-preflight-2041", OperatorID: "operator-demo", Type: domain.EvidenceRecordPreflight, IntentID: "intent-2041", IntentVersion: 3, AircraftID: "aircraft-eagle-7", Status: domain.EvidenceStatusComplete, Title: "Preflight package AA-OP-2041", Summary: "Weather, airspace, aircraft, and personnel checks.", ObjectURI: "memory://evidence/preflight-2041", Hash: "4cc6d1demo", HashAlgorithm: "sha256", SchemaVersion: "2026.06", GeneratedBy: "aero-arc-api", SourceSystem: "preflight", RetentionUntil: timePtr(now.AddDate(1, 0, 0)), CreatedAt: now.Add(-35 * time.Minute), UpdatedAt: now.Add(-28 * time.Minute)},
-		{ID: "evidence-maint-raven-5", OperatorID: "operator-demo", Type: domain.EvidenceRecordMaintenance, IntentID: "intent-2043", IntentVersion: 2, AircraftID: "aircraft-raven-5", Status: domain.EvidenceStatusOpen, Title: "RAVEN-5 maintenance release", Summary: "Return-to-service evidence pending maintainer sign-off.", GeneratedBy: "maintenance-control", SourceSystem: "maintenance", CreatedAt: now.Add(-6 * time.Hour), UpdatedAt: now.Add(-30 * time.Minute)},
-		{ID: "evidence-reportability-2037", OperatorID: "operator-demo", Type: domain.EvidenceRecordReportability, IntentID: "intent-2037", FlightID: "flight-2037-a", AircraftID: "aircraft-falcon-3", Status: domain.EvidenceStatusReview, Title: "Lost link reportability review", Summary: "Prior flight telemetry loss requires supervisor review.", GeneratedBy: "conformance-monitor", SourceSystem: "reportability", CreatedAt: now.Add(-28 * time.Hour), UpdatedAt: now.Add(-5 * time.Hour)},
+		{ID: "evidence-flight-2041", OperatorID: "operator-demo", Type: domain.EvidenceRecordFlight, IntentID: "20410000-0000-4000-8000-000000000000", IntentVersion: 3, FlightID: "flight-2041-a", AircraftID: "aircraft-eagle-7", Status: domain.EvidenceStatusComplete, Title: "Flight record AA-OP-2041", Summary: "Active flight record with replay manifest.", ObjectURI: "memory://evidence/flight-2041", Hash: "77e3f0demo", HashAlgorithm: "sha256", SchemaVersion: "2026.06", GeneratedBy: "aero-arc-api", SourceSystem: "flight-recorder", RetentionUntil: timePtr(now.AddDate(1, 0, 0)), CreatedAt: now.Add(-14 * time.Minute), UpdatedAt: now.Add(-2 * time.Minute)},
+		{ID: "evidence-preflight-2041", OperatorID: "operator-demo", Type: domain.EvidenceRecordPreflight, IntentID: "20410000-0000-4000-8000-000000000000", IntentVersion: 3, AircraftID: "aircraft-eagle-7", Status: domain.EvidenceStatusComplete, Title: "Preflight package AA-OP-2041", Summary: "Weather, airspace, aircraft, and personnel checks.", ObjectURI: "memory://evidence/preflight-2041", Hash: "4cc6d1demo", HashAlgorithm: "sha256", SchemaVersion: "2026.06", GeneratedBy: "aero-arc-api", SourceSystem: "preflight", RetentionUntil: timePtr(now.AddDate(1, 0, 0)), CreatedAt: now.Add(-35 * time.Minute), UpdatedAt: now.Add(-28 * time.Minute)},
+		{ID: "evidence-maint-raven-5", OperatorID: "operator-demo", Type: domain.EvidenceRecordMaintenance, IntentID: "20430000-0000-4000-8000-000000000000", IntentVersion: 2, AircraftID: "aircraft-raven-5", Status: domain.EvidenceStatusOpen, Title: "RAVEN-5 maintenance release", Summary: "Return-to-service evidence pending maintainer sign-off.", GeneratedBy: "maintenance-control", SourceSystem: "maintenance", CreatedAt: now.Add(-6 * time.Hour), UpdatedAt: now.Add(-30 * time.Minute)},
+		{ID: "evidence-reportability-2037", OperatorID: "operator-demo", Type: domain.EvidenceRecordReportability, IntentID: "20370000-0000-4000-8000-000000000000", FlightID: "flight-2037-a", AircraftID: "aircraft-falcon-3", Status: domain.EvidenceStatusReview, Title: "Lost link reportability review", Summary: "Prior flight telemetry loss requires supervisor review.", GeneratedBy: "conformance-monitor", SourceSystem: "reportability", CreatedAt: now.Add(-28 * time.Hour), UpdatedAt: now.Add(-5 * time.Hour)},
 	}
 	for _, item := range evidence {
 		if err := durableStore.RecordEvidence(ctx, item); err != nil {
@@ -385,8 +385,8 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 	}
 
 	reviews := []domain.ReportabilityReview{
-		{ID: "review-2037-link", OperatorID: "operator-demo", IntentID: "intent-2037", FlightID: "flight-2037-a", AircraftID: "aircraft-falcon-3", Trigger: "Lost telemetry link for 11 seconds", Status: domain.ReportabilityStatusReview, Decision: "Supervisor review pending.", EvidenceRecordID: "evidence-reportability-2037", CreatedAt: now.Add(-28 * time.Hour)},
-		{ID: "review-2041-lateral", OperatorID: "operator-demo", IntentID: "intent-2041", IntentVersion: 3, FlightID: "flight-2041-a", AircraftID: "aircraft-eagle-7", Trigger: "Brief lateral advisory band exit", Status: domain.ReportabilityStatusNo, Decision: "No report required; remained inside approved operating volume.", EvidenceRecordID: "evidence-flight-2041", CreatedAt: now.Add(-8 * time.Minute), ResolvedAt: timePtr(now.Add(-4 * time.Minute))},
+		{ID: "review-2037-link", OperatorID: "operator-demo", IntentID: "20370000-0000-4000-8000-000000000000", FlightID: "flight-2037-a", AircraftID: "aircraft-falcon-3", Trigger: "Lost telemetry link for 11 seconds", Status: domain.ReportabilityStatusReview, Decision: "Supervisor review pending.", EvidenceRecordID: "evidence-reportability-2037", CreatedAt: now.Add(-28 * time.Hour)},
+		{ID: "review-2041-lateral", OperatorID: "operator-demo", IntentID: "20410000-0000-4000-8000-000000000000", IntentVersion: 3, FlightID: "flight-2041-a", AircraftID: "aircraft-eagle-7", Trigger: "Brief lateral advisory band exit", Status: domain.ReportabilityStatusNo, Decision: "No report required; remained inside approved operating volume.", EvidenceRecordID: "evidence-flight-2041", CreatedAt: now.Add(-8 * time.Minute), ResolvedAt: timePtr(now.Add(-4 * time.Minute))},
 	}
 	for _, item := range reviews {
 		if err := durableStore.RecordReportabilityReview(ctx, item); err != nil {
@@ -400,7 +400,7 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 			ID:            fmt.Sprintf("sample-2041-%d", i+1),
 			OperatorID:    "operator-demo",
 			AircraftID:    "aircraft-eagle-7",
-			IntentID:      "intent-2041",
+			IntentID:      "20410000-0000-4000-8000-000000000000",
 			IntentVersion: 3,
 			FlightID:      "flight-2041-a",
 			RecordedAt:    sampleTime,
@@ -417,7 +417,7 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 	if err := telemetry.AddSample(ctx, domain.TelemetrySample{ID: "sample-falcon-latest", OperatorID: "operator-demo", AircraftID: "aircraft-falcon-3", RecordedAt: now.Add(-12 * time.Minute), Latitude: 35.53210, Longitude: -97.42640, AltitudeM: 0, VelocityMPS: 0, HeadingDeg: 0, BatteryPct: float64Ptr(74)}); err != nil {
 		return fmt.Errorf("seed falcon telemetry: %w", err)
 	}
-	if err := telemetry.AddSample(ctx, domain.TelemetrySample{ID: "sample-raven-last-known", OperatorID: "operator-demo", AircraftID: "aircraft-raven-5", IntentID: "intent-2043", IntentVersion: 2, RecordedAt: now.Add(-38 * time.Minute), Latitude: 35.48820, Longitude: -97.49040, AltitudeM: 0, VelocityMPS: 0, HeadingDeg: 0, BatteryPct: float64Ptr(42)}); err != nil {
+	if err := telemetry.AddSample(ctx, domain.TelemetrySample{ID: "sample-raven-last-known", OperatorID: "operator-demo", AircraftID: "aircraft-raven-5", IntentID: "20430000-0000-4000-8000-000000000000", IntentVersion: 2, RecordedAt: now.Add(-38 * time.Minute), Latitude: 35.48820, Longitude: -97.49040, AltitudeM: 0, VelocityMPS: 0, HeadingDeg: 0, BatteryPct: float64Ptr(42)}); err != nil {
 		return fmt.Errorf("seed raven telemetry: %w", err)
 	}
 	if err := telemetry.AddSample(ctx, domain.TelemetrySample{ID: "sample-hawk-ready", OperatorID: "operator-demo", AircraftID: "aircraft-hawk-2", RecordedAt: now.Add(-2 * time.Minute), Latitude: 35.50640, Longitude: -97.47215, AltitudeM: 0, VelocityMPS: 0, HeadingDeg: 180, BatteryPct: float64Ptr(96)}); err != nil {
@@ -427,7 +427,7 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 	if err := replay.PutReplayManifest(ctx, domain.ReplayManifest{
 		OperatorID:    "operator-demo",
 		FlightID:      "flight-2041-a",
-		IntentID:      "intent-2041",
+		IntentID:      "20410000-0000-4000-8000-000000000000",
 		IntentVersion: 3,
 		ObjectURI:     "memory://replay/flight-2041-a",
 		ChunkURIs:     []string{"memory://replay/flight-2041-a/chunk-1.jsonl"},

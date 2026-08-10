@@ -25,6 +25,16 @@ func TestCreateIntentRejectsInvalidPlannedWindow(t *testing.T) {
 	}
 }
 
+func TestCreateIntentRejectsNonUUIDIdentifier(t *testing.T) {
+	now := fixedWorkflowTime()
+	request := workflowIntentRequest(now)
+	request.ID = "human-readable-intent"
+	_, err := NewIntentServiceWithClock(durablememory.NewStore(), fixedClock(now), nil).CreateIntent(context.Background(), request)
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("CreateIntent error = %v, want ErrValidation", err)
+	}
+}
+
 func TestIntentLifecycleHappyPath(t *testing.T) {
 	ctx := context.Background()
 	store := durablememory.NewStore()
@@ -755,12 +765,12 @@ func TestConformanceTelemetryHonorsSampleIntentID(t *testing.T) {
 	telemetry := telemetrymemory.NewStore()
 	now := fixedWorkflowTime()
 	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
-	createActiveIntentWithVolume(t, ctx, store, now, "intent-a", "volume-a", squareGeoJSON(), now)
-	createActiveIntentWithVolume(t, ctx, store, now, "intent-b", "volume-b", eastSquareGeoJSON(), now.Add(10*time.Minute))
+	createActiveIntentWithVolume(t, ctx, store, now, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "volume-a", squareGeoJSON(), now)
+	createActiveIntentWithVolume(t, ctx, store, now, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "volume-b", eastSquareGeoJSON(), now.Add(10*time.Minute))
 
 	evaluation, err := NewConformanceServiceWithClock(store, telemetry, fixedClock(now)).EvaluateTelemetry(ctx, domain.TelemetrySample{
 		ID:         "sample-intent-b",
-		IntentID:   "intent-b",
+		IntentID:   "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
 		AircraftID: "aircraft-1",
 		RecordedAt: now.Add(30 * time.Minute),
 		Latitude:   35.5,
@@ -770,7 +780,7 @@ func TestConformanceTelemetryHonorsSampleIntentID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvaluateTelemetry returned error: %v", err)
 	}
-	if evaluation.Intent.ID != "intent-b" {
+	if evaluation.Intent.ID != "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" {
 		t.Fatalf("evaluated intent = %q, want intent-b", evaluation.Intent.ID)
 	}
 	if evaluation.Summary.Status != domain.ConformanceStatusConforming {
@@ -784,11 +794,11 @@ func TestConformanceTelemetryIntentIDWrongAircraftFails(t *testing.T) {
 	telemetry := telemetrymemory.NewStore()
 	now := fixedWorkflowTime()
 	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
-	createActiveIntentWithVolume(t, ctx, store, now, "intent-1", "volume-1", squareGeoJSON(), now)
+	createActiveIntentWithVolume(t, ctx, store, now, "11111111-1111-4111-8111-111111111111", "volume-1", squareGeoJSON(), now)
 
 	_, err := NewConformanceServiceWithClock(store, telemetry, fixedClock(now)).EvaluateTelemetry(ctx, domain.TelemetrySample{
 		ID:         "sample-wrong-aircraft",
-		IntentID:   "intent-1",
+		IntentID:   "11111111-1111-4111-8111-111111111111",
 		AircraftID: "aircraft-2",
 		RecordedAt: now.Add(30 * time.Minute),
 		Latitude:   35.5,
@@ -1333,7 +1343,7 @@ func createActiveIntentWithVolume(t *testing.T, ctx context.Context, store durab
 
 func workflowIntentRequest(now time.Time) CreateIntentRequest {
 	return CreateIntentRequest{
-		ID:                  "intent-1",
+		ID:                  "11111111-1111-4111-8111-111111111111",
 		OperatorID:          "operator-1",
 		AircraftID:          "aircraft-1",
 		Name:                "Demo intent",

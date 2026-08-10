@@ -69,7 +69,7 @@ func seedSubmittedIntentWithVolume(t *testing.T, ctx context.Context, store dura
 	t.Helper()
 	intents := NewIntentServiceWithClock(store, fixedClock(now), nil)
 	intent, err := intents.CreateIntent(ctx, CreateIntentRequest{
-		ID: "intent-1", OperatorID: "operator-1", AircraftID: "aircraft-1",
+		ID: "11111111-1111-4111-8111-111111111111", OperatorID: "operator-1", AircraftID: "aircraft-1",
 		Name: "Demo intent", Summary: "deconfliction test intent",
 		AuthorizationPath: domain.AuthorizationPathDemo, PopulationCategory: domain.PopulationCategoryOne,
 		ConformanceRequired: true, PlannedStartAt: now, PlannedEndAt: now.Add(time.Hour),
@@ -97,8 +97,8 @@ func TestDeconflictionClearWhenNoLocalVolumeOverlap(t *testing.T) {
 	store := durablememory.NewStore()
 	now := fixedWorkflowTime()
 	seedDeconflictionAircraft(t, ctx, store, now)
-	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
-	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", eastSquareGeoJSON(), 10, 120, now)
+	target := createDraftIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000001", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
+	createAcceptedIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000002", "aircraft-2", "volume-peer", eastSquareGeoJSON(), 10, 120, now)
 
 	result, err := newTestDeconflictionService(t, store, now).CheckIntent(ctx, target.ID)
 	if err != nil {
@@ -117,8 +117,8 @@ func TestDeconflictionPotentialConflictWhenBBoxTimeAndAltitudeOverlap(t *testing
 	store := durablememory.NewStore()
 	now := fixedWorkflowTime()
 	seedDeconflictionAircraft(t, ctx, store, now)
-	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
-	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", squareGeoJSON(), 20, 100, now)
+	target := createDraftIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000001", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
+	createAcceptedIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000002", "aircraft-2", "volume-peer", squareGeoJSON(), 20, 100, now)
 	deconfliction := newTestDeconflictionService(t, store, now)
 
 	first, err := deconfliction.CheckIntent(ctx, target.ID)
@@ -142,7 +142,7 @@ func TestDeconflictionPotentialConflictWhenBBoxTimeAndAltitudeOverlap(t *testing
 	if stored[0].Status != domain.ConflictFindingStatusPotentialConflict || !stored[0].Blocking {
 		t.Fatalf("stored finding = %#v, want blocking potential conflict", stored[0])
 	}
-	if stored[0].ConflictingIntentID != "intent-peer" || stored[0].ConflictingVolumeID != "volume-peer" {
+	if stored[0].ConflictingIntentID != "10000000-0000-4000-8000-000000000002" || stored[0].ConflictingVolumeID != "volume-peer" {
 		t.Fatalf("stored finding conflict target = %#v, want peer/volume IDs", stored[0])
 	}
 	if stored[0].ConflictingBounds == nil {
@@ -166,8 +166,8 @@ func TestDeconflictionReplacesStaleFindingsAfterRemediation(t *testing.T) {
 	store := durablememory.NewStore()
 	now := fixedWorkflowTime()
 	seedDeconflictionAircraft(t, ctx, store, now)
-	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
-	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", squareGeoJSON(), 20, 100, now)
+	target := createDraftIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000001", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
+	createAcceptedIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000002", "aircraft-2", "volume-peer", squareGeoJSON(), 20, 100, now)
 	deconfliction := newTestDeconflictionService(t, store, now)
 
 	first, err := deconfliction.CheckIntent(ctx, target.ID)
@@ -180,7 +180,7 @@ func TestDeconflictionReplacesStaleFindingsAfterRemediation(t *testing.T) {
 	must(t, store.RecordOperationalVolume(ctx, domain.OperationalVolume{
 		ID:            "volume-peer",
 		OperatorID:    "operator-1",
-		IntentID:      "intent-peer",
+		IntentID:      "10000000-0000-4000-8000-000000000002",
 		IntentVersion: 1,
 		Sequence:      1,
 		GeoJSON:       eastSquareGeoJSON(),
@@ -215,8 +215,8 @@ func TestDeconflictionClearWhenAltitudeSeparated(t *testing.T) {
 	store := durablememory.NewStore()
 	now := fixedWorkflowTime()
 	seedDeconflictionAircraft(t, ctx, store, now)
-	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 10, 80)
-	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", squareGeoJSON(), 120, 200, now)
+	target := createDraftIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000001", "aircraft-1", "volume-target", squareGeoJSON(), 10, 80)
+	createAcceptedIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000002", "aircraft-2", "volume-peer", squareGeoJSON(), 120, 200, now)
 
 	result, err := newTestDeconflictionService(t, store, now).CheckIntent(ctx, target.ID)
 	if err != nil {
@@ -232,7 +232,7 @@ func TestDeconflictionIgnoresSelfAndNonCoordinatedStatuses(t *testing.T) {
 	store := durablememory.NewStore()
 	now := fixedWorkflowTime()
 	seedDeconflictionAircraft(t, ctx, store, now)
-	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
+	target := createDraftIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000001", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
 	must(t, store.RecordOperationalVolume(ctx, domain.OperationalVolume{
 		ID:            "volume-target-extra",
 		OperatorID:    "operator-1",
@@ -253,13 +253,13 @@ func TestDeconflictionIgnoresSelfAndNonCoordinatedStatuses(t *testing.T) {
 		id     string
 		status domain.IntentStatus
 	}{
-		{id: "intent-draft", status: domain.IntentStatusDraft},
-		{id: "intent-submitted", status: domain.IntentStatusSubmitted},
-		{id: "intent-review", status: domain.IntentStatusReview},
-		{id: "intent-rejected", status: domain.IntentStatusRejected},
-		{id: "intent-canceled", status: domain.IntentStatusCanceled},
-		{id: "intent-complete", status: domain.IntentStatusComplete},
-		{id: "intent-superseded", status: domain.IntentStatusSuperseded},
+		{id: "10000000-0000-4000-8000-000000000003", status: domain.IntentStatusDraft},
+		{id: "10000000-0000-4000-8000-000000000004", status: domain.IntentStatusSubmitted},
+		{id: "10000000-0000-4000-8000-000000000005", status: domain.IntentStatusReview},
+		{id: "10000000-0000-4000-8000-000000000006", status: domain.IntentStatusRejected},
+		{id: "10000000-0000-4000-8000-000000000007", status: domain.IntentStatusCanceled},
+		{id: "10000000-0000-4000-8000-000000000008", status: domain.IntentStatusComplete},
+		{id: "10000000-0000-4000-8000-000000000009", status: domain.IntentStatusSuperseded},
 	} {
 		intent := createAcceptedIntentWithVolume(t, ctx, store, now, tc.id, "aircraft-2", "volume-"+tc.id, squareGeoJSON(), 10, 120, now)
 		intent.Status = tc.status
@@ -280,8 +280,8 @@ func TestDeconflictionBackToBackTimeWindowsDoNotOverlap(t *testing.T) {
 	store := durablememory.NewStore()
 	now := fixedWorkflowTime()
 	seedDeconflictionAircraft(t, ctx, store, now)
-	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
-	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", squareGeoJSON(), 10, 120, now.Add(time.Hour))
+	target := createDraftIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000001", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
+	createAcceptedIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000002", "aircraft-2", "volume-peer", squareGeoJSON(), 10, 120, now.Add(time.Hour))
 
 	result, err := newTestDeconflictionService(t, store, now).CheckIntent(ctx, target.ID)
 	if err != nil {
@@ -297,8 +297,8 @@ func TestDeconflictionOverlappingTimeWindowsProducePotentialConflict(t *testing.
 	store := durablememory.NewStore()
 	now := fixedWorkflowTime()
 	seedDeconflictionAircraft(t, ctx, store, now)
-	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
-	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", squareGeoJSON(), 10, 120, now.Add(59*time.Minute))
+	target := createDraftIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000001", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
+	createAcceptedIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000002", "aircraft-2", "volume-peer", squareGeoJSON(), 10, 120, now.Add(59*time.Minute))
 
 	result, err := newTestDeconflictionService(t, store, now).CheckIntent(ctx, target.ID)
 	if err != nil {
@@ -314,7 +314,7 @@ func TestDeconflictionMissingAltitudeFailsClosed(t *testing.T) {
 	store := durablememory.NewStore()
 	now := fixedWorkflowTime()
 	seedDeconflictionAircraft(t, ctx, store, now)
-	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 0, 0)
+	target := createDraftIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000001", "aircraft-1", "volume-target", squareGeoJSON(), 0, 0)
 
 	result, err := newTestDeconflictionService(t, store, now).CheckIntent(ctx, target.ID)
 	if err != nil {
@@ -330,8 +330,8 @@ func TestDeconflictionPeerMissingAltitudeFailsClosed(t *testing.T) {
 	store := durablememory.NewStore()
 	now := fixedWorkflowTime()
 	seedDeconflictionAircraft(t, ctx, store, now)
-	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
-	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", squareGeoJSON(), 0, 0, now)
+	target := createDraftIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000001", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
+	createAcceptedIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000002", "aircraft-2", "volume-peer", squareGeoJSON(), 0, 0, now)
 
 	result, err := newTestDeconflictionService(t, store, now).CheckIntent(ctx, target.ID)
 	if err != nil {
@@ -347,12 +347,12 @@ func TestDeconflictionAltitudeReferenceMismatchFailsClosed(t *testing.T) {
 	store := durablememory.NewStore()
 	now := fixedWorkflowTime()
 	seedDeconflictionAircraft(t, ctx, store, now)
-	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
-	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", squareGeoJSON(), 10, 120, now)
+	target := createDraftIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000001", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
+	createAcceptedIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000002", "aircraft-2", "volume-peer", squareGeoJSON(), 10, 120, now)
 	must(t, store.RecordOperationalVolume(ctx, domain.OperationalVolume{
 		ID:            "volume-peer",
 		OperatorID:    "operator-1",
-		IntentID:      "intent-peer",
+		IntentID:      "10000000-0000-4000-8000-000000000002",
 		IntentVersion: 1,
 		Sequence:      1,
 		GeoJSON:       squareGeoJSON(),
@@ -390,7 +390,7 @@ func TestIntentServiceActivateRunsDeconflictionChecker(t *testing.T) {
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}))
-	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", squareGeoJSON(), 10, 120, now)
+	createAcceptedIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000002", "aircraft-2", "volume-peer", squareGeoJSON(), 10, 120, now)
 	if evaluation, err := NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID); err != nil {
 		t.Fatalf("EvaluateIntent returned error: %v", err)
 	} else if evaluation.Blocked {
@@ -420,8 +420,8 @@ func TestDeconflictionFindingsAreScopedByIntentVersion(t *testing.T) {
 	store := durablememory.NewStore()
 	now := fixedWorkflowTime()
 	seedDeconflictionAircraft(t, ctx, store, now)
-	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
-	createAcceptedIntentWithVolume(t, ctx, store, now, "intent-peer", "aircraft-2", "volume-peer", squareGeoJSON(), 10, 120, now)
+	target := createDraftIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000001", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
+	createAcceptedIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000002", "aircraft-2", "volume-peer", squareGeoJSON(), 10, 120, now)
 	deconfliction := newTestDeconflictionService(t, store, now)
 
 	first, err := deconfliction.CheckIntent(ctx, target.ID)
@@ -485,7 +485,7 @@ func TestDeconflictionIndeterminateForMalformedTargetGeometry(t *testing.T) {
 	store := durablememory.NewStore()
 	now := fixedWorkflowTime()
 	seedDeconflictionAircraft(t, ctx, store, now)
-	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", `{bad-json`, 10, 120)
+	target := createDraftIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000001", "aircraft-1", "volume-target", `{bad-json`, 10, 120)
 
 	result, err := newTestDeconflictionService(t, store, now).CheckIntent(ctx, target.ID)
 	if err != nil {
@@ -504,7 +504,7 @@ func TestDeconflictionIndeterminateForUnclosedPolygon(t *testing.T) {
 	store := durablememory.NewStore()
 	now := fixedWorkflowTime()
 	seedDeconflictionAircraft(t, ctx, store, now)
-	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", `{"type":"Polygon","coordinates":[[[-98,35],[-97,35],[-97,36],[-98,36]]]}`, 10, 120)
+	target := createDraftIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000001", "aircraft-1", "volume-target", `{"type":"Polygon","coordinates":[[[-98,35],[-97,35],[-97,36],[-98,36]]]}`, 10, 120)
 
 	result, err := newTestDeconflictionService(t, store, now).CheckIntent(ctx, target.ID)
 	if err != nil {
@@ -520,8 +520,8 @@ func TestDeconflictionPotentialConflictForGeometryURIOnlyPeer(t *testing.T) {
 	store := durablememory.NewStore()
 	now := fixedWorkflowTime()
 	seedDeconflictionAircraft(t, ctx, store, now)
-	target := createDraftIntentWithVolume(t, ctx, store, now, "intent-target", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
-	createAcceptedIntentWithVolumeRequest(t, ctx, store, now, "intent-peer", "aircraft-2", AddOperationalVolumeRequest{
+	target := createDraftIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000001", "aircraft-1", "volume-target", squareGeoJSON(), 10, 120)
+	createAcceptedIntentWithVolumeRequest(t, ctx, store, now, "10000000-0000-4000-8000-000000000002", "aircraft-2", AddOperationalVolumeRequest{
 		ID:           "volume-peer",
 		Sequence:     1,
 		GeometryURI:  "memory://external-volume",

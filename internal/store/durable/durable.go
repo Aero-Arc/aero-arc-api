@@ -10,6 +10,7 @@ package durable
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 )
@@ -51,9 +52,27 @@ type OperationalStore interface {
 	ReplaceConflictFindings(ctx context.Context, intentID string, intentVersion int, ruleVersion string, findings []domain.ConflictFinding) error
 }
 
+// CoordinationStore persists DSS desired state and leases pending work. The
+// lifecycle-and-publication methods must commit both changes atomically.
+type CoordinationStore interface {
+	AcceptOperationalIntentAndRequestPublication(ctx context.Context, intent domain.OperationalIntent, expectedRevision int64, publication domain.OperationalIntentPublication) error
+	UpdateOperationalIntentAndRequestPublication(ctx context.Context, intent domain.OperationalIntent, expectedRevision int64, publication domain.OperationalIntentPublication) error
+	RequestOperationalIntentPublication(ctx context.Context, publication domain.OperationalIntentPublication) error
+	GetOperationalIntentPublication(ctx context.Context, intentID string) (domain.OperationalIntentPublication, error)
+	ClaimOperationalIntentPublication(ctx context.Context, intentID string, now, leaseUntil time.Time) (domain.OperationalIntentPublication, error)
+	ClaimDueOperationalIntentPublications(ctx context.Context, now, leaseUntil time.Time, limit int) ([]domain.OperationalIntentPublication, error)
+	UpdateOperationalIntentPublication(ctx context.Context, publication domain.OperationalIntentPublication, expectedRevision int64) error
+	EnqueuePeerNotifications(ctx context.Context, notifications []domain.PeerNotification) error
+	ClaimDuePeerNotifications(ctx context.Context, now, leaseUntil time.Time, limit int) ([]domain.PeerNotification, error)
+	UpdatePeerNotification(ctx context.Context, notification domain.PeerNotification, expectedRevision int64) error
+	RecordReceivedPeerNotification(ctx context.Context, notification domain.ReceivedPeerNotification) error
+	ListReceivedPeerNotifications(ctx context.Context, intentID string) ([]domain.ReceivedPeerNotification, error)
+}
+
 // Store defines the durable system-of-record operations used by the API.
 type Store interface {
 	OperationalStore
+	CoordinationStore
 	UpsertOperator(ctx context.Context, operator domain.Operator) error
 	GetOperator(ctx context.Context, operatorID string) (domain.Operator, error)
 	ListOperators(ctx context.Context) ([]domain.Operator, error)

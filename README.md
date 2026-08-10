@@ -107,7 +107,7 @@ memory telemetry store.
 `AERO_API_REGISTRY_MODE=grpc` connects to the real `aero-arc-registry` gRPC
 service. Durable and replay stores still run in `memory` mode in this scaffold.
 
-## Deconfliction Read/Check Slice
+## Deconfliction Read, Check, and Publication Slice
 
 Set `AERO_API_DURABLE_STORE=postgres` and `AERO_API_DATABASE_URL` to persist
 the deconfliction slice in PostgreSQL and use PostGIS for local spatial
@@ -132,6 +132,26 @@ AERO_API_DSS_OAUTH_ISSUER='localhost'
 AERO_API_DSS_OAUTH_SUBJECT='aero-arc-api'
 AERO_API_DSS_ALLOW_INSECURE_PEER_URLS=true
 ```
+
+Setting a USS base URL enables DSS publication and requires peer-request JWT
+verification:
+
+```bash
+AERO_API_USS_BASE_URL='https://uss.example.com'
+AERO_API_USS_JWT_PUBLIC_KEY_FILE='/run/secrets/uss-auth-public.pem'
+AERO_API_USS_JWT_ISSUER='trusted-oauth-issuer'
+AERO_API_USS_JWT_AUDIENCE='aero-arc-api'
+```
+
+New intents receive UUIDv4 identifiers by default. When DSS publication is
+enabled, caller-supplied intent IDs must also be UUIDv4 so the same identifier
+is used by Aero Arc, the DSS, and peer USS endpoints.
+
+Acceptance commits the local lifecycle change and a desired DSS state in one
+transaction. A leased background reconciler performs a fresh conflict check,
+creates or updates the DSS reference with the current peer OVN key, persists
+the returned OVN/version/subscription, and durably retries peer notifications.
+Cancellation and completion enqueue withdrawal of a published reference.
 
 Use `AERO_API_DSS_STATIC_TOKEN` instead of the dummy OAuth settings when a
 bearer token is managed externally. WGS84 polygon volumes are supported in this
@@ -188,10 +208,23 @@ Operational workflows:
 - `POST /api/v1/operational-intents/{intent_id}/preflight/evaluate`
 - `POST /api/v1/operational-intents/{intent_id}/deconfliction/check`
 - `GET /api/v1/operational-intents/{intent_id}/conflicts`
+- `GET /api/v1/operational-intents/{intent_id}/coordination`
 - `POST /api/v1/operational-intents/{intent_id}/accept`
 - `POST /api/v1/operational-intents/{intent_id}/activate`
 - `GET /api/v1/operational-intents/{intent_id}/conformance`
 - `POST /api/v1/telemetry`
+
+Authenticated USS-to-USS SCD endpoints, enabled with
+`AERO_API_USS_BASE_URL`:
+
+- `GET /uss/v1/operational_intents/{entity_id}?version={dss_version}`
+- `POST /uss/v1/operational_intents`
+
+These endpoints require a signed bearer JWT with the configured issuer and
+audience plus the `utm.strategic_coordination` scope. The GET endpoint serves
+only the local intent version confirmed by the DSS, never an unpublished draft
+or pending replacement. Incoming peer change and deletion notifications are
+validated against the token subject and durably recorded before acknowledgment.
 
 ### Current Deconfliction Behavior
 

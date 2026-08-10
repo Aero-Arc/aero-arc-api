@@ -30,7 +30,7 @@ func TestAuthoritativeSpatialReadCheckSlice(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(observer.Close)
-	if _, err := store.pool.Exec(ctx, `TRUNCATE conflict_findings, operational_volumes, operational_intents`); err != nil {
+	if _, err := store.pool.Exec(ctx, `TRUNCATE received_peer_notifications, peer_notifications, operational_intent_publications, conflict_findings, operational_volumes, operational_intents`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -221,6 +221,81 @@ func TestAcceptOperationalIntentSupersedesPriorAcceptedVersion(t *testing.T) {
 	}
 }
 
+func TestPublicationRequestIsAtomicAndLeasedAcrossReplicas(t *testing.T) {
+	ctx, first, second := integrationStores(t)
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	intent := integrationIntent("11111111-1111-4111-8111-111111111111", now)
+	intent.Status = domain.IntentStatusSubmitted
+	if err := first.CreateOperationalIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	acceptedAt := now.Add(time.Minute)
+	intent.Status = domain.IntentStatusAccepted
+	intent.AcceptedAt = &acceptedAt
+	intent.UpdatedAt = acceptedAt
+	publication := domain.OperationalIntentPublication{
+		IntentID: intent.ID, DesiredIntentVersion: 1,
+		DesiredState:  domain.OperationalIntentExternalStateAccepted,
+		NextAttemptAt: acceptedAt, UpdatedAt: acceptedAt,
+	}
+	if err := first.AcceptOperationalIntentAndRequestPublication(ctx, intent, 0, publication); err != nil {
+		t.Fatal(err)
+	}
+	storedIntent, err := second.GetOperationalIntent(ctx, intent.ID)
+	if err != nil || storedIntent.Status != domain.IntentStatusAccepted {
+		t.Fatalf("accepted intent = %#v, %v", storedIntent, err)
+	}
+	claimed, err := first.ClaimDueOperationalIntentPublications(ctx, acceptedAt, acceptedAt.Add(time.Minute), 1)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("first claim = %#v, %v", claimed, err)
+	}
+	claimedAgain, err := second.ClaimDueOperationalIntentPublications(ctx, acceptedAt, acceptedAt.Add(time.Minute), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claimedAgain) != 0 {
+		t.Fatalf("second replica also claimed leased publication: %#v", claimedAgain)
+	}
+	notification := domain.PeerNotification{
+		ID: "notification-1", IntentID: intent.ID, IntentVersion: 1,
+		USSBaseURL: "https://peer.example", Payload: []byte(`{"operational_intent_id":"test"}`),
+		NextAttemptAt: acceptedAt, CreatedAt: acceptedAt, UpdatedAt: acceptedAt,
+	}
+	if err := first.EnqueuePeerNotifications(ctx, []domain.PeerNotification{notification}); err != nil {
+		t.Fatal(err)
+	}
+	notifications, err := second.ClaimDuePeerNotifications(ctx, acceptedAt, acceptedAt.Add(time.Minute), 1)
+	if err != nil || len(notifications) != 1 {
+		t.Fatalf("notification claim = %#v, %v", notifications, err)
+	}
+	if duplicate, err := first.ClaimDuePeerNotifications(ctx, acceptedAt, acceptedAt.Add(time.Minute), 1); err != nil || len(duplicate) != 0 {
+		t.Fatalf("duplicate notification claim = %#v, %v", duplicate, err)
+	}
+	deliveredAt := acceptedAt.Add(time.Second)
+	notifications[0].DeliveredAt = &deliveredAt
+	if err := second.UpdatePeerNotification(ctx, notifications[0], notifications[0].Revision); err != nil {
+		t.Fatal(err)
+	}
+	received := domain.ReceivedPeerNotification{
+		ID: "received-1", IntentID: intent.ID, Manager: "peer-uss",
+		IntentVersion: 2, OVN: "peer-ovn", Payload: []byte(`{"operational_intent_id":"test"}`),
+		ReceivedAt: deliveredAt,
+	}
+	if err := first.RecordReceivedPeerNotification(ctx, received); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.RecordReceivedPeerNotification(ctx, received); err != nil {
+		t.Fatal(err)
+	}
+	receivedNotifications, err := second.ListReceivedPeerNotifications(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(receivedNotifications) != 1 || receivedNotifications[0].OVN != "peer-ovn" {
+		t.Fatalf("received notifications = %#v", receivedNotifications)
+	}
+}
+
 func TestConcurrentFindingReplacementsDoNotMerge(t *testing.T) {
 	ctx, first, second := integrationStores(t)
 	now := time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC)
@@ -309,7 +384,7 @@ func integrationStores(t *testing.T) (context.Context, *Store, *Store) {
 		t.Fatal(err)
 	}
 	t.Cleanup(second.Close)
-	if _, err := first.pool.Exec(ctx, `TRUNCATE conflict_findings, operational_volumes, operational_intents`); err != nil {
+	if _, err := first.pool.Exec(ctx, `TRUNCATE received_peer_notifications, peer_notifications, operational_intent_publications, conflict_findings, operational_volumes, operational_intents`); err != nil {
 		t.Fatal(err)
 	}
 	return ctx, first, second

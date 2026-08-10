@@ -6,6 +6,8 @@ require (
 	github.com/Aero-Arc/dss-clients v0.0.0-20260727090752-3dbacffe9489
 	github.com/InfluxCommunity/influxdb3-go/v2 v2.13.0
 	github.com/aero-arc/aero-arc-protos v0.0.0-20260712235411-7691110ca7e7
+	github.com/golang-jwt/jwt/v5 v5.3.0
+	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/mrshabel/mach v0.0.0-20260228220151-4e628ab47ff3
 	github.com/urfave/cli/v3 v3.9.0
@@ -17,7 +19,6 @@ require (
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/influxdata/line-protocol/v2 v2.2.1 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect

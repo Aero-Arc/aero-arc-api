@@ -71,7 +71,11 @@ type scdReader interface {
 }
 
 type Provider struct {
-	reader scdReader
+	reader                scdReader
+	dssClient             *dss.Client
+	peerClient            *dss.Client
+	ussBaseURL            string
+	allowInsecurePeerURLs bool
 }
 
 type Config struct {
@@ -83,6 +87,7 @@ type Config struct {
 	OAuthSubject          string
 	AllowInsecurePeerURLs bool
 	RequestTimeout        time.Duration
+	USSBaseURL            string
 }
 
 // New constructs an InterUSS provider with separate HTTP policies for the
@@ -124,7 +129,7 @@ func New(cfg Config) (*Provider, error) {
 		dssClient:             dssClient,
 		peerUSSClient:         peerUSSClient,
 		allowInsecurePeerURLs: cfg.AllowInsecurePeerURLs,
-	}}, nil
+	}, dssClient: dssClient, peerClient: peerUSSClient, ussBaseURL: strings.TrimRight(cfg.USSBaseURL, "/"), allowInsecurePeerURLs: cfg.AllowInsecurePeerURLs}, nil
 }
 
 // newPeerHTTPClient blocks peer USS connections to local and private networks
@@ -391,6 +396,16 @@ func fromSCDIntent(reference scdv1.OperationalIntentReference, intent scdv1.Oper
 			Version: version,
 			Status:  intentStatus(reference.State),
 		},
+	}
+	// DSS area queries intentionally omit peer OVNs. The managing USS includes
+	// the OVN in the full details reference, and that value forms the airspace
+	// key for subsequent Accepted/Activated writes.
+	if intent.Reference.Ovn != nil {
+		ovn, err := intent.Reference.Ovn.AsEntityOVN()
+		if err != nil {
+			return airspaceprovider.OperationalIntent{}, fmt.Errorf("read operational intent OVN: %w", err)
+		}
+		record.Source.OVN = string(ovn)
 	}
 	if intent.Details.Volumes != nil {
 		record.Volumes, err = fromSCDVolumes(id, version, "nominal", *intent.Details.Volumes)

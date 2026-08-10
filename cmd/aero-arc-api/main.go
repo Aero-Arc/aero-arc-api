@@ -84,6 +84,10 @@ func newCommand() *cli.Command {
 					&cli.StringFlag{Name: "dss-oauth-issuer", Value: defaults.DSSOAuthIssuer, Usage: "DSS OAuth issuer", Sources: cli.EnvVars("AERO_API_DSS_OAUTH_ISSUER")},
 					&cli.StringFlag{Name: "dss-oauth-subject", Value: defaults.DSSOAuthSubject, Usage: "stable Aero Arc USS identity", Sources: cli.EnvVars("AERO_API_DSS_OAUTH_SUBJECT")},
 					&cli.BoolFlag{Name: "dss-allow-insecure-peer-urls", Usage: "allow HTTP and private peer USS URLs for local development", Sources: cli.EnvVars("AERO_API_DSS_ALLOW_INSECURE_PEER_URLS")},
+					&cli.StringFlag{Name: "uss-base-url", Usage: "public USS base URL advertised through the DSS", Sources: cli.EnvVars("AERO_API_USS_BASE_URL")},
+					&cli.StringFlag{Name: "uss-jwt-public-key-file", Usage: "PEM RSA public key used to verify peer USS tokens", Sources: cli.EnvVars("AERO_API_USS_JWT_PUBLIC_KEY_FILE")},
+					&cli.StringFlag{Name: "uss-jwt-issuer", Usage: "required issuer for peer USS JWTs", Sources: cli.EnvVars("AERO_API_USS_JWT_ISSUER")},
+					&cli.StringFlag{Name: "uss-jwt-audience", Usage: "required audience for peer USS JWTs", Sources: cli.EnvVars("AERO_API_USS_JWT_AUDIENCE")},
 					&cli.StringFlag{
 						Name:    "replay-store",
 						Value:   defaults.ReplayStore,
@@ -144,6 +148,10 @@ func newCommand() *cli.Command {
 						DSSOAuthIssuer:           cmd.String("dss-oauth-issuer"),
 						DSSOAuthSubject:          cmd.String("dss-oauth-subject"),
 						DSSAllowInsecurePeerURLs: cmd.Bool("dss-allow-insecure-peer-urls"),
+						USSBaseURL:               cmd.String("uss-base-url"),
+						USSJWTPublicKeyFile:      cmd.String("uss-jwt-public-key-file"),
+						USSJWTIssuer:             cmd.String("uss-jwt-issuer"),
+						USSJWTAudience:           cmd.String("uss-jwt-audience"),
 						ReplayStore:              cmd.String("replay-store"),
 						RegistryMode:             cmd.String("registry-mode"),
 						RegistryAddress:          cmd.String("registry-addr"),
@@ -215,13 +223,26 @@ func run(ctx context.Context, cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
+	workerCtx, stopWorker := context.WithCancel(ctx)
+	defer stopWorker()
+	if deconflictionService.PublishingEnabled() {
+		go deconflictionService.RunPublicationWorker(workerCtx)
+	}
 	intentService := service.NewIntentService(durableStore, deconflictionService)
 	preflightService := service.NewPreflightService(durableStore)
 	conformanceService := service.NewConformanceService(durableStore, telemetryStore)
 
+	apiServer := httpapi.NewWithWorkflows(fleetService, intentService, preflightService, conformanceService, cfg.RequestTimeout, deconflictionService).WithDebug(cfg.Debug)
+	if deconflictionService.PublishingEnabled() {
+		authorizer, err := httpapi.NewUSSJWTAuthorizer(cfg.USSJWTPublicKeyFile, cfg.USSJWTIssuer, cfg.USSJWTAudience)
+		if err != nil {
+			return err
+		}
+		apiServer.WithUSSAuthorizer(authorizer)
+	}
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.NewWithWorkflows(fleetService, intentService, preflightService, conformanceService, cfg.RequestTimeout, deconflictionService).WithDebug(cfg.Debug).Handler(),
+		Handler:           apiServer.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -310,6 +331,7 @@ func newInterUSSProvider(cfg *config.Config) (airspaceprovider.Provider, error) 
 		OAuthSubject:          cfg.DSSOAuthSubject,
 		AllowInsecurePeerURLs: cfg.DSSAllowInsecurePeerURLs,
 		RequestTimeout:        cfg.RequestTimeout,
+		USSBaseURL:            cfg.USSBaseURL,
 	})
 }
 

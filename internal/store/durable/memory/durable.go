@@ -6,51 +6,58 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 )
 
 type Store struct {
-	mu                   sync.RWMutex
-	operators            map[string]domain.Operator
-	aircraft             map[string]domain.Aircraft
-	batteries            map[string]domain.Battery
-	batteryInstallations []domain.BatteryInstallation
-	operatingProfiles    map[string]domain.AircraftOperatingProfile
-	operatingLimits      map[string]domain.OperatingLimit
-	maintenanceEvents    []domain.MaintenanceEvent
-	operationalIntents   map[string]domain.OperationalIntent
-	operationalVolumes   map[string]domain.OperationalVolume
-	authorizations       map[string]domain.RegulatoryAuthorization
-	preflightChecks      []domain.PreflightCheck
-	flightRecords        map[string]domain.FlightRecord
-	conformanceEvents    []domain.ConformanceEvent
-	conformanceSummaries map[string]domain.ConformanceSummary
-	evidenceRecords      map[string]domain.EvidenceRecord
-	reportabilityReviews []domain.ReportabilityReview
-	complianceFindings   []domain.ComplianceFinding
-	conflictFindings     []domain.ConflictFinding
-	personnel            map[string]domain.OperationsPersonnel
-	personnelAssignments []domain.PersonnelAssignment
+	mu                        sync.RWMutex
+	operators                 map[string]domain.Operator
+	aircraft                  map[string]domain.Aircraft
+	batteries                 map[string]domain.Battery
+	batteryInstallations      []domain.BatteryInstallation
+	operatingProfiles         map[string]domain.AircraftOperatingProfile
+	operatingLimits           map[string]domain.OperatingLimit
+	maintenanceEvents         []domain.MaintenanceEvent
+	operationalIntents        map[string]domain.OperationalIntent
+	operationalVolumes        map[string]domain.OperationalVolume
+	authorizations            map[string]domain.RegulatoryAuthorization
+	preflightChecks           []domain.PreflightCheck
+	flightRecords             map[string]domain.FlightRecord
+	conformanceEvents         []domain.ConformanceEvent
+	conformanceSummaries      map[string]domain.ConformanceSummary
+	evidenceRecords           map[string]domain.EvidenceRecord
+	reportabilityReviews      []domain.ReportabilityReview
+	complianceFindings        []domain.ComplianceFinding
+	conflictFindings          []domain.ConflictFinding
+	personnel                 map[string]domain.OperationsPersonnel
+	personnelAssignments      []domain.PersonnelAssignment
+	publications              map[string]domain.OperationalIntentPublication
+	peerNotifications         map[string]domain.PeerNotification
+	receivedPeerNotifications map[string]domain.ReceivedPeerNotification
 }
 
 var _ durable.OperationalStore = (*Store)(nil)
 
 func NewStore() *Store {
 	return &Store{
-		operators:            make(map[string]domain.Operator),
-		aircraft:             make(map[string]domain.Aircraft),
-		batteries:            make(map[string]domain.Battery),
-		operatingProfiles:    make(map[string]domain.AircraftOperatingProfile),
-		operatingLimits:      make(map[string]domain.OperatingLimit),
-		operationalIntents:   make(map[string]domain.OperationalIntent),
-		operationalVolumes:   make(map[string]domain.OperationalVolume),
-		authorizations:       make(map[string]domain.RegulatoryAuthorization),
-		flightRecords:        make(map[string]domain.FlightRecord),
-		conformanceSummaries: make(map[string]domain.ConformanceSummary),
-		evidenceRecords:      make(map[string]domain.EvidenceRecord),
-		personnel:            make(map[string]domain.OperationsPersonnel),
+		operators:                 make(map[string]domain.Operator),
+		aircraft:                  make(map[string]domain.Aircraft),
+		batteries:                 make(map[string]domain.Battery),
+		operatingProfiles:         make(map[string]domain.AircraftOperatingProfile),
+		operatingLimits:           make(map[string]domain.OperatingLimit),
+		operationalIntents:        make(map[string]domain.OperationalIntent),
+		operationalVolumes:        make(map[string]domain.OperationalVolume),
+		authorizations:            make(map[string]domain.RegulatoryAuthorization),
+		flightRecords:             make(map[string]domain.FlightRecord),
+		conformanceSummaries:      make(map[string]domain.ConformanceSummary),
+		evidenceRecords:           make(map[string]domain.EvidenceRecord),
+		personnel:                 make(map[string]domain.OperationsPersonnel),
+		publications:              make(map[string]domain.OperationalIntentPublication),
+		peerNotifications:         make(map[string]domain.PeerNotification),
+		receivedPeerNotifications: make(map[string]domain.ReceivedPeerNotification),
 	}
 }
 
@@ -233,6 +240,10 @@ func (s *Store) CreateOperationalIntent(_ context.Context, intent domain.Operati
 func (s *Store) UpdateOperationalIntent(_ context.Context, intent domain.OperationalIntent, expectedRevision int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.updateOperationalIntentLocked(intent, expectedRevision)
+}
+
+func (s *Store) updateOperationalIntentLocked(intent domain.OperationalIntent, expectedRevision int64) error {
 	current, exists := s.latestOperationalIntent(intent.ID)
 	if !exists {
 		return durable.ErrNotFound
@@ -248,6 +259,10 @@ func (s *Store) UpdateOperationalIntent(_ context.Context, intent domain.Operati
 func (s *Store) AcceptOperationalIntent(_ context.Context, intent domain.OperationalIntent, expectedRevision int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.acceptOperationalIntentLocked(intent, expectedRevision)
+}
+
+func (s *Store) acceptOperationalIntentLocked(intent domain.OperationalIntent, expectedRevision int64) error {
 	current, exists := s.latestOperationalIntent(intent.ID)
 	if !exists {
 		return durable.ErrNotFound
@@ -268,6 +283,221 @@ func (s *Store) AcceptOperationalIntent(_ context.Context, intent domain.Operati
 		s.operationalIntents[key] = prior
 	}
 	return nil
+}
+
+func (s *Store) AcceptOperationalIntentAndRequestPublication(_ context.Context, intent domain.OperationalIntent, expectedRevision int64, publication domain.OperationalIntentPublication) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.acceptOperationalIntentLocked(intent, expectedRevision); err != nil {
+		return err
+	}
+	s.requestPublicationLocked(publication)
+	return nil
+}
+
+func (s *Store) UpdateOperationalIntentAndRequestPublication(_ context.Context, intent domain.OperationalIntent, expectedRevision int64, publication domain.OperationalIntentPublication) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.updateOperationalIntentLocked(intent, expectedRevision); err != nil {
+		return err
+	}
+	s.requestPublicationLocked(publication)
+	return nil
+}
+
+func (s *Store) RequestOperationalIntentPublication(_ context.Context, publication domain.OperationalIntentPublication) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.operationalIntents[operationalIntentKey(publication.IntentID, publication.DesiredIntentVersion)]; !ok {
+		return durable.ErrNotFound
+	}
+	s.requestPublicationLocked(publication)
+	return nil
+}
+
+func (s *Store) requestPublicationLocked(request domain.OperationalIntentPublication) {
+	current, exists := s.publications[request.IntentID]
+	if exists {
+		request.Revision = current.Revision + 1
+		request.PublishedIntentVersion = current.PublishedIntentVersion
+		request.ConfirmedState = current.ConfirmedState
+		request.DSSVersion = current.DSSVersion
+		request.OVN = current.OVN
+		request.SubscriptionID = current.SubscriptionID
+		request.Manager = current.Manager
+		request.USSBaseURL = current.USSBaseURL
+		request.ReferenceJSON = append([]byte(nil), current.ReferenceJSON...)
+		request.ConfirmedAt = current.ConfirmedAt
+	}
+	request.SyncStatus = domain.PublicationSyncPending
+	request.AttemptCount = 0
+	request.LeaseUntil = nil
+	request.LastError = ""
+	s.publications[request.IntentID] = clonePublication(request)
+}
+
+func (s *Store) GetOperationalIntentPublication(_ context.Context, intentID string) (domain.OperationalIntentPublication, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	publication, ok := s.publications[intentID]
+	if !ok {
+		return domain.OperationalIntentPublication{}, durable.ErrNotFound
+	}
+	return clonePublication(publication), nil
+}
+
+func (s *Store) ClaimOperationalIntentPublication(_ context.Context, intentID string, now, leaseUntil time.Time) (domain.OperationalIntentPublication, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	publication, ok := s.publications[intentID]
+	if !ok {
+		return domain.OperationalIntentPublication{}, durable.ErrNotFound
+	}
+	if publication.LeaseUntil != nil && publication.LeaseUntil.After(now) {
+		return domain.OperationalIntentPublication{}, durable.ErrVersionConflict
+	}
+	publication.Revision++
+	publication.SyncStatus = domain.PublicationSyncProcessing
+	publication.LeaseUntil = &leaseUntil
+	publication.LastAttemptAt = &now
+	publication.AttemptCount++
+	publication.UpdatedAt = now
+	s.publications[intentID] = clonePublication(publication)
+	return clonePublication(publication), nil
+}
+
+func (s *Store) ClaimDueOperationalIntentPublications(_ context.Context, now, leaseUntil time.Time, limit int) ([]domain.OperationalIntentPublication, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if limit <= 0 {
+		return []domain.OperationalIntentPublication{}, nil
+	}
+	ids := make([]string, 0, len(s.publications))
+	for id, publication := range s.publications {
+		if publication.NextAttemptAt.After(now) || publication.LeaseUntil != nil && publication.LeaseUntil.After(now) {
+			continue
+		}
+		if publication.SyncStatus != domain.PublicationSyncPending && publication.SyncStatus != domain.PublicationSyncRetrying {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	if len(ids) > limit {
+		ids = ids[:limit]
+	}
+	claimed := make([]domain.OperationalIntentPublication, 0, len(ids))
+	for _, id := range ids {
+		publication := s.publications[id]
+		publication.Revision++
+		publication.SyncStatus = domain.PublicationSyncProcessing
+		publication.LeaseUntil = &leaseUntil
+		publication.LastAttemptAt = &now
+		publication.AttemptCount++
+		publication.UpdatedAt = now
+		s.publications[id] = clonePublication(publication)
+		claimed = append(claimed, clonePublication(publication))
+	}
+	return claimed, nil
+}
+
+func (s *Store) UpdateOperationalIntentPublication(_ context.Context, publication domain.OperationalIntentPublication, expectedRevision int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.publications[publication.IntentID]
+	if !ok {
+		return durable.ErrNotFound
+	}
+	if current.Revision != expectedRevision {
+		return durable.ErrVersionConflict
+	}
+	publication.Revision = expectedRevision + 1
+	publication.LeaseUntil = nil
+	s.publications[publication.IntentID] = clonePublication(publication)
+	return nil
+}
+
+func (s *Store) EnqueuePeerNotifications(_ context.Context, notifications []domain.PeerNotification) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, notification := range notifications {
+		copy := notification
+		copy.Revision = 0
+		copy.Payload = append([]byte(nil), notification.Payload...)
+		s.peerNotifications[notification.ID] = copy
+	}
+	return nil
+}
+
+func (s *Store) ClaimDuePeerNotifications(_ context.Context, now, leaseUntil time.Time, limit int) ([]domain.PeerNotification, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ids := make([]string, 0)
+	for id, notification := range s.peerNotifications {
+		if notification.DeliveredAt == nil && !notification.NextAttemptAt.After(now) && (notification.LeaseUntil == nil || !notification.LeaseUntil.After(now)) {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	if limit < len(ids) {
+		ids = ids[:max(limit, 0)]
+	}
+	claimed := make([]domain.PeerNotification, 0, len(ids))
+	for _, id := range ids {
+		notification := s.peerNotifications[id]
+		notification.Revision++
+		notification.LeaseUntil = &leaseUntil
+		notification.AttemptCount++
+		notification.UpdatedAt = now
+		s.peerNotifications[id] = notification
+		claimed = append(claimed, notification)
+	}
+	return claimed, nil
+}
+
+func (s *Store) UpdatePeerNotification(_ context.Context, notification domain.PeerNotification, expectedRevision int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.peerNotifications[notification.ID]
+	if !ok {
+		return durable.ErrNotFound
+	}
+	if current.Revision != expectedRevision {
+		return durable.ErrVersionConflict
+	}
+	notification.Revision = expectedRevision + 1
+	notification.LeaseUntil = nil
+	s.peerNotifications[notification.ID] = notification
+	return nil
+}
+
+func (s *Store) RecordReceivedPeerNotification(_ context.Context, notification domain.ReceivedPeerNotification) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	copy := notification
+	copy.Payload = append([]byte(nil), notification.Payload...)
+	s.receivedPeerNotifications[notification.ID] = copy
+	return nil
+}
+
+func (s *Store) ListReceivedPeerNotifications(_ context.Context, intentID string) ([]domain.ReceivedPeerNotification, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	notifications := make([]domain.ReceivedPeerNotification, 0)
+	for _, notification := range s.receivedPeerNotifications {
+		if intentID == "" || notification.IntentID == intentID {
+			copy := notification
+			copy.Payload = append([]byte(nil), notification.Payload...)
+			notifications = append(notifications, copy)
+		}
+	}
+	sort.Slice(notifications, func(i, j int) bool { return notifications[i].ReceivedAt.Before(notifications[j].ReceivedAt) })
+	return notifications, nil
+}
+
+func clonePublication(publication domain.OperationalIntentPublication) domain.OperationalIntentPublication {
+	publication.ReferenceJSON = append([]byte(nil), publication.ReferenceJSON...)
+	return publication
 }
 
 func (s *Store) GetOperationalIntent(_ context.Context, intentID string) (domain.OperationalIntent, error) {

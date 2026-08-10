@@ -223,7 +223,7 @@ func TestHandleActivateOperationalIntentRunsPreflight(t *testing.T) {
 
 	intents := service.NewIntentService(durable, nil)
 	intent, err := intents.CreateIntent(ctx, service.CreateIntentRequest{
-		ID:                  "intent-1",
+		ID:                  "11111111-1111-4111-8111-111111111111",
 		OperatorID:          "operator-1",
 		AircraftID:          "aircraft-1",
 		Name:                "Demo intent",
@@ -264,7 +264,7 @@ func TestHandleActivateOperationalIntentRunsPreflight(t *testing.T) {
 		service.NewConformanceService(durable, telemetry),
 		time.Second,
 	)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/operational-intents/intent-1/activate", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/operational-intents/"+intent.ID+"/activate", nil)
 	rec := httptest.NewRecorder()
 
 	server.Handler().ServeHTTP(rec, req)
@@ -304,7 +304,7 @@ func TestHandleAddOperationalVolumeRejectsSubmittedIntent(t *testing.T) {
 
 	intents := service.NewIntentService(durable, nil)
 	intent, err := intents.CreateIntent(ctx, service.CreateIntentRequest{
-		ID:                  "intent-1",
+		ID:                  "11111111-1111-4111-8111-111111111111",
 		OperatorID:          "operator-1",
 		AircraftID:          "aircraft-1",
 		Name:                "Demo intent",
@@ -331,7 +331,7 @@ func TestHandleAddOperationalVolumeRejectsSubmittedIntent(t *testing.T) {
 		time.Second,
 	)
 	body := []byte(`{"id":"volume-1","sequence":1,"geojson":"{\"type\":\"Polygon\",\"coordinates\":[[[-98,35],[-97,35],[-97,36],[-98,36],[-98,35]]]}","min_altitude_m":10,"max_altitude_m":120,"starts_at":"2026-06-15T15:00:00Z","ends_at":"2026-06-15T16:00:00Z"}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/operational-intents/intent-1/volumes", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/operational-intents/"+intent.ID+"/volumes", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	server.Handler().ServeHTTP(rec, req)
@@ -428,7 +428,7 @@ func TestHandleAddOperationalVolumeRejectsMissingAltitudeFields(t *testing.T) {
 	}
 	intents := service.NewIntentService(durable, nil)
 	intent, err := intents.CreateIntent(ctx, service.CreateIntentRequest{
-		ID:                  "intent-1",
+		ID:                  "11111111-1111-4111-8111-111111111111",
 		OperatorID:          "operator-1",
 		AircraftID:          "aircraft-1",
 		Name:                "Demo intent",
