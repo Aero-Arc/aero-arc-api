@@ -256,12 +256,19 @@ func TestPublicationRequestIsAtomicAndLeasedAcrossReplicas(t *testing.T) {
 	if len(claimedAgain) != 0 {
 		t.Fatalf("second replica also claimed leased publication: %#v", claimedAgain)
 	}
+	claimed, err = second.ClaimDueOperationalIntentPublications(ctx, acceptedAt.Add(time.Minute), acceptedAt.Add(2*time.Minute), 1)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("expired publication lease was not reclaimed: %#v, %v", claimed, err)
+	}
 	notification := domain.PeerNotification{
 		ID: "notification-1", IntentID: intent.ID, IntentVersion: 1,
 		USSBaseURL: "https://peer.example", Payload: []byte(`{"operational_intent_id":"test"}`),
 		NextAttemptAt: acceptedAt, CreatedAt: acceptedAt, UpdatedAt: acceptedAt,
 	}
-	if err := first.EnqueuePeerNotifications(ctx, []domain.PeerNotification{notification}); err != nil {
+	claimed[0].SyncStatus = domain.PublicationSyncConfirmed
+	claimed[0].ConfirmedState = domain.OperationalIntentExternalStateAccepted
+	claimed[0].PublishedIntentVersion = 1
+	if err := first.ConfirmOperationalIntentPublication(ctx, claimed[0], claimed[0].Revision, []domain.PeerNotification{notification}); err != nil {
 		t.Fatal(err)
 	}
 	notifications, err := second.ClaimDuePeerNotifications(ctx, acceptedAt, acceptedAt.Add(time.Minute), 1)

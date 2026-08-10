@@ -424,6 +424,30 @@ func (s *Server) handleActivateOperationalIntent(c *mach.Context) {
 	writeJSON(c, http.StatusOK, intent)
 }
 
+func (s *Server) handleCompleteOperationalIntent(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	s.debugOperation(ctx, "complete_intent", slog.String("intent_id", c.Param("intent_id")))
+	intent, err := s.intents.CompleteIntent(ctx, c.Param("intent_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, intent)
+}
+
+func (s *Server) handleCancelOperationalIntent(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	s.debugOperation(ctx, "cancel_intent", slog.String("intent_id", c.Param("intent_id")))
+	intent, err := s.intents.CancelIntent(ctx, c.Param("intent_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, intent)
+}
+
 func (s *Server) handleTelemetry(c *mach.Context) {
 	var sample domain.TelemetrySample
 	if err := decodeJSON(c, &sample); err != nil {

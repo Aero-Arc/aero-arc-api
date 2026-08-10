@@ -140,6 +140,69 @@ func TestUSSNotificationEndpointDurablyRecordsDeletion(t *testing.T) {
 	}
 }
 
+func TestUSSNotificationEndpointRecordsOperationalIntent(t *testing.T) {
+	const intentID = "44444444-4444-4444-8444-444444444444"
+	store := durablememory.NewStore()
+	service, err := deconfliction.NewDeconflictionService(store, servingPublisher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewWithWorkflows(nil, nil, nil, nil, time.Second, service).WithUSSAuthorizer(allowUSSAuthorizer{}).Handler()
+	body := fmt.Sprintf(`{
+		"operational_intent_id":%q,
+		"operational_intent":{"reference":{
+			"id":%q,"manager":"peer","ovn":"peer-ovn","state":"Accepted",
+			"subscription_id":"55555555-5555-4555-8555-555555555555",
+			"uss_availability":"Normal","uss_base_url":"https://peer.example","version":4,
+			"time_start":{"format":"RFC3339","value":"2026-08-10T18:00:00Z"},
+			"time_end":{"format":"RFC3339","value":"2026-08-10T19:00:00Z"}},
+			"details":{"priority":0}},"subscriptions":[]}`, intentID, intentID)
+	request := httptest.NewRequest(http.MethodPost, "/uss/v1/operational_intents", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	notifications, err := store.ListReceivedPeerNotifications(context.Background(), intentID)
+	if err != nil || len(notifications) != 1 {
+		t.Fatalf("notifications=%#v err=%v", notifications, err)
+	}
+	if got := notifications[0]; got.Deleted || got.IntentVersion != 4 || got.OVN != "peer-ovn" {
+		t.Fatalf("notification=%+v", got)
+	}
+}
+
+func TestUSSDetailsEndpointValidatesAuthorizationAndParameters(t *testing.T) {
+	store := durablememory.NewStore()
+	service, err := deconfliction.NewDeconflictionService(store, servingPublisher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewWithWorkflows(nil, nil, nil, nil, time.Second, service)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/uss/v1/operational_intents/not-a-uuid", nil))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("missing authorizer status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	handler := server.WithUSSAuthorizer(allowUSSAuthorizer{}).Handler()
+	for _, test := range []struct {
+		path string
+		want int
+	}{
+		{path: "/uss/v1/operational_intents/not-a-uuid", want: http.StatusBadRequest},
+		{path: "/uss/v1/operational_intents/66666666-6666-4666-8666-666666666666?version=0", want: http.StatusBadRequest},
+		{path: "/uss/v1/operational_intents/66666666-6666-4666-8666-666666666666", want: http.StatusNotFound},
+	} {
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.path, nil))
+		if response.Code != test.want {
+			t.Fatalf("%s status=%d want=%d body=%s", test.path, response.Code, test.want, response.Body.String())
+		}
+	}
+}
+
 func containsAll(value string, patterns ...string) bool {
 	for _, pattern := range patterns {
 		if !strings.Contains(value, pattern) {

@@ -365,20 +365,26 @@ func (s *IntentService) ActivateIntent(ctx context.Context, intentID string) (do
 	}
 	if coordinator, ok := s.deconfliction.(DeconflictionCoordinator); ok && coordinator.PublishingEnabled() {
 		publication, err := coordinator.GetPublication(ctx, intent.ID)
-		if err != nil || publication.PublishedIntentVersion != intent.Version ||
-			publication.ConfirmedState != domain.OperationalIntentExternalStateAccepted ||
-			publication.SyncStatus != domain.PublicationSyncConfirmed {
+		if err != nil || publication.PublishedIntentVersion != intent.Version || publication.SyncStatus != domain.PublicationSyncConfirmed {
 			return domain.OperationalIntent{}, fmt.Errorf("%w: intent is not DSS-confirmed as Accepted", ErrActivationBlocked)
 		}
-		request := coordinator.PublicationRequest(intent, domain.OperationalIntentExternalStateActivated)
-		if err := s.durable.RequestOperationalIntentPublication(ctx, request); err != nil {
-			return domain.OperationalIntent{}, fmt.Errorf("request DSS activation: %w", err)
+		switch publication.ConfirmedState {
+		case domain.OperationalIntentExternalStateAccepted:
+			request := coordinator.PublicationRequest(intent, domain.OperationalIntentExternalStateActivated)
+			if err := s.durable.RequestOperationalIntentPublication(ctx, request); err != nil {
+				return domain.OperationalIntent{}, fmt.Errorf("request DSS activation: %w", err)
+			}
+			if err := coordinator.ReconcileIntent(ctx, intent.ID); err != nil {
+				return domain.OperationalIntent{}, fmt.Errorf("%w: coordinate DSS activation: %v", ErrActivationBlocked, err)
+			}
+			publication, err = coordinator.GetPublication(ctx, intent.ID)
+		case domain.OperationalIntentExternalStateActivated:
+			// Recover when DSS activation succeeded but the local status write did not.
+		default:
+			return domain.OperationalIntent{}, fmt.Errorf("%w: intent is not DSS-confirmed as Accepted", ErrActivationBlocked)
 		}
-		if err := coordinator.ReconcileIntent(ctx, intent.ID); err != nil {
-			return domain.OperationalIntent{}, fmt.Errorf("%w: coordinate DSS activation: %v", ErrActivationBlocked, err)
-		}
-		publication, err = coordinator.GetPublication(ctx, intent.ID)
-		if err != nil || publication.ConfirmedState != domain.OperationalIntentExternalStateActivated || publication.PublishedIntentVersion != intent.Version {
+		if err != nil || publication.ConfirmedState != domain.OperationalIntentExternalStateActivated ||
+			publication.PublishedIntentVersion != intent.Version || publication.SyncStatus != domain.PublicationSyncConfirmed {
 			return domain.OperationalIntent{}, fmt.Errorf("%w: DSS activation is not confirmed", ErrActivationBlocked)
 		}
 	}

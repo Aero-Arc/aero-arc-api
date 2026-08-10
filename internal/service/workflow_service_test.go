@@ -35,6 +35,126 @@ func TestCreateIntentRejectsNonUUIDIdentifier(t *testing.T) {
 	}
 }
 
+type workflowCoordinator struct {
+	publication domain.OperationalIntentPublication
+	reconciles  int
+}
+
+func (c *workflowCoordinator) CheckIntent(context.Context, string) (domain.DeconflictionResult, error) {
+	return domain.DeconflictionResult{Posture: domain.DeconflictionPostureClear}, nil
+}
+
+func (c *workflowCoordinator) PublishingEnabled() bool { return true }
+
+func (c *workflowCoordinator) PublicationRequest(intent domain.OperationalIntent, state domain.OperationalIntentExternalState) domain.OperationalIntentPublication {
+	return domain.OperationalIntentPublication{
+		IntentID: intent.ID, DesiredIntentVersion: intent.Version, DesiredState: state,
+		SyncStatus: domain.PublicationSyncPending, NextAttemptAt: intent.UpdatedAt, UpdatedAt: intent.UpdatedAt,
+	}
+}
+
+func (c *workflowCoordinator) GetPublication(context.Context, string) (domain.OperationalIntentPublication, error) {
+	return c.publication, nil
+}
+
+func (c *workflowCoordinator) ReconcileIntent(context.Context, string) error {
+	c.reconciles++
+	c.publication.ConfirmedState = domain.OperationalIntentExternalStateActivated
+	c.publication.SyncStatus = domain.PublicationSyncConfirmed
+	return nil
+}
+
+func TestIntentLifecycleCoordinatesPublicationAndWithdrawal(t *testing.T) {
+	ctx := context.Background()
+	now := fixedWorkflowTime()
+	store := durablememory.NewStore()
+	coordinator := &workflowCoordinator{}
+	intents := NewIntentServiceWithClock(store, fixedClock(now), coordinator)
+	intent, err := intents.CreateIntent(ctx, workflowIntentRequest(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := intents.AddOperationalVolume(ctx, intent.ID, workflowVolumeRequest(now)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := intents.SubmitIntent(ctx, intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	intent, err = intents.AcceptIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.publication = domain.OperationalIntentPublication{
+		IntentID: intent.ID, PublishedIntentVersion: intent.Version,
+		ConfirmedState: domain.OperationalIntentExternalStateAccepted,
+		SyncStatus:     domain.PublicationSyncConfirmed,
+	}
+	if err := store.RecordPreflightCheck(ctx, domain.PreflightCheck{
+		ID: "preflight", IntentID: intent.ID, IntentVersion: intent.Version,
+		Status: domain.PreflightStatusClear, CapturedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	intent, err = intents.ActivateIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.Status != domain.IntentStatusActive || coordinator.reconciles != 1 {
+		t.Fatalf("activated intent=%+v coordinator=%+v", intent, coordinator)
+	}
+	intent, err = intents.CompleteIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication, err := store.GetOperationalIntentPublication(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.Status != domain.IntentStatusComplete || publication.DesiredState != domain.OperationalIntentExternalStateWithdrawn {
+		t.Fatalf("completed intent=%+v publication=%+v", intent, publication)
+	}
+}
+
+func TestActivationUsesExistingDSSActivationConfirmation(t *testing.T) {
+	ctx := context.Background()
+	now := fixedWorkflowTime()
+	store := durablememory.NewStore()
+	coordinator := &workflowCoordinator{}
+	intents := NewIntentServiceWithClock(store, fixedClock(now), coordinator)
+	intent, err := intents.CreateIntent(ctx, workflowIntentRequest(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := intents.AddOperationalVolume(ctx, intent.ID, workflowVolumeRequest(now)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := intents.SubmitIntent(ctx, intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	intent, err = intents.AcceptIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.publication = domain.OperationalIntentPublication{
+		IntentID: intent.ID, PublishedIntentVersion: intent.Version,
+		ConfirmedState: domain.OperationalIntentExternalStateActivated,
+		SyncStatus:     domain.PublicationSyncConfirmed,
+	}
+	if err := store.RecordPreflightCheck(ctx, domain.PreflightCheck{
+		ID: "preflight", IntentID: intent.ID, IntentVersion: intent.Version,
+		Status: domain.PreflightStatusClear, CapturedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	intent, err = intents.ActivateIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.Status != domain.IntentStatusActive || coordinator.reconciles != 0 {
+		t.Fatalf("recovered intent=%+v coordinator=%+v", intent, coordinator)
+	}
+}
+
 func TestIntentLifecycleHappyPath(t *testing.T) {
 	ctx := context.Background()
 	store := durablememory.NewStore()

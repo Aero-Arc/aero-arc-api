@@ -62,11 +62,10 @@ type CoordinationStore interface {
 	ClaimOperationalIntentPublication(ctx context.Context, intentID string, now, leaseUntil time.Time) (domain.OperationalIntentPublication, error)
 	ClaimDueOperationalIntentPublications(ctx context.Context, now, leaseUntil time.Time, limit int) ([]domain.OperationalIntentPublication, error)
 	UpdateOperationalIntentPublication(ctx context.Context, publication domain.OperationalIntentPublication, expectedRevision int64) error
-	EnqueuePeerNotifications(ctx context.Context, notifications []domain.PeerNotification) error
+	ConfirmOperationalIntentPublication(ctx context.Context, publication domain.OperationalIntentPublication, expectedRevision int64, notifications []domain.PeerNotification) error
 	ClaimDuePeerNotifications(ctx context.Context, now, leaseUntil time.Time, limit int) ([]domain.PeerNotification, error)
 	UpdatePeerNotification(ctx context.Context, notification domain.PeerNotification, expectedRevision int64) error
 	RecordReceivedPeerNotification(ctx context.Context, notification domain.ReceivedPeerNotification) error
-	ListReceivedPeerNotifications(ctx context.Context, intentID string) ([]domain.ReceivedPeerNotification, error)
 }
 
 // Store defines the durable system-of-record operations used by the API.

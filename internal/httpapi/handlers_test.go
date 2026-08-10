@@ -281,6 +281,45 @@ func TestHandleActivateOperationalIntentRunsPreflight(t *testing.T) {
 	}
 }
 
+func TestOperationalIntentTerminalTransitionRoutes(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	store := durablememory.NewStore()
+	for _, intent := range []domain.OperationalIntent{
+		{ID: "active-intent", Version: 1, Status: domain.IntentStatusActive, PlannedStartAt: now, PlannedEndAt: now.Add(time.Hour), UpdatedAt: now},
+		{ID: "draft-intent", Version: 1, Status: domain.IntentStatusDraft, PlannedStartAt: now, PlannedEndAt: now.Add(time.Hour), UpdatedAt: now},
+	} {
+		if err := store.CreateOperationalIntent(ctx, intent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := NewWithWorkflows(
+		nil,
+		service.NewIntentServiceWithClock(store, func() time.Time { return now }, nil),
+		service.NewPreflightServiceWithClock(store, func() time.Time { return now }),
+		service.NewConformanceServiceWithClock(store, telemetrymemory.NewStore(), func() time.Time { return now }),
+		time.Second,
+	)
+	for _, test := range []struct {
+		path   string
+		id     string
+		status domain.IntentStatus
+	}{
+		{path: "/api/v1/operational-intents/active-intent/complete", id: "active-intent", status: domain.IntentStatusComplete},
+		{path: "/api/v1/operational-intents/draft-intent/cancel", id: "draft-intent", status: domain.IntentStatusCanceled},
+	} {
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, test.path, nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", test.path, response.Code, response.Body.String())
+		}
+		intent, err := store.GetOperationalIntent(ctx, test.id)
+		if err != nil || intent.Status != test.status {
+			t.Fatalf("%s intent=%+v err=%v", test.path, intent, err)
+		}
+	}
+}
+
 func TestHandleAddOperationalVolumeRejectsSubmittedIntent(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 6, 15, 15, 0, 0, 0, time.UTC)

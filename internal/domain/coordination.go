@@ -18,7 +18,6 @@ const (
 	PublicationSyncConfirmed  PublicationSyncStatus = "confirmed"
 	PublicationSyncRetrying   PublicationSyncStatus = "retrying"
 	PublicationSyncBlocked    PublicationSyncStatus = "blocked"
-	PublicationSyncFailed     PublicationSyncStatus = "failed"
 	PublicationSyncWithdrawn  PublicationSyncStatus = "withdrawn"
 )
 

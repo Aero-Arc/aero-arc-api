@@ -3,6 +3,7 @@ package deconfliction
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
+	dss "github.com/Aero-Arc/dss-clients/interuss"
 )
 
 type recordingPublisher struct {
@@ -113,6 +115,77 @@ func TestPublicationReconcilerCreatesUpdatesAndWithdrawsOneDSSReference(t *testi
 	publication, _ = deconflictionService.GetPublication(ctx, intent.ID)
 	if publisher.deletes != 1 || publication.SyncStatus != domain.PublicationSyncWithdrawn || publication.PublishedIntentVersion != 0 {
 		t.Fatalf("after delete: publisher=%+v publication=%+v", publisher, publication)
+	}
+}
+
+func TestActivationRecoversWhenDSSIsAlreadyActivated(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 10, 18, 0, 0, 0, time.UTC)
+	store := durablememory.NewStore()
+	publisher := &recordingPublisher{}
+	deconflictionService, err := NewDeconflictionServiceWithClock(store, func() time.Time { return now }, publisher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intents := service.NewIntentServiceWithClock(store, func() time.Time { return now }, deconflictionService)
+	intent, err := intents.CreateIntent(ctx, service.CreateIntentRequest{
+		ID: uuid.NewString(), AircraftID: "aircraft-1", Name: "recover activation", Summary: "test",
+		PlannedStartAt: now.Add(time.Hour), PlannedEndAt: now.Add(2 * time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	minimum, maximum := 10.0, 100.0
+	if _, err := intents.AddOperationalVolume(ctx, intent.ID, service.AddOperationalVolumeRequest{
+		ID: "volume-1", GeoJSON: `{"type":"Polygon","coordinates":[[[-98,35],[-97,35],[-97,36],[-98,36],[-98,35]]]}`,
+		MinAltitudeM: &minimum, MaxAltitudeM: &maximum, AltitudeRef: domain.AltitudeReferenceWGS84,
+		StartsAt: now.Add(time.Hour), EndsAt: now.Add(2 * time.Hour), VolumeType: domain.OperationalVolumeRoute,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := intents.SubmitIntent(ctx, intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	intent, err = intents.AcceptIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := deconflictionService.ReconcileIntent(ctx, intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordPreflightCheck(ctx, domain.PreflightCheck{
+		ID: "preflight", IntentID: intent.ID, IntentVersion: intent.Version,
+		AircraftID: intent.AircraftID, Status: domain.PreflightStatusClear, CapturedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	request := deconflictionService.PublicationRequest(intent, domain.OperationalIntentExternalStateActivated)
+	if err := store.RequestOperationalIntentPublication(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := deconflictionService.ReconcileIntent(ctx, intent.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	intent, err = intents.ActivateIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.Status != domain.IntentStatusActive || publisher.updates != 1 {
+		t.Fatalf("intent=%+v publisher=%+v", intent, publisher)
+	}
+}
+
+func TestDSSConflictResponseRemainsRetryable(t *testing.T) {
+	err := &dss.SCDResponseError{StatusCode: 409, Status: "409 Conflict"}
+	if permanentPublicationError(err) {
+		t.Fatal("DSS conflict was classified as permanent")
+	}
+	if !permanentPublicationError(&dss.SCDResponseError{StatusCode: 403, Status: "403 Forbidden"}) {
+		t.Fatal("DSS authorization failure was not classified as permanent")
+	}
+	if permanentPublicationError(errors.New("network failure")) {
+		t.Fatal("network failure was classified as permanent")
 	}
 }
 

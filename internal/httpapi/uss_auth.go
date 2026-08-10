@@ -63,7 +63,10 @@ func (a *USSJWTAuthorizer) Authorize(request *http.Request, requiredScope string
 		return "", errUSSUnauthorized
 	}
 	claims := &ussClaims{}
-	options := []jwt.ParserOption{jwt.WithValidMethods([]string{"RS256", "RS384", "RS512"})}
+	options := []jwt.ParserOption{
+		jwt.WithValidMethods([]string{"RS256", "RS384", "RS512"}),
+		jwt.WithExpirationRequired(),
+	}
 	if a.issuer != "" {
 		options = append(options, jwt.WithIssuer(a.issuer))
 	}

@@ -377,7 +377,9 @@ func (s *Store) ClaimDueOperationalIntentPublications(_ context.Context, now, le
 		if publication.NextAttemptAt.After(now) || publication.LeaseUntil != nil && publication.LeaseUntil.After(now) {
 			continue
 		}
-		if publication.SyncStatus != domain.PublicationSyncPending && publication.SyncStatus != domain.PublicationSyncRetrying {
+		if publication.SyncStatus != domain.PublicationSyncPending &&
+			publication.SyncStatus != domain.PublicationSyncRetrying &&
+			publication.SyncStatus != domain.PublicationSyncProcessing {
 			continue
 		}
 		ids = append(ids, id)
@@ -417,16 +419,33 @@ func (s *Store) UpdateOperationalIntentPublication(_ context.Context, publicatio
 	return nil
 }
 
-func (s *Store) EnqueuePeerNotifications(_ context.Context, notifications []domain.PeerNotification) error {
+func (s *Store) ConfirmOperationalIntentPublication(_ context.Context, publication domain.OperationalIntentPublication, expectedRevision int64, notifications []domain.PeerNotification) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	current, ok := s.publications[publication.IntentID]
+	if !ok {
+		return durable.ErrNotFound
+	}
+	if current.Revision != expectedRevision {
+		return durable.ErrVersionConflict
+	}
+	publication.Revision = expectedRevision + 1
+	publication.LeaseUntil = nil
+	s.publications[publication.IntentID] = clonePublication(publication)
+	s.enqueuePeerNotificationsLocked(notifications)
+	return nil
+}
+
+func (s *Store) enqueuePeerNotificationsLocked(notifications []domain.PeerNotification) {
 	for _, notification := range notifications {
+		if _, exists := s.peerNotifications[notification.ID]; exists {
+			continue
+		}
 		copy := notification
 		copy.Revision = 0
 		copy.Payload = append([]byte(nil), notification.Payload...)
 		s.peerNotifications[notification.ID] = copy
 	}
-	return nil
 }
 
 func (s *Store) ClaimDuePeerNotifications(_ context.Context, now, leaseUntil time.Time, limit int) ([]domain.PeerNotification, error) {

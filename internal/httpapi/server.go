@@ -96,6 +96,8 @@ func (s *Server) Handler() http.Handler {
 		}
 		api.POST("/operational-intents/{intent_id}/accept", s.handleAcceptOperationalIntent)
 		api.POST("/operational-intents/{intent_id}/activate", s.handleActivateOperationalIntent)
+		api.POST("/operational-intents/{intent_id}/complete", s.handleCompleteOperationalIntent)
+		api.POST("/operational-intents/{intent_id}/cancel", s.handleCancelOperationalIntent)
 		api.GET("/operational-intents/{intent_id}/conformance", s.handleGetOperationalIntentConformance)
 		api.POST("/telemetry", s.handleTelemetry)
 	}
