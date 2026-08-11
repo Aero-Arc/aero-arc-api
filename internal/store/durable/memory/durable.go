@@ -253,6 +253,19 @@ func (s *Store) updateOperationalIntentLocked(intent domain.OperationalIntent, e
 	}
 	intent.Revision = expectedRevision + 1
 	s.operationalIntents[operationalIntentKey(intent.ID, intent.Version)] = intent
+	if intent.Status == domain.IntentStatusCanceled || intent.Status == domain.IntentStatusComplete {
+		for key, prior := range s.operationalIntents {
+			if prior.ID != intent.ID || prior.Version >= intent.Version || prior.Status != domain.IntentStatusAccepted {
+				continue
+			}
+			prior.Status = intent.Status
+			prior.CanceledAt = intent.CanceledAt
+			prior.CompletedAt = intent.CompletedAt
+			prior.UpdatedAt = intent.UpdatedAt
+			prior.Revision++
+			s.operationalIntents[key] = prior
+		}
+	}
 	return nil
 }
 

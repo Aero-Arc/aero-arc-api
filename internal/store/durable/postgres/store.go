@@ -123,6 +123,36 @@ func updateOperationalIntentTx(ctx context.Context, tx pgx.Tx, intent domain.Ope
 		}
 		return durable.ErrVersionConflict
 	}
+	if intent.Status == domain.IntentStatusCanceled || intent.Status == domain.IntentStatusComplete {
+		if err := retirePriorAcceptedIntentsTx(ctx, tx, intent); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func retirePriorAcceptedIntentsTx(ctx context.Context, tx pgx.Tx, terminal domain.OperationalIntent) error {
+	rows, err := tx.Query(ctx, `
+		SELECT data, revision
+		FROM operational_intents
+		WHERE id = $1 AND version < $2 AND data->>'status' = $3
+		ORDER BY version`, terminal.ID, terminal.Version, domain.IntentStatusAccepted)
+	if err != nil {
+		return fmt.Errorf("list accepted operational intent versions for terminal transition: %w", err)
+	}
+	priorIntents, err := readIntents(rows)
+	if err != nil {
+		return err
+	}
+	for _, prior := range priorIntents {
+		prior.Status = terminal.Status
+		prior.CanceledAt = terminal.CanceledAt
+		prior.CompletedAt = terminal.CompletedAt
+		prior.UpdatedAt = terminal.UpdatedAt
+		if err := upsertIntent(ctx, tx, prior, prior.Revision+1); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

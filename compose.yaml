@@ -47,7 +47,8 @@ services:
     ports:
       - "${API_PORT:-8080}:8080"
     secrets:
-      - uss-auth-public
+      - source: uss-auth-public
+        target: uss-auth-public.pem
     restart: unless-stopped
     networks:
       - aero-arc
