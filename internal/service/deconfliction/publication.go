@@ -40,8 +40,12 @@ func (s *DeconflictionService) ValidatePublication(ctx context.Context, intent d
 	if err != nil {
 		return err
 	}
+	volumes = volumesForVersion(volumes, intent.Version)
+	if len(volumes) == 0 {
+		return fmt.Errorf("at least one operational volume is required")
+	}
 	return s.publisher.ValidateOperationalIntent(airspaceprovider.PublicationRequest{
-		Intent: intent, Volumes: volumesForVersion(volumes, intent.Version), State: state,
+		Intent: intent, Volumes: volumes, State: state,
 	})
 }
 

@@ -71,6 +71,31 @@ func TestAcceptIntentRejectsDSSIncompatiblePublication(t *testing.T) {
 	}
 }
 
+func TestCancelLegacyIntentSkipsDSSWithdrawal(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	now := fixedWorkflowTime()
+	intent := domain.OperationalIntent{
+		ID: "legacy-intent", Version: 1, Status: domain.IntentStatusSubmitted,
+		PlannedStartAt: now, PlannedEndAt: now.Add(time.Hour), UpdatedAt: now,
+	}
+	if err := store.CreateOperationalIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	coordinator := &durableWorkflowCoordinator{store: store, now: now}
+
+	canceled, err := NewIntentServiceWithClock(store, fixedClock(now), coordinator).CancelIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canceled.Status != domain.IntentStatusCanceled {
+		t.Fatalf("status = %q, want canceled", canceled.Status)
+	}
+	if _, publicationErr := store.GetOperationalIntentPublication(ctx, intent.ID); !errors.Is(publicationErr, durable.ErrNotFound) {
+		t.Fatalf("publication error = %v, want not found", publicationErr)
+	}
+}
+
 type workflowCoordinator struct {
 	publication domain.OperationalIntentPublication
 	reconciles  int

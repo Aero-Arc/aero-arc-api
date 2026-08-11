@@ -201,6 +201,26 @@ func TestPublicationMutationDoesNotStartAfterConcurrentWithdrawal(t *testing.T) 
 	}
 }
 
+func TestPublicationValidationRequiresOperationalVolume(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 10, 18, 0, 0, 0, time.UTC)
+	store := durablememory.NewStore()
+	intent := domain.OperationalIntent{
+		ID: uuid.NewString(), Version: 1, Status: domain.IntentStatusSubmitted,
+		PlannedStartAt: now.Add(time.Hour), PlannedEndAt: now.Add(2 * time.Hour), UpdatedAt: now,
+	}
+	if err := store.CreateOperationalIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	deconflictionService, err := NewDeconflictionServiceWithClock(store, func() time.Time { return now }, &recordingPublisher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := deconflictionService.ValidatePublication(ctx, intent, domain.OperationalIntentExternalStateAccepted); err == nil {
+		t.Fatal("ValidatePublication accepted an intent without volumes")
+	}
+}
+
 func TestActivationRecoversWhenDSSIsAlreadyActivated(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 8, 10, 18, 0, 0, 0, time.UTC)
