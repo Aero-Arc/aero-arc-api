@@ -31,12 +31,46 @@ func TestGuardedPublicationRejectsStaleIntent(t *testing.T) {
 	}
 	activated := withdrawn
 	activated.DesiredState = domain.OperationalIntentExternalStateActivated
-	if err := store.RequestOperationalIntentPublicationIfCurrent(ctx, activated, 0, domain.IntentStatusAccepted); !errors.Is(err, durable.ErrVersionConflict) {
+	if err := store.RequestOperationalIntentPublicationIfCurrent(ctx, activated, intent.Version, 0, domain.IntentStatusAccepted); !errors.Is(err, durable.ErrVersionConflict) {
 		t.Fatalf("guarded activation error = %v, want version conflict", err)
 	}
 	publication, err := store.GetOperationalIntentPublication(ctx, intent.ID)
 	if err != nil || publication.DesiredState != domain.OperationalIntentExternalStateWithdrawn {
 		t.Fatalf("publication = %#v, %v; want withdrawal preserved", publication, err)
+	}
+}
+
+func TestGuardedPublicationCanRestorePriorAcceptedVersion(t *testing.T) {
+	ctx := context.Background()
+	store := NewStore()
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	v1 := domain.OperationalIntent{
+		ID: "66666666-6666-4666-8666-666666666666", Version: 1,
+		Status: domain.IntentStatusAccepted, PlannedStartAt: now, PlannedEndAt: now.Add(time.Hour), UpdatedAt: now,
+	}
+	if err := store.CreateOperationalIntent(ctx, v1); err != nil {
+		t.Fatal(err)
+	}
+	publication := domain.OperationalIntentPublication{
+		IntentID: v1.ID, DesiredIntentVersion: 1,
+		DesiredState: domain.OperationalIntentExternalStateActivated, NextAttemptAt: now, UpdatedAt: now,
+	}
+	if err := store.RequestOperationalIntentPublication(ctx, publication); err != nil {
+		t.Fatal(err)
+	}
+	v2 := v1
+	v2.Version = 2
+	v2.Status = domain.IntentStatusDraft
+	if err := store.ReplaceOperationalIntent(ctx, 1, 0, v2, nil); err != nil {
+		t.Fatal(err)
+	}
+	publication.DesiredState = domain.OperationalIntentExternalStateAccepted
+	if err := store.RequestOperationalIntentPublicationIfCurrent(ctx, publication, 2, 0, domain.IntentStatusDraft); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.GetOperationalIntentPublication(ctx, v1.ID)
+	if err != nil || stored.DesiredIntentVersion != 1 || stored.DesiredState != domain.OperationalIntentExternalStateAccepted {
+		t.Fatalf("publication = %#v, %v; want accepted v1", stored, err)
 	}
 }
 

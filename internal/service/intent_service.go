@@ -378,7 +378,7 @@ func (s *IntentService) ActivateIntent(ctx context.Context, intentID string) (do
 		publication, err := s.deconfliction.GetPublication(ctx, intent.ID)
 		if errors.Is(err, durable.ErrNotFound) {
 			request := s.deconfliction.PublicationRequest(intent, domain.OperationalIntentExternalStateAccepted)
-			if err := s.durable.RequestOperationalIntentPublicationIfCurrent(ctx, request, intent.Revision, domain.IntentStatusAccepted); err != nil {
+			if err := s.durable.RequestOperationalIntentPublicationIfCurrent(ctx, request, intent.Version, intent.Revision, domain.IntentStatusAccepted); err != nil {
 				return domain.OperationalIntent{}, fmt.Errorf("backfill DSS acceptance: %w", err)
 			}
 			if err := s.deconfliction.ReconcileIntent(ctx, intent.ID); err != nil {
@@ -392,7 +392,7 @@ func (s *IntentService) ActivateIntent(ctx context.Context, intentID string) (do
 		switch publication.ConfirmedState {
 		case domain.OperationalIntentExternalStateAccepted:
 			request := s.deconfliction.PublicationRequest(intent, domain.OperationalIntentExternalStateActivated)
-			if err := s.durable.RequestOperationalIntentPublicationIfCurrent(ctx, request, intent.Revision, domain.IntentStatusAccepted); err != nil {
+			if err := s.durable.RequestOperationalIntentPublicationIfCurrent(ctx, request, intent.Version, intent.Revision, domain.IntentStatusAccepted); err != nil {
 				return domain.OperationalIntent{}, fmt.Errorf("request DSS activation: %w", err)
 			}
 			if err := s.deconfliction.ReconcileIntent(ctx, intent.ID); err != nil {
@@ -446,8 +446,23 @@ func (s *IntentService) compensatePublishedActivation(ctx context.Context, inten
 		publication.DesiredState != domain.OperationalIntentExternalStateActivated {
 		return nil
 	}
-	request := s.deconfliction.PublicationRequest(current, domain.OperationalIntentExternalStateWithdrawn)
-	if err := s.durable.RequestOperationalIntentPublicationIfCurrent(ctx, request, current.Revision, current.Status); err != nil {
+	desiredState := domain.OperationalIntentExternalStateWithdrawn
+	desiredIntent := current
+	switch current.Status {
+	case domain.IntentStatusAccepted:
+		desiredState = domain.OperationalIntentExternalStateAccepted
+	case domain.IntentStatusDraft, domain.IntentStatusSubmitted, domain.IntentStatusReview:
+		published, err := s.durable.GetOperationalIntentVersion(ctx, intentID, publication.PublishedIntentVersion)
+		if err != nil {
+			return err
+		}
+		if published.Status == domain.IntentStatusAccepted {
+			desiredState = domain.OperationalIntentExternalStateAccepted
+			desiredIntent = published
+		}
+	}
+	request := s.deconfliction.PublicationRequest(desiredIntent, desiredState)
+	if err := s.durable.RequestOperationalIntentPublicationIfCurrent(ctx, request, current.Version, current.Revision, current.Status); err != nil {
 		return err
 	}
 	return s.deconfliction.ReconcileIntent(ctx, intentID)
