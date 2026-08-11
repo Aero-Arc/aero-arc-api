@@ -508,9 +508,15 @@ func (s *IntentService) transitionIntentWithPublication(ctx context.Context, int
 	intent.Status = next
 	intent.UpdatedAt = now
 	mutate(&intent, now)
-	publication := s.deconfliction.PublicationRequest(intent, desired)
-	if err := s.durable.UpdateOperationalIntentAndRequestPublication(ctx, intent, expectedRevision, publication); err != nil {
-		return domain.OperationalIntent{}, fmt.Errorf("update operational intent and request DSS withdrawal: %w", err)
+	if _, err := canonicalDSSIntentID(intent.ID); err != nil {
+		if err := s.durable.UpdateOperationalIntent(ctx, intent, expectedRevision); err != nil {
+			return domain.OperationalIntent{}, fmt.Errorf("update legacy operational intent: %w", err)
+		}
+	} else {
+		publication := s.deconfliction.PublicationRequest(intent, desired)
+		if err := s.durable.UpdateOperationalIntentAndRequestPublication(ctx, intent, expectedRevision, publication); err != nil {
+			return domain.OperationalIntent{}, fmt.Errorf("update operational intent and request DSS withdrawal: %w", err)
+		}
 	}
 	intent.Revision = expectedRevision + 1
 	return intent, nil
