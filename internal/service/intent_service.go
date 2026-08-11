@@ -136,7 +136,7 @@ func (s *IntentService) CreateIntent(ctx context.Context, req CreateIntentReques
 	id := strings.TrimSpace(req.ID)
 	if id == "" {
 		id = uuid.NewString()
-	} else {
+	} else if s.deconfliction != nil && s.deconfliction.PublishingEnabled() {
 		parsed, err := uuid.Parse(id)
 		if err != nil || parsed.Version() != 4 {
 			return domain.OperationalIntent{}, fmt.Errorf("%w: id must be a UUIDv4", ErrValidation)
@@ -371,7 +371,7 @@ func (s *IntentService) ActivateIntent(ctx context.Context, intentID string) (do
 		switch publication.ConfirmedState {
 		case domain.OperationalIntentExternalStateAccepted:
 			request := s.deconfliction.PublicationRequest(intent, domain.OperationalIntentExternalStateActivated)
-			if err := s.durable.RequestOperationalIntentPublication(ctx, request); err != nil {
+			if err := s.durable.RequestOperationalIntentPublicationIfCurrent(ctx, request, intent.Revision, domain.IntentStatusAccepted); err != nil {
 				return domain.OperationalIntent{}, fmt.Errorf("request DSS activation: %w", err)
 			}
 			if err := s.deconfliction.ReconcileIntent(ctx, intent.ID); err != nil {

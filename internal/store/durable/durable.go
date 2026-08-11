@@ -58,6 +58,7 @@ type CoordinationStore interface {
 	AcceptOperationalIntentAndRequestPublication(ctx context.Context, intent domain.OperationalIntent, expectedRevision int64, publication domain.OperationalIntentPublication) error
 	UpdateOperationalIntentAndRequestPublication(ctx context.Context, intent domain.OperationalIntent, expectedRevision int64, publication domain.OperationalIntentPublication) error
 	RequestOperationalIntentPublication(ctx context.Context, publication domain.OperationalIntentPublication) error
+	RequestOperationalIntentPublicationIfCurrent(ctx context.Context, publication domain.OperationalIntentPublication, expectedIntentRevision int64, expectedStatus domain.IntentStatus) error
 	GetOperationalIntentPublication(ctx context.Context, intentID string) (domain.OperationalIntentPublication, error)
 	ClaimOperationalIntentPublication(ctx context.Context, intentID string, now, leaseUntil time.Time) (domain.OperationalIntentPublication, error)
 	ClaimDueOperationalIntentPublications(ctx context.Context, now, leaseUntil time.Time, limit int) ([]domain.OperationalIntentPublication, error)

@@ -72,6 +72,37 @@ func (s *Store) RequestOperationalIntentPublication(ctx context.Context, publica
 	return nil
 }
 
+func (s *Store) RequestOperationalIntentPublicationIfCurrent(ctx context.Context, publication domain.OperationalIntentPublication, expectedIntentRevision int64, expectedStatus domain.IntentStatus) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin guarded publication request: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockIntent(ctx, tx, publication.IntentID); err != nil {
+		return err
+	}
+	var version int
+	var revision int64
+	var status domain.IntentStatus
+	err = tx.QueryRow(ctx, `SELECT version, revision, data->>'status' FROM operational_intents WHERE id = $1 ORDER BY version DESC LIMIT 1`, publication.IntentID).Scan(&version, &revision, &status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return durable.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("read current operational intent for publication: %w", err)
+	}
+	if version != publication.DesiredIntentVersion || revision != expectedIntentRevision || status != expectedStatus {
+		return durable.ErrVersionConflict
+	}
+	if err := requestPublicationTx(ctx, tx, publication); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit guarded publication request: %w", err)
+	}
+	return nil
+}
+
 func requestPublicationTx(ctx context.Context, tx pgx.Tx, request domain.OperationalIntentPublication) error {
 	var exists bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM operational_intents WHERE id = $1 AND version = $2)`, request.IntentID, request.DesiredIntentVersion).Scan(&exists); err != nil {
