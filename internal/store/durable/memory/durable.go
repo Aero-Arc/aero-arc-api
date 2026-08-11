@@ -305,6 +305,26 @@ func (s *Store) UpdateOperationalIntentAndRequestPublication(_ context.Context, 
 	return nil
 }
 
+func (s *Store) ReplaceOperationalIntentAndRequestPublication(
+	_ context.Context,
+	expectedVersion int,
+	expectedRevision int64,
+	intent domain.OperationalIntent,
+	volumes []domain.OperationalVolume,
+	publication domain.OperationalIntentPublication,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if publication.IntentID != intent.ID || publication.DesiredIntentVersion != expectedVersion {
+		return durable.ErrVersionConflict
+	}
+	if err := s.replaceOperationalIntentLocked(expectedVersion, expectedRevision, intent, volumes); err != nil {
+		return err
+	}
+	s.requestPublicationLocked(publication)
+	return nil
+}
+
 func (s *Store) RequestOperationalIntentPublication(_ context.Context, publication domain.OperationalIntentPublication) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -643,6 +663,15 @@ func (s *Store) ReplaceOperationalIntent(
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.replaceOperationalIntentLocked(expectedVersion, expectedRevision, intent, volumes)
+}
+
+func (s *Store) replaceOperationalIntentLocked(
+	expectedVersion int,
+	expectedRevision int64,
+	intent domain.OperationalIntent,
+	volumes []domain.OperationalVolume,
+) error {
 	if intent.Version != expectedVersion && intent.Version != expectedVersion+1 {
 		return durable.ErrVersionConflict
 	}

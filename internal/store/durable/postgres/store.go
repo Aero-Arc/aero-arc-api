@@ -256,12 +256,6 @@ func (s *Store) ReplaceOperationalVolumes(ctx context.Context, id string, versio
 }
 
 func (s *Store) ReplaceOperationalIntent(ctx context.Context, expectedVersion int, expectedRevision int64, intent domain.OperationalIntent, volumes []domain.OperationalVolume) error {
-	if intent.Version != expectedVersion && intent.Version != expectedVersion+1 {
-		return durable.ErrVersionConflict
-	}
-	if err := validateVolumeScope(intent.ID, intent.Version, volumes); err != nil {
-		return err
-	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin operational intent replacement: %w", err)
@@ -272,9 +266,25 @@ func (s *Store) ReplaceOperationalIntent(ctx context.Context, expectedVersion in
 	if err := lockIntent(ctx, tx, intent.ID); err != nil {
 		return err
 	}
+	if err := replaceOperationalIntentTx(ctx, tx, expectedVersion, expectedRevision, intent, volumes); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit operational intent replacement: %w", err)
+	}
+	return nil
+}
+
+func replaceOperationalIntentTx(ctx context.Context, tx pgx.Tx, expectedVersion int, expectedRevision int64, intent domain.OperationalIntent, volumes []domain.OperationalVolume) error {
+	if intent.Version != expectedVersion && intent.Version != expectedVersion+1 {
+		return durable.ErrVersionConflict
+	}
+	if err := validateVolumeScope(intent.ID, intent.Version, volumes); err != nil {
+		return err
+	}
 	var currentVersion int
 	var currentRevision int64
-	err = tx.QueryRow(ctx, `SELECT version, revision FROM operational_intents WHERE id = $1 ORDER BY version DESC LIMIT 1`, intent.ID).Scan(&currentVersion, &currentRevision)
+	err := tx.QueryRow(ctx, `SELECT version, revision FROM operational_intents WHERE id = $1 ORDER BY version DESC LIMIT 1`, intent.ID).Scan(&currentVersion, &currentRevision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return durable.ErrNotFound
 	}
@@ -293,9 +303,6 @@ func (s *Store) ReplaceOperationalIntent(ctx context.Context, expectedVersion in
 	}
 	if err := replaceVolumes(ctx, tx, intent.ID, intent.Version, volumes); err != nil {
 		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit operational intent replacement: %w", err)
 	}
 	return nil
 }

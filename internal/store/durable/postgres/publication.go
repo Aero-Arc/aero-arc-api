@@ -54,6 +54,37 @@ func (s *Store) UpdateOperationalIntentAndRequestPublication(ctx context.Context
 	return nil
 }
 
+func (s *Store) ReplaceOperationalIntentAndRequestPublication(
+	ctx context.Context,
+	expectedVersion int,
+	expectedRevision int64,
+	intent domain.OperationalIntent,
+	volumes []domain.OperationalVolume,
+	publication domain.OperationalIntentPublication,
+) error {
+	if publication.IntentID != intent.ID || publication.DesiredIntentVersion != expectedVersion {
+		return durable.ErrVersionConflict
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin intent replacement and publication: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockIntent(ctx, tx, intent.ID); err != nil {
+		return err
+	}
+	if err := replaceOperationalIntentTx(ctx, tx, expectedVersion, expectedRevision, intent, volumes); err != nil {
+		return err
+	}
+	if err := requestPublicationTx(ctx, tx, publication); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit intent replacement and publication: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) RequestOperationalIntentPublication(ctx context.Context, publication domain.OperationalIntentPublication) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
