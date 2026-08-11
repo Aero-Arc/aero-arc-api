@@ -57,6 +57,7 @@ type OperationalStore interface {
 type CoordinationStore interface {
 	AcceptOperationalIntentAndRequestPublication(ctx context.Context, intent domain.OperationalIntent, expectedRevision int64, publication domain.OperationalIntentPublication) error
 	UpdateOperationalIntentAndRequestPublication(ctx context.Context, intent domain.OperationalIntent, expectedRevision int64, publication domain.OperationalIntentPublication) error
+	ReplaceOperationalIntentAndRequestPublication(ctx context.Context, expectedVersion int, expectedRevision int64, intent domain.OperationalIntent, volumes []domain.OperationalVolume, publication domain.OperationalIntentPublication) error
 	RequestOperationalIntentPublication(ctx context.Context, publication domain.OperationalIntentPublication) error
 	RequestOperationalIntentPublicationIfCurrent(ctx context.Context, publication domain.OperationalIntentPublication, expectedIntentRevision int64, expectedStatus domain.IntentStatus) error
 	GetOperationalIntentPublication(ctx context.Context, intentID string) (domain.OperationalIntentPublication, error)

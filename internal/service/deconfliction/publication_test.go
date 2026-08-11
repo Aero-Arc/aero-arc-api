@@ -363,6 +363,63 @@ func TestLostMutationResponseRetriesUpdateToRecoverSubscribers(t *testing.T) {
 	}
 }
 
+func TestLostUpdateResponseKeepsReferenceAndVolumesOnSameIntentVersion(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 10, 18, 0, 0, 0, time.UTC)
+	store := durablememory.NewStore()
+	v1 := publicationTestIntent(t, ctx, store, now)
+	publisher := &recordingPublisher{}
+	deconflictionService, err := NewDeconflictionServiceWithClock(store, func() time.Time { return now }, publisher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RequestOperationalIntentPublication(ctx, deconflictionService.PublicationRequest(v1, domain.OperationalIntentExternalStateAccepted)); err != nil {
+		t.Fatal(err)
+	}
+	if err := deconflictionService.ReconcileIntent(ctx, v1.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	v2 := v1
+	v2.Version = 2
+	v2.UpdatedAt = now.Add(time.Minute)
+	volumes, err := store.ListOperationalVolumes(ctx, v1.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2Volume := volumes[0]
+	v2Volume.ID = "volume-2"
+	v2Volume.IntentVersion = v2.Version
+	v2Volume.UpdatedAt = v2.UpdatedAt
+	if err := store.ReplaceOperationalIntent(ctx, v1.Version, v1.Revision, v2, []domain.OperationalVolume{v2Volume}); err != nil {
+		t.Fatal(err)
+	}
+
+	lostResponse := errors.New("connection closed after DSS update")
+	recovered := testReceipt(airspaceprovider.PublicationRequest{
+		Intent: v2, State: domain.OperationalIntentExternalStateAccepted,
+	}, 2)
+	recovered.Subscribers = nil
+	publisher.updateFn = func(airspaceprovider.PublicationRequest) (airspaceprovider.PublicationReceipt, error) {
+		return airspaceprovider.PublicationReceipt{}, lostResponse
+	}
+	publisher.getFn = func(string) (airspaceprovider.PublicationReceipt, error) { return recovered, nil }
+	if err := store.RequestOperationalIntentPublication(ctx, deconflictionService.PublicationRequest(v2, domain.OperationalIntentExternalStateAccepted)); err != nil {
+		t.Fatal(err)
+	}
+	if err := deconflictionService.ReconcileIntent(ctx, v2.ID); !errors.Is(err, lostResponse) {
+		t.Fatalf("reconciliation error = %v, want lost response", err)
+	}
+
+	publication, publishedVolumes, err := deconflictionService.GetPublishedOperationalIntent(ctx, v2.ID, recovered.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if publication.PublishedIntentVersion != v2.Version || len(publishedVolumes) != 1 || publishedVolumes[0].IntentVersion != v2.Version {
+		t.Fatalf("publication=%+v volumes=%+v, want recovered v2 reference with v2 volumes", publication, publishedVolumes)
+	}
+}
+
 func TestTransientIndeterminateDeconflictionRetriesPublication(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 8, 10, 18, 0, 0, 0, time.UTC)
@@ -590,6 +647,7 @@ func testReceipt(request airspaceprovider.PublicationRequest, version int) airsp
 	return airspaceprovider.PublicationReceipt{
 		Manager: "aero-arc", Version: version, OVN: request.Intent.ID + "-ovn",
 		SubscriptionID: "11111111-1111-4111-8111-111111111111", USSBaseURL: "https://uss.example", ReferenceJSON: reference,
+		State:       request.State,
 		Subscribers: []airspaceprovider.Subscriber{{USSBaseURL: "https://subscriber.example"}},
 	}
 }

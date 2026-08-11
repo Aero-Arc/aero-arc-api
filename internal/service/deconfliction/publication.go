@@ -208,6 +208,8 @@ func (s *DeconflictionService) reconcileClaimed(ctx context.Context, publication
 			// subscribers. Persist the recovered reference and retry as an update
 			// so peer notifications are built from a complete mutation receipt.
 			applyReceipt(&publication, current)
+			publication.PublishedIntentVersion = publication.DesiredIntentVersion
+			publication.ConfirmedState = current.State
 			return s.recordPublicationFailure(ctx, publication, expectedRevision,
 				fmt.Errorf("DSS mutation response was lost before subscribers were recorded: %w", err), false)
 		} else {

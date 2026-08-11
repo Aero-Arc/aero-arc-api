@@ -628,7 +628,8 @@ func TestModifyAcceptedIntentCreatesDraftNextVersion(t *testing.T) {
 	now := fixedWorkflowTime()
 	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
 
-	intents := NewIntentServiceWithClock(store, fixedClock(now), nil)
+	coordinator := &durableWorkflowCoordinator{store: store, now: now}
+	intents := NewIntentServiceWithClock(store, fixedClock(now), coordinator)
 	intent := seedSubmittedIntentWithVolume(t, ctx, store, now)
 	intent, err := intents.AcceptIntent(ctx, intent.ID)
 	if err != nil {
@@ -661,6 +662,13 @@ func TestModifyAcceptedIntentCreatesDraftNextVersion(t *testing.T) {
 	}
 	if result.SupersedesIntentID != intent.ID || result.SupersedesVersion != 1 {
 		t.Fatalf("supersedes = %q/%d, want %q/1", result.SupersedesIntentID, result.SupersedesVersion, intent.ID)
+	}
+	publication, err := store.GetOperationalIntentPublication(ctx, intent.ID)
+	if err != nil {
+		t.Fatalf("GetOperationalIntentPublication returned error: %v", err)
+	}
+	if publication.DesiredState != domain.OperationalIntentExternalStateWithdrawn || publication.DesiredIntentVersion != 1 {
+		t.Fatalf("publication = %#v, want withdrawal of v1", publication)
 	}
 	v1, err := store.GetOperationalIntentVersion(ctx, intent.ID, 1)
 	if err != nil {

@@ -263,7 +263,12 @@ func (s *IntentService) ModifyIntent(ctx context.Context, intentID string, req M
 	result := ModifyIntentResult{}
 	sourceVersion := intent.Version
 	sourceRevision := intent.Revision
+	var withdrawal *domain.OperationalIntentPublication
 	if intent.Status == domain.IntentStatusAccepted {
+		if s.deconfliction != nil && s.deconfliction.PublishingEnabled() {
+			request := s.deconfliction.PublicationRequest(intent, domain.OperationalIntentExternalStateWithdrawn)
+			withdrawal = &request
+		}
 		result.SupersedesIntentID = intent.ID
 		result.SupersedesVersion = intent.Version
 		intent.Version++
@@ -292,11 +297,17 @@ func (s *IntentService) ModifyIntent(ctx context.Context, intentID string, req M
 		volumes = append(volumes, volume)
 	}
 
-	if err := s.durable.ReplaceOperationalIntent(ctx, sourceVersion, sourceRevision, intent, volumes); err != nil {
-		if errors.Is(err, durable.ErrVersionConflict) {
+	var replaceErr error
+	if withdrawal == nil {
+		replaceErr = s.durable.ReplaceOperationalIntent(ctx, sourceVersion, sourceRevision, intent, volumes)
+	} else {
+		replaceErr = s.durable.ReplaceOperationalIntentAndRequestPublication(ctx, sourceVersion, sourceRevision, intent, volumes, *withdrawal)
+	}
+	if replaceErr != nil {
+		if errors.Is(replaceErr, durable.ErrVersionConflict) {
 			return ModifyIntentResult{}, fmt.Errorf("%w: operational intent changed during modification", ErrInvalidTransition)
 		}
-		return ModifyIntentResult{}, fmt.Errorf("replace operational intent: %w", err)
+		return ModifyIntentResult{}, fmt.Errorf("replace operational intent: %w", replaceErr)
 	}
 	if intent.Version == sourceVersion {
 		intent.Revision = sourceRevision + 1
