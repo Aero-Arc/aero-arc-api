@@ -727,8 +727,8 @@ func TestModifyAcceptedIntentCreatesDraftNextVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetOperationalIntentPublication returned error: %v", err)
 	}
-	if publication.DesiredState != domain.OperationalIntentExternalStateWithdrawn || publication.DesiredIntentVersion != 1 {
-		t.Fatalf("publication = %#v, want withdrawal of v1", publication)
+	if publication.DesiredState != domain.OperationalIntentExternalStateAccepted || publication.DesiredIntentVersion != 1 {
+		t.Fatalf("publication = %#v, want accepted v1 preserved", publication)
 	}
 	v1, err := store.GetOperationalIntentVersion(ctx, intent.ID, 1)
 	if err != nil {

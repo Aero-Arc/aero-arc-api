@@ -381,54 +381,43 @@ func TestReplacementPublicationPreservesLeaseAcrossReplicas(t *testing.T) {
 	}
 }
 
-func TestIntentReplacementRequestsWithdrawalAcrossReplicas(t *testing.T) {
+func TestAcceptedRequestClearsWithdrawnReferenceAcrossReplicas(t *testing.T) {
 	ctx, first, second := integrationStores(t)
 	now := time.Date(2026, time.August, 10, 13, 0, 0, 0, time.UTC)
-	v1 := integrationIntent("77777777-7777-4777-8777-777777777777", now)
-	v1.Status = domain.IntentStatusAccepted
-	if err := first.CreateOperationalIntent(ctx, v1); err != nil {
+	intent := integrationIntent("77777777-7777-4777-8777-777777777777", now)
+	intent.Status = domain.IntentStatusAccepted
+	if err := first.CreateOperationalIntent(ctx, intent); err != nil {
 		t.Fatal(err)
 	}
 	accepted := domain.OperationalIntentPublication{
-		IntentID: v1.ID, DesiredIntentVersion: v1.Version,
+		IntentID: intent.ID, DesiredIntentVersion: intent.Version,
 		DesiredState: domain.OperationalIntentExternalStateAccepted, NextAttemptAt: now, UpdatedAt: now,
 	}
 	if err := first.RequestOperationalIntentPublication(ctx, accepted); err != nil {
 		t.Fatal(err)
 	}
-	leaseUntil := now.Add(2 * time.Minute)
-	claimed, err := first.ClaimOperationalIntentPublication(ctx, v1.ID, now, leaseUntil)
+	publication, err := first.ClaimOperationalIntentPublication(ctx, intent.ID, now, now.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
-	v2 := v1
-	v2.Version = 2
-	v2.Status = domain.IntentStatusDraft
-	withdrawn := accepted
-	withdrawn.DesiredState = domain.OperationalIntentExternalStateWithdrawn
-	withdrawn.UpdatedAt = now.Add(time.Second)
-	if err := second.ReplaceOperationalIntentAndRequestPublication(ctx, v1.Version, v1.Revision, v2, nil, withdrawn); err != nil {
+	publication.SyncStatus = domain.PublicationSyncWithdrawn
+	publication.ConfirmedState = domain.OperationalIntentExternalStateWithdrawn
+	publication.DSSVersion = 2
+	publication.OVN = "deleted-ovn"
+	publication.ReferenceJSON = []byte(`{"id":"deleted"}`)
+	publication.ConfirmedAt = &now
+	if err := first.ConfirmOperationalIntentPublication(ctx, publication, publication.Revision, nil); err != nil {
 		t.Fatal(err)
 	}
-	latest, err := first.GetOperationalIntent(ctx, v1.ID)
+	if err := second.RequestOperationalIntentPublication(ctx, accepted); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := first.GetOperationalIntentPublication(ctx, intent.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	publication, err := first.GetOperationalIntentPublication(ctx, v1.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if latest.Version != 2 || latest.Status != domain.IntentStatusDraft {
-		t.Fatalf("latest intent = %#v, want draft v2", latest)
-	}
-	if publication.DesiredState != domain.OperationalIntentExternalStateWithdrawn || publication.DesiredIntentVersion != 1 {
-		t.Fatalf("publication = %#v, want withdrawal of v1", publication)
-	}
-	if publication.LeaseUntil == nil || !publication.LeaseUntil.Equal(leaseUntil) {
-		t.Fatalf("replacement lease = %v, want %v", publication.LeaseUntil, leaseUntil)
-	}
-	if err := first.RenewOperationalIntentPublicationLease(ctx, v1.ID, claimed.Revision, leaseUntil.Add(time.Minute)); !errors.Is(err, durable.ErrVersionConflict) {
-		t.Fatalf("stale renewal error = %v, want version conflict", err)
+	if stored.OVN != "" || stored.DSSVersion != 0 || len(stored.ReferenceJSON) != 0 || stored.ConfirmedAt != nil {
+		t.Fatalf("republish retained deleted reference: %#v", stored)
 	}
 }
 
