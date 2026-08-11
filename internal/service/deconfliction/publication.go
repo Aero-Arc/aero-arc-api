@@ -236,8 +236,7 @@ func permanentPublicationError(err error) bool {
 	if !errors.As(err, &responseErr) {
 		return false
 	}
-	return responseErr.StatusCode == 400 || responseErr.StatusCode == 401 ||
-		responseErr.StatusCode == 403 || responseErr.StatusCode == 413
+	return responseErr.StatusCode == http.StatusBadRequest || responseErr.StatusCode == http.StatusRequestEntityTooLarge
 }
 
 func retryableDeconflictionResult(result domain.DeconflictionResult) bool {
