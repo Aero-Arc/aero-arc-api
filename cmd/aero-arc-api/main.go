@@ -253,7 +253,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", cfg.Addr, err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	serverErr := make(chan error, 1)
 	go func() {
