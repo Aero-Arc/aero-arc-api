@@ -18,8 +18,9 @@ import (
 )
 
 const (
-	publicationLease = 30 * time.Second
-	publicationBatch = 20
+	publicationLease      = 30 * time.Second
+	publicationBatch      = 20
+	peerNotificationBatch = 20
 )
 
 func (s *DeconflictionService) PublishingEnabled() bool {
@@ -90,15 +91,19 @@ func (s *DeconflictionService) ReconcileDue(ctx context.Context) error {
 	if !s.PublishingEnabled() {
 		return nil
 	}
-	now := s.now().UTC()
-	publications, err := s.durable.ClaimDueOperationalIntentPublications(ctx, now, now.Add(publicationLease), publicationBatch)
-	if err != nil {
-		return err
-	}
 	var reconcileErrors []error
-	for _, publication := range publications {
-		if err := s.reconcileClaimed(ctx, publication); err != nil {
-			reconcileErrors = append(reconcileErrors, fmt.Errorf("reconcile intent %s: %w", publication.IntentID, err))
+	for range publicationBatch {
+		now := s.now().UTC()
+		publications, err := s.durable.ClaimDueOperationalIntentPublications(ctx, now, now.Add(publicationLease), 1)
+		if err != nil {
+			reconcileErrors = append(reconcileErrors, err)
+			break
+		}
+		if len(publications) == 0 {
+			break
+		}
+		if err := s.reconcileClaimed(ctx, publications[0]); err != nil {
+			reconcileErrors = append(reconcileErrors, fmt.Errorf("reconcile intent %s: %w", publications[0].IntentID, err))
 		}
 	}
 	if err := s.DeliverDuePeerNotifications(ctx); err != nil {
@@ -297,15 +302,20 @@ func (s *DeconflictionService) DeliverDuePeerNotifications(ctx context.Context) 
 	if !s.PublishingEnabled() {
 		return nil
 	}
-	now := s.now().UTC()
-	notifications, err := s.durable.ClaimDuePeerNotifications(ctx, now, now.Add(publicationLease), publicationBatch)
-	if err != nil {
-		return err
-	}
 	var deliveryErrors []error
-	for _, notification := range notifications {
+	for range peerNotificationBatch {
+		now := s.now().UTC()
+		notifications, err := s.durable.ClaimDuePeerNotifications(ctx, now, now.Add(publicationLease), 1)
+		if err != nil {
+			deliveryErrors = append(deliveryErrors, err)
+			break
+		}
+		if len(notifications) == 0 {
+			break
+		}
+		notification := notifications[0]
 		expectedRevision := notification.Revision
-		err := s.publisher.DeliverPeerNotification(ctx, notification.USSBaseURL, notification.Payload)
+		err = s.publisher.DeliverPeerNotification(ctx, notification.USSBaseURL, notification.Payload)
 		now = s.now().UTC()
 		notification.UpdatedAt = now
 		if err == nil {

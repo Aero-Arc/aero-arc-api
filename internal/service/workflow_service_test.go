@@ -50,6 +50,43 @@ type workflowCoordinator struct {
 	reconciles  int
 }
 
+type durableWorkflowCoordinator struct {
+	store      durable.Store
+	now        time.Time
+	reconciles int
+}
+
+func (c *durableWorkflowCoordinator) CheckIntent(context.Context, string) (domain.DeconflictionResult, error) {
+	return domain.DeconflictionResult{Posture: domain.DeconflictionPostureClear}, nil
+}
+
+func (c *durableWorkflowCoordinator) PublishingEnabled() bool { return true }
+
+func (c *durableWorkflowCoordinator) PublicationRequest(intent domain.OperationalIntent, state domain.OperationalIntentExternalState) domain.OperationalIntentPublication {
+	return domain.OperationalIntentPublication{
+		IntentID: intent.ID, DesiredIntentVersion: intent.Version, DesiredState: state,
+		SyncStatus: domain.PublicationSyncPending, NextAttemptAt: c.now, UpdatedAt: c.now,
+	}
+}
+
+func (c *durableWorkflowCoordinator) GetPublication(ctx context.Context, intentID string) (domain.OperationalIntentPublication, error) {
+	return c.store.GetOperationalIntentPublication(ctx, intentID)
+}
+
+func (c *durableWorkflowCoordinator) ReconcileIntent(ctx context.Context, intentID string) error {
+	c.reconciles++
+	publication, err := c.store.ClaimOperationalIntentPublication(ctx, intentID, c.now, c.now.Add(time.Minute))
+	if err != nil {
+		return err
+	}
+	publication.PublishedIntentVersion = publication.DesiredIntentVersion
+	publication.ConfirmedState = publication.DesiredState
+	publication.SyncStatus = domain.PublicationSyncConfirmed
+	publication.ConfirmedAt = &c.now
+	publication.UpdatedAt = c.now
+	return c.store.ConfirmOperationalIntentPublication(ctx, publication, publication.Revision, nil)
+}
+
 func (c *workflowCoordinator) CheckIntent(context.Context, string) (domain.DeconflictionResult, error) {
 	return domain.DeconflictionResult{Posture: domain.DeconflictionPostureClear}, nil
 }
@@ -122,6 +159,73 @@ func TestIntentLifecycleCoordinatesPublicationAndWithdrawal(t *testing.T) {
 	}
 	if intent.Status != domain.IntentStatusComplete || publication.DesiredState != domain.OperationalIntentExternalStateWithdrawn {
 		t.Fatalf("completed intent=%+v publication=%+v", intent, publication)
+	}
+}
+
+func TestAcceptIntentRejectsLegacyIDBeforePublication(t *testing.T) {
+	ctx := context.Background()
+	now := fixedWorkflowTime()
+	store := durablememory.NewStore()
+	local := NewIntentServiceWithClock(store, fixedClock(now), nil)
+	request := workflowIntentRequest(now)
+	request.ID = "legacy-intent"
+	intent, err := local.CreateIntent(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent, err = local.SubmitIntent(ctx, intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	publishing := NewIntentServiceWithClock(store, fixedClock(now), &workflowCoordinator{})
+	if _, err := publishing.AcceptIntent(ctx, intent.ID); !errors.Is(err, ErrValidation) {
+		t.Fatalf("AcceptIntent error = %v, want validation failure", err)
+	}
+	stored, err := store.GetOperationalIntent(ctx, intent.ID)
+	if err != nil || stored.Status != domain.IntentStatusSubmitted {
+		t.Fatalf("stored intent = %#v, %v; want submitted", stored, err)
+	}
+	if _, err := store.GetOperationalIntentPublication(ctx, intent.ID); !errors.Is(err, durable.ErrNotFound) {
+		t.Fatalf("publication error = %v, want not found", err)
+	}
+}
+
+func TestActivateIntentBackfillsAcceptedPublication(t *testing.T) {
+	ctx := context.Background()
+	now := fixedWorkflowTime()
+	store := durablememory.NewStore()
+	local := NewIntentServiceWithClock(store, fixedClock(now), nil)
+	intent, err := local.CreateIntent(ctx, workflowIntentRequest(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := local.AddOperationalVolume(ctx, intent.ID, workflowVolumeRequest(now)); err != nil {
+		t.Fatal(err)
+	}
+	if intent, err = local.SubmitIntent(ctx, intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if intent, err = local.AcceptIntent(ctx, intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordPreflightCheck(ctx, domain.PreflightCheck{
+		ID: "preflight", IntentID: intent.ID, IntentVersion: intent.Version,
+		Status: domain.PreflightStatusClear, CapturedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	coordinator := &durableWorkflowCoordinator{store: store, now: now}
+	publishing := NewIntentServiceWithClock(store, fixedClock(now), coordinator)
+	intent, err = publishing.ActivateIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication, err := store.GetOperationalIntentPublication(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.Status != domain.IntentStatusActive || coordinator.reconciles != 2 ||
+		publication.ConfirmedState != domain.OperationalIntentExternalStateActivated {
+		t.Fatalf("intent=%+v coordinator=%+v publication=%+v", intent, coordinator, publication)
 	}
 }
 

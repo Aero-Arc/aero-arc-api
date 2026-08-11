@@ -137,12 +137,11 @@ func (s *IntentService) CreateIntent(ctx context.Context, req CreateIntentReques
 	if id == "" {
 		id = uuid.NewString()
 	} else if s.deconfliction != nil && s.deconfliction.PublishingEnabled() {
-		parsed, err := uuid.Parse(id)
-		if err != nil || parsed.Version() != 4 {
-			return domain.OperationalIntent{}, fmt.Errorf("%w: id must be a UUIDv4", ErrValidation)
-		} else {
-			id = parsed.String()
+		canonicalID, err := canonicalDSSIntentID(id)
+		if err != nil {
+			return domain.OperationalIntent{}, err
 		}
+		id = canonicalID
 	}
 	if strings.TrimSpace(req.AircraftID) == "" {
 		return domain.OperationalIntent{}, fmt.Errorf("%w: aircraft_id is required", ErrValidation)
@@ -325,6 +324,11 @@ func (s *IntentService) AcceptIntent(ctx context.Context, intentID string) (doma
 	if intent.Status != domain.IntentStatusSubmitted && intent.Status != domain.IntentStatusReview {
 		return domain.OperationalIntent{}, fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, intent.Status, domain.IntentStatusAccepted)
 	}
+	if s.deconfliction != nil && s.deconfliction.PublishingEnabled() {
+		if _, err := canonicalDSSIntentID(intent.ID); err != nil {
+			return domain.OperationalIntent{}, err
+		}
+	}
 
 	now := s.now().UTC()
 	expectedRevision := intent.Revision
@@ -364,7 +368,20 @@ func (s *IntentService) ActivateIntent(ctx context.Context, intentID string) (do
 		return domain.OperationalIntent{}, err
 	}
 	if s.deconfliction != nil && s.deconfliction.PublishingEnabled() {
+		if _, err := canonicalDSSIntentID(intent.ID); err != nil {
+			return domain.OperationalIntent{}, err
+		}
 		publication, err := s.deconfliction.GetPublication(ctx, intent.ID)
+		if errors.Is(err, durable.ErrNotFound) {
+			request := s.deconfliction.PublicationRequest(intent, domain.OperationalIntentExternalStateAccepted)
+			if err := s.durable.RequestOperationalIntentPublicationIfCurrent(ctx, request, intent.Revision, domain.IntentStatusAccepted); err != nil {
+				return domain.OperationalIntent{}, fmt.Errorf("backfill DSS acceptance: %w", err)
+			}
+			if err := s.deconfliction.ReconcileIntent(ctx, intent.ID); err != nil {
+				return domain.OperationalIntent{}, fmt.Errorf("%w: coordinate DSS acceptance: %v", ErrActivationBlocked, err)
+			}
+			publication, err = s.deconfliction.GetPublication(ctx, intent.ID)
+		}
 		if err != nil || publication.PublishedIntentVersion != intent.Version || publication.SyncStatus != domain.PublicationSyncConfirmed {
 			return domain.OperationalIntent{}, fmt.Errorf("%w: intent is not DSS-confirmed as Accepted", ErrActivationBlocked)
 		}
@@ -399,6 +416,14 @@ func (s *IntentService) ActivateIntent(ctx context.Context, intentID string) (do
 	}
 	intent.Revision = expectedRevision + 1
 	return intent, nil
+}
+
+func canonicalDSSIntentID(id string) (string, error) {
+	parsed, err := uuid.Parse(id)
+	if err != nil || parsed.Version() != 4 {
+		return "", fmt.Errorf("%w: id must be a UUIDv4 when DSS publication is enabled", ErrValidation)
+	}
+	return parsed.String(), nil
 }
 
 func (s *IntentService) CompleteIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error) {
