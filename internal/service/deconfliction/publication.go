@@ -22,7 +22,7 @@ const (
 )
 
 func (s *DeconflictionService) PublishingEnabled() bool {
-	return s.publisher != nil && s.publisher.PublicationEnabled() && s.coordination != nil
+	return s.publisher != nil && s.publisher.PublicationEnabled()
 }
 
 func (s *DeconflictionService) PublicationRequest(intent domain.OperationalIntent, state domain.OperationalIntentExternalState) domain.OperationalIntentPublication {
@@ -34,17 +34,11 @@ func (s *DeconflictionService) PublicationRequest(intent domain.OperationalInten
 }
 
 func (s *DeconflictionService) GetPublication(ctx context.Context, intentID string) (domain.OperationalIntentPublication, error) {
-	if s.coordination == nil {
-		return domain.OperationalIntentPublication{}, durable.ErrNotFound
-	}
-	return s.coordination.GetOperationalIntentPublication(ctx, intentID)
+	return s.durable.GetOperationalIntentPublication(ctx, intentID)
 }
 
 func (s *DeconflictionService) RecordReceivedPeerNotification(ctx context.Context, notification domain.ReceivedPeerNotification) error {
-	if s.coordination == nil {
-		return fmt.Errorf("coordination storage is not configured")
-	}
-	return s.coordination.RecordReceivedPeerNotification(ctx, notification)
+	return s.durable.RecordReceivedPeerNotification(ctx, notification)
 }
 
 func (s *DeconflictionService) GetPublishedOperationalIntent(ctx context.Context, intentID string, dssVersion int) (domain.OperationalIntentPublication, []domain.OperationalVolume, error) {
@@ -69,7 +63,7 @@ func (s *DeconflictionService) ReconcileIntent(ctx context.Context, intentID str
 		return fmt.Errorf("DSS publication is not configured")
 	}
 	now := s.now().UTC()
-	publication, err := s.coordination.ClaimOperationalIntentPublication(ctx, intentID, now, now.Add(publicationLease))
+	publication, err := s.durable.ClaimOperationalIntentPublication(ctx, intentID, now, now.Add(publicationLease))
 	if err != nil {
 		return err
 	}
@@ -96,7 +90,7 @@ func (s *DeconflictionService) ReconcileDue(ctx context.Context) error {
 		return nil
 	}
 	now := s.now().UTC()
-	publications, err := s.coordination.ClaimDueOperationalIntentPublications(ctx, now, now.Add(publicationLease), publicationBatch)
+	publications, err := s.durable.ClaimDueOperationalIntentPublications(ctx, now, now.Add(publicationLease), publicationBatch)
 	if err != nil {
 		return err
 	}
@@ -121,7 +115,7 @@ func (s *DeconflictionService) reconcileClaimed(ctx context.Context, publication
 			publication.ConfirmedState = domain.OperationalIntentExternalStateWithdrawn
 			publication.ConfirmedAt = &now
 			publication.UpdatedAt = now
-			return s.coordination.UpdateOperationalIntentPublication(ctx, publication, expectedRevision)
+			return s.durable.UpdateOperationalIntentPublication(ctx, publication, expectedRevision)
 		}
 		receipt, err := s.publisher.DeleteOperationalIntent(ctx, publication.IntentID, publication.OVN)
 		if err != nil {
@@ -132,7 +126,7 @@ func (s *DeconflictionService) reconcileClaimed(ctx context.Context, publication
 				publication.PublishedIntentVersion = 0
 				publication.ConfirmedAt = &now
 				publication.UpdatedAt = now
-				return s.coordination.UpdateOperationalIntentPublication(ctx, publication, expectedRevision)
+				return s.durable.UpdateOperationalIntentPublication(ctx, publication, expectedRevision)
 			}
 			return s.recordPublicationFailure(ctx, publication, expectedRevision, err, false)
 		}
@@ -147,7 +141,7 @@ func (s *DeconflictionService) reconcileClaimed(ctx context.Context, publication
 		if err != nil {
 			return s.recordPublicationFailure(ctx, publication, expectedRevision, err, false)
 		}
-		return s.coordination.ConfirmOperationalIntentPublication(ctx, publication, expectedRevision, notifications)
+		return s.durable.ConfirmOperationalIntentPublication(ctx, publication, expectedRevision, notifications)
 	}
 
 	intent, err := s.durable.GetOperationalIntentVersion(ctx, publication.IntentID, publication.DesiredIntentVersion)
@@ -213,7 +207,7 @@ func (s *DeconflictionService) reconcileClaimed(ctx context.Context, publication
 	if err != nil {
 		return s.recordPublicationFailure(ctx, publication, expectedRevision, err, false)
 	}
-	return s.coordination.ConfirmOperationalIntentPublication(ctx, publication, expectedRevision, notifications)
+	return s.durable.ConfirmOperationalIntentPublication(ctx, publication, expectedRevision, notifications)
 }
 
 func permanentPublicationError(err error) bool {
@@ -248,7 +242,7 @@ func (s *DeconflictionService) DeliverDuePeerNotifications(ctx context.Context) 
 		return nil
 	}
 	now := s.now().UTC()
-	notifications, err := s.coordination.ClaimDuePeerNotifications(ctx, now, now.Add(publicationLease), publicationBatch)
+	notifications, err := s.durable.ClaimDuePeerNotifications(ctx, now, now.Add(publicationLease), publicationBatch)
 	if err != nil {
 		return err
 	}
@@ -266,7 +260,7 @@ func (s *DeconflictionService) DeliverDuePeerNotifications(ctx context.Context) 
 			notification.NextAttemptAt = now.Add(time.Second << min(notification.AttemptCount, 8))
 			deliveryErrors = append(deliveryErrors, err)
 		}
-		if updateErr := s.coordination.UpdatePeerNotification(ctx, notification, expectedRevision); updateErr != nil {
+		if updateErr := s.durable.UpdatePeerNotification(ctx, notification, expectedRevision); updateErr != nil {
 			deliveryErrors = append(deliveryErrors, updateErr)
 		}
 	}
@@ -294,7 +288,7 @@ func (s *DeconflictionService) recordPublicationFailure(ctx context.Context, pub
 		delay := time.Second << min(publication.AttemptCount, 8)
 		publication.NextAttemptAt = now.Add(delay)
 	}
-	if err := s.coordination.UpdateOperationalIntentPublication(ctx, publication, expectedRevision); err != nil {
+	if err := s.durable.UpdateOperationalIntentPublication(ctx, publication, expectedRevision); err != nil {
 		return errors.Join(cause, err)
 	}
 	return cause

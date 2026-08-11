@@ -14,22 +14,21 @@ import (
 const deconflictionRuleVersion = "provider-aggregate-v1"
 
 type DeconflictionService struct {
-	durable      durable.OperationalStore
-	coordination durable.CoordinationStore
-	providers    []airspaceprovider.Provider
-	publisher    airspaceprovider.Publisher
-	now          func() time.Time
+	durable   durable.Store
+	providers []airspaceprovider.Provider
+	publisher airspaceprovider.Publisher
+	now       func() time.Time
 }
 
 func NewDeconflictionService(
-	store durable.OperationalStore,
+	store durable.Store,
 	providers ...airspaceprovider.Provider,
 ) (*DeconflictionService, error) {
 	return NewDeconflictionServiceWithClock(store, nil, providers...)
 }
 
 func NewDeconflictionServiceWithClock(
-	store durable.OperationalStore,
+	store durable.Store,
 	now func() time.Time,
 	providers ...airspaceprovider.Provider,
 ) (*DeconflictionService, error) {
@@ -46,7 +45,6 @@ func NewDeconflictionServiceWithClock(
 		return nil, fmt.Errorf("deconfliction airspace provider is required")
 	}
 	service := &DeconflictionService{durable: store, providers: configured, now: now}
-	service.coordination, _ = store.(durable.CoordinationStore)
 	for _, provider := range configured {
 		if publisher, ok := provider.(airspaceprovider.Publisher); ok {
 			if service.publisher != nil {
