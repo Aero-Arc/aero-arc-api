@@ -106,6 +106,7 @@ type durableWorkflowCoordinator struct {
 	now           time.Time
 	reconciles    int
 	validationErr error
+	reconcileErr  error
 	beforeConfirm func(context.Context, domain.OperationalIntentPublication) error
 }
 
@@ -132,6 +133,11 @@ func (c *durableWorkflowCoordinator) GetPublication(ctx context.Context, intentI
 
 func (c *durableWorkflowCoordinator) ReconcileIntent(ctx context.Context, intentID string) error {
 	c.reconciles++
+	if c.reconcileErr != nil {
+		err := c.reconcileErr
+		c.reconcileErr = nil
+		return err
+	}
 	publication, err := c.store.ClaimOperationalIntentPublication(ctx, intentID, c.now, c.now.Add(time.Minute))
 	if err != nil {
 		return err
@@ -362,6 +368,45 @@ func TestActivateIntentRestoresAcceptedDSSPublicationAfterConcurrentModification
 	}
 	if current.Version != 2 || current.Status != domain.IntentStatusDraft ||
 		publication.DesiredIntentVersion != 1 || publication.PublishedIntentVersion != 1 ||
+		publication.DesiredState != domain.OperationalIntentExternalStateAccepted ||
+		publication.ConfirmedState != domain.OperationalIntentExternalStateAccepted {
+		t.Fatalf("current=%+v publication=%+v", current, publication)
+	}
+}
+
+func TestActivateIntentRestoresAcceptedPublicationAfterReconcileFailure(t *testing.T) {
+	ctx := context.Background()
+	now := fixedWorkflowTime()
+	store := durablememory.NewStore()
+	coordinator := &durableWorkflowCoordinator{store: store, now: now}
+	intents := NewIntentServiceWithClock(store, fixedClock(now), coordinator)
+	intent := seedSubmittedIntentWithVolume(t, ctx, store, now)
+	var err error
+	if intent, err = intents.AcceptIntent(ctx, intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.ReconcileIntent(ctx, intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordPreflightCheck(ctx, domain.PreflightCheck{
+		ID: "preflight", IntentID: intent.ID, IntentVersion: intent.Version,
+		Status: domain.PreflightStatusClear, CapturedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	coordinator.reconcileErr = context.DeadlineExceeded
+	if _, err := intents.ActivateIntent(ctx, intent.ID); !errors.Is(err, ErrActivationBlocked) {
+		t.Fatalf("ActivateIntent error = %v, want activation blocked", err)
+	}
+	current, err := store.GetOperationalIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication, err := store.GetOperationalIntentPublication(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != domain.IntentStatusAccepted ||
 		publication.DesiredState != domain.OperationalIntentExternalStateAccepted ||
 		publication.ConfirmedState != domain.OperationalIntentExternalStateAccepted {
 		t.Fatalf("current=%+v publication=%+v", current, publication)
