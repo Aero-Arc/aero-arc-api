@@ -181,6 +181,36 @@ func TestUpdateOperationalIntentRejectsSupersededVersion(t *testing.T) {
 	}
 }
 
+func TestTerminalUpdateRetiresPriorAcceptedVersion(t *testing.T) {
+	ctx, store, _ := integrationStores(t)
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	v1 := integrationIntent("terminal-versioned-intent", now)
+	v1.Status = domain.IntentStatusAccepted
+	if err := store.CreateOperationalIntent(ctx, v1); err != nil {
+		t.Fatal(err)
+	}
+	v2 := v1
+	v2.Version = 2
+	v2.Status = domain.IntentStatusDraft
+	if err := store.ReplaceOperationalIntent(ctx, 1, 0, v2, nil); err != nil {
+		t.Fatal(err)
+	}
+	canceledAt := now.Add(time.Minute)
+	v2.Status = domain.IntentStatusCanceled
+	v2.CanceledAt = &canceledAt
+	v2.UpdatedAt = canceledAt
+	if err := store.UpdateOperationalIntent(ctx, v2, 0); err != nil {
+		t.Fatal(err)
+	}
+	storedV1, err := store.GetOperationalIntentVersion(ctx, v1.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedV1.Status != domain.IntentStatusCanceled || storedV1.CanceledAt == nil || !storedV1.CanceledAt.Equal(canceledAt) {
+		t.Fatalf("stored v1 = %#v, want canceled at %v", storedV1, canceledAt)
+	}
+}
+
 func TestAcceptOperationalIntentSupersedesPriorAcceptedVersion(t *testing.T) {
 	ctx, store, _ := integrationStores(t)
 	now := time.Date(2026, time.August, 9, 12, 0, 0, 0, time.UTC)
