@@ -35,11 +35,15 @@ func (e ActiveIntentModificationError) Unwrap() error {
 type IntentService struct {
 	durable       durable.Store
 	now           func() time.Time
-	deconfliction IntentDeconfliction
+	deconfliction DeconflictionCoordinator
 }
 
-type IntentDeconfliction interface {
+type DeconflictionChecker interface {
 	CheckIntent(ctx context.Context, intentID string) (domain.DeconflictionResult, error)
+}
+
+type DeconflictionCoordinator interface {
+	DeconflictionChecker
 	PublishingEnabled() bool
 	PublicationRequest(domain.OperationalIntent, domain.OperationalIntentExternalState) domain.OperationalIntentPublication
 	GetPublication(context.Context, string) (domain.OperationalIntentPublication, error)
@@ -112,11 +116,11 @@ type ModifyIntentResult struct {
 	SupersedesVersion  int                        `json:"supersedes_version,omitempty"`
 }
 
-func NewIntentService(durableStore durable.Store, deconfliction IntentDeconfliction) *IntentService {
+func NewIntentService(durableStore durable.Store, deconfliction DeconflictionCoordinator) *IntentService {
 	return NewIntentServiceWithClock(durableStore, nil, deconfliction)
 }
 
-func NewIntentServiceWithClock(durableStore durable.Store, now func() time.Time, deconfliction IntentDeconfliction) *IntentService {
+func NewIntentServiceWithClock(durableStore durable.Store, now func() time.Time, deconfliction DeconflictionCoordinator) *IntentService {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
