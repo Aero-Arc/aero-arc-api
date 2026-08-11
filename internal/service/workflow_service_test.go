@@ -299,7 +299,7 @@ func TestActivateIntentBackfillsAcceptedPublication(t *testing.T) {
 	}
 }
 
-func TestActivateIntentWithdrawsDSSActivationAfterConcurrentModification(t *testing.T) {
+func TestActivateIntentRestoresAcceptedDSSPublicationAfterConcurrentModification(t *testing.T) {
 	ctx := context.Background()
 	now := fixedWorkflowTime()
 	store := durablememory.NewStore()
@@ -361,8 +361,9 @@ func TestActivateIntentWithdrawsDSSActivationAfterConcurrentModification(t *test
 		t.Fatal(err)
 	}
 	if current.Version != 2 || current.Status != domain.IntentStatusDraft ||
-		publication.DesiredState != domain.OperationalIntentExternalStateWithdrawn ||
-		publication.ConfirmedState != domain.OperationalIntentExternalStateWithdrawn {
+		publication.DesiredIntentVersion != 1 || publication.PublishedIntentVersion != 1 ||
+		publication.DesiredState != domain.OperationalIntentExternalStateAccepted ||
+		publication.ConfirmedState != domain.OperationalIntentExternalStateAccepted {
 		t.Fatalf("current=%+v publication=%+v", current, publication)
 	}
 }

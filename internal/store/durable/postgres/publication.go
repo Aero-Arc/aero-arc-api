@@ -72,7 +72,7 @@ func (s *Store) RequestOperationalIntentPublication(ctx context.Context, publica
 	return nil
 }
 
-func (s *Store) RequestOperationalIntentPublicationIfCurrent(ctx context.Context, publication domain.OperationalIntentPublication, expectedIntentRevision int64, expectedStatus domain.IntentStatus) error {
+func (s *Store) RequestOperationalIntentPublicationIfCurrent(ctx context.Context, publication domain.OperationalIntentPublication, expectedIntentVersion int, expectedIntentRevision int64, expectedStatus domain.IntentStatus) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin guarded publication request: %w", err)
@@ -91,7 +91,7 @@ func (s *Store) RequestOperationalIntentPublicationIfCurrent(ctx context.Context
 	if err != nil {
 		return fmt.Errorf("read current operational intent for publication: %w", err)
 	}
-	if version != publication.DesiredIntentVersion || revision != expectedIntentRevision || status != expectedStatus {
+	if version != expectedIntentVersion || revision != expectedIntentRevision || status != expectedStatus {
 		return durable.ErrVersionConflict
 	}
 	if err := requestPublicationTx(ctx, tx, publication); err != nil {
