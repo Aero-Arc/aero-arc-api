@@ -124,6 +124,49 @@ func TestReplacementPublicationPreservesActiveLease(t *testing.T) {
 	}
 }
 
+func TestAcceptedRequestClearsWithdrawnReference(t *testing.T) {
+	ctx := context.Background()
+	store := NewStore()
+	now := time.Date(2026, 8, 10, 13, 0, 0, 0, time.UTC)
+	const intentID = "77777777-7777-4777-8777-777777777777"
+	if err := store.CreateOperationalIntent(ctx, domain.OperationalIntent{
+		ID: intentID, Version: 1, Status: domain.IntentStatusAccepted,
+		PlannedStartAt: now, PlannedEndAt: now.Add(time.Hour), UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	accepted := domain.OperationalIntentPublication{
+		IntentID: intentID, DesiredIntentVersion: 1,
+		DesiredState: domain.OperationalIntentExternalStateAccepted, NextAttemptAt: now, UpdatedAt: now,
+	}
+	if err := store.RequestOperationalIntentPublication(ctx, accepted); err != nil {
+		t.Fatal(err)
+	}
+	publication, err := store.ClaimOperationalIntentPublication(ctx, intentID, now, now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication.SyncStatus = domain.PublicationSyncWithdrawn
+	publication.ConfirmedState = domain.OperationalIntentExternalStateWithdrawn
+	publication.DSSVersion = 2
+	publication.OVN = "deleted-ovn"
+	publication.ReferenceJSON = []byte(`{"id":"deleted"}`)
+	publication.ConfirmedAt = &now
+	if err := store.ConfirmOperationalIntentPublication(ctx, publication, publication.Revision, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RequestOperationalIntentPublication(ctx, accepted); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.GetOperationalIntentPublication(ctx, intentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.OVN != "" || stored.DSSVersion != 0 || len(stored.ReferenceJSON) != 0 || stored.ConfirmedAt != nil {
+		t.Fatalf("republish retained deleted reference: %#v", stored)
+	}
+}
+
 func TestPeerNotificationEnqueueIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	store := NewStore()
