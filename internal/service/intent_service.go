@@ -35,15 +35,11 @@ func (e ActiveIntentModificationError) Unwrap() error {
 type IntentService struct {
 	durable       durable.Store
 	now           func() time.Time
-	deconfliction DeconflictionChecker
+	deconfliction IntentDeconfliction
 }
 
-type DeconflictionChecker interface {
+type IntentDeconfliction interface {
 	CheckIntent(ctx context.Context, intentID string) (domain.DeconflictionResult, error)
-}
-
-type DeconflictionCoordinator interface {
-	DeconflictionChecker
 	PublishingEnabled() bool
 	PublicationRequest(domain.OperationalIntent, domain.OperationalIntentExternalState) domain.OperationalIntentPublication
 	GetPublication(context.Context, string) (domain.OperationalIntentPublication, error)
@@ -116,11 +112,11 @@ type ModifyIntentResult struct {
 	SupersedesVersion  int                        `json:"supersedes_version,omitempty"`
 }
 
-func NewIntentService(durableStore durable.Store, deconfliction DeconflictionChecker) *IntentService {
+func NewIntentService(durableStore durable.Store, deconfliction IntentDeconfliction) *IntentService {
 	return NewIntentServiceWithClock(durableStore, nil, deconfliction)
 }
 
-func NewIntentServiceWithClock(durableStore durable.Store, now func() time.Time, deconfliction DeconflictionChecker) *IntentService {
+func NewIntentServiceWithClock(durableStore durable.Store, now func() time.Time, deconfliction IntentDeconfliction) *IntentService {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
@@ -331,8 +327,8 @@ func (s *IntentService) AcceptIntent(ctx context.Context, intentID string) (doma
 	intent.Status = domain.IntentStatusAccepted
 	intent.AcceptedAt = &now
 	intent.UpdatedAt = now
-	if coordinator, ok := s.deconfliction.(DeconflictionCoordinator); ok && coordinator.PublishingEnabled() {
-		publication := coordinator.PublicationRequest(intent, domain.OperationalIntentExternalStateAccepted)
+	if s.deconfliction != nil && s.deconfliction.PublishingEnabled() {
+		publication := s.deconfliction.PublicationRequest(intent, domain.OperationalIntentExternalStateAccepted)
 		if err := s.durable.AcceptOperationalIntentAndRequestPublication(ctx, intent, expectedRevision, publication); err != nil {
 			return domain.OperationalIntent{}, fmt.Errorf("accept operational intent and request DSS publication: %w", err)
 		}
@@ -363,21 +359,21 @@ func (s *IntentService) ActivateIntent(ctx context.Context, intentID string) (do
 	if err := s.activationReadiness(ctx, intent); err != nil {
 		return domain.OperationalIntent{}, err
 	}
-	if coordinator, ok := s.deconfliction.(DeconflictionCoordinator); ok && coordinator.PublishingEnabled() {
-		publication, err := coordinator.GetPublication(ctx, intent.ID)
+	if s.deconfliction != nil && s.deconfliction.PublishingEnabled() {
+		publication, err := s.deconfliction.GetPublication(ctx, intent.ID)
 		if err != nil || publication.PublishedIntentVersion != intent.Version || publication.SyncStatus != domain.PublicationSyncConfirmed {
 			return domain.OperationalIntent{}, fmt.Errorf("%w: intent is not DSS-confirmed as Accepted", ErrActivationBlocked)
 		}
 		switch publication.ConfirmedState {
 		case domain.OperationalIntentExternalStateAccepted:
-			request := coordinator.PublicationRequest(intent, domain.OperationalIntentExternalStateActivated)
+			request := s.deconfliction.PublicationRequest(intent, domain.OperationalIntentExternalStateActivated)
 			if err := s.durable.RequestOperationalIntentPublication(ctx, request); err != nil {
 				return domain.OperationalIntent{}, fmt.Errorf("request DSS activation: %w", err)
 			}
-			if err := coordinator.ReconcileIntent(ctx, intent.ID); err != nil {
+			if err := s.deconfliction.ReconcileIntent(ctx, intent.ID); err != nil {
 				return domain.OperationalIntent{}, fmt.Errorf("%w: coordinate DSS activation: %v", ErrActivationBlocked, err)
 			}
-			publication, err = coordinator.GetPublication(ctx, intent.ID)
+			publication, err = s.deconfliction.GetPublication(ctx, intent.ID)
 		case domain.OperationalIntentExternalStateActivated:
 			// Recover when DSS activation succeeded but the local status write did not.
 		default:
@@ -422,8 +418,7 @@ func (s *IntentService) CancelIntent(ctx context.Context, intentID string) (doma
 }
 
 func (s *IntentService) transitionIntentWithPublication(ctx context.Context, intentID string, next domain.IntentStatus, allowed map[domain.IntentStatus]bool, mutate func(*domain.OperationalIntent, time.Time), desired domain.OperationalIntentExternalState) (domain.OperationalIntent, error) {
-	coordinator, enabled := s.deconfliction.(DeconflictionCoordinator)
-	if !enabled || !coordinator.PublishingEnabled() {
+	if s.deconfliction == nil || !s.deconfliction.PublishingEnabled() {
 		return s.transitionIntent(ctx, intentID, next, allowed, mutate)
 	}
 	intent, err := s.durable.GetOperationalIntent(ctx, intentID)
@@ -438,7 +433,7 @@ func (s *IntentService) transitionIntentWithPublication(ctx context.Context, int
 	intent.Status = next
 	intent.UpdatedAt = now
 	mutate(&intent, now)
-	publication := coordinator.PublicationRequest(intent, desired)
+	publication := s.deconfliction.PublicationRequest(intent, desired)
 	if err := s.durable.UpdateOperationalIntentAndRequestPublication(ctx, intent, expectedRevision, publication); err != nil {
 		return domain.OperationalIntent{}, fmt.Errorf("update operational intent and request DSS withdrawal: %w", err)
 	}

@@ -375,7 +375,7 @@ func TestDeconflictionAltitudeReferenceMismatchFailsClosed(t *testing.T) {
 	}
 }
 
-func TestIntentServiceActivateRunsDeconflictionChecker(t *testing.T) {
+func TestIntentServiceActivateRunsDeconfliction(t *testing.T) {
 	ctx := context.Background()
 	store := durablememory.NewStore()
 	now := fixedWorkflowTime()
