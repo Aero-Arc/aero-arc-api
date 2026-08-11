@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -175,6 +176,8 @@ func run(ctx context.Context, cfg *config.Config) error {
 	if cfg.Debug {
 		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	}
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	registryClient, closeRegistry, err := registry.New(ctx, cfg.RegistryMode, cfg.RegistryAddress, cfg.RegistryDialTimeout)
 	if err != nil {
@@ -229,9 +232,6 @@ func run(ctx context.Context, cfg *config.Config) error {
 	}
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	defer stopWorker()
-	if deconflictionService.PublishingEnabled() {
-		go deconflictionService.RunPublicationWorker(workerCtx)
-	}
 	intentService := service.NewIntentService(durableStore, deconflictionService)
 	preflightService := service.NewPreflightService(durableStore)
 	conformanceService := service.NewConformanceService(durableStore, telemetryStore)
@@ -249,6 +249,11 @@ func run(ctx context.Context, cfg *config.Config) error {
 		Handler:           apiServer.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	listener, err := net.Listen("tcp", cfg.Addr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", cfg.Addr, err)
+	}
+	defer listener.Close()
 
 	serverErr := make(chan error, 1)
 	go func() {
@@ -264,13 +269,13 @@ func run(ctx context.Context, cfg *config.Config) error {
 			slog.Bool("debug", cfg.Debug),
 		)
 
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := httpServer.Serve(listener); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
 		}
 	}()
-
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	if deconflictionService.PublishingEnabled() {
+		go deconflictionService.RunPublicationWorker(workerCtx)
+	}
 
 	select {
 	case <-ctx.Done():

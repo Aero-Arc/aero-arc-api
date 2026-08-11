@@ -54,6 +54,9 @@ func (p *recordingPublisher) FindOperationalIntents(context.Context, airspacepro
 	return []airspaceprovider.OperationalIntent{}, p.queryErr
 }
 func (p *recordingPublisher) PublicationEnabled() bool { return true }
+func (p *recordingPublisher) ValidateOperationalIntent(airspaceprovider.PublicationRequest) error {
+	return nil
+}
 func (p *recordingPublisher) CreateOperationalIntent(_ context.Context, request airspaceprovider.PublicationRequest) (airspaceprovider.PublicationReceipt, error) {
 	p.creates++
 	if p.createFn != nil {

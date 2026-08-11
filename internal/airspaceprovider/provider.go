@@ -73,6 +73,7 @@ type PublicationReceipt struct {
 // system. Implementations must treat intent IDs as stable UUIDv4 entity IDs.
 type Publisher interface {
 	PublicationEnabled() bool
+	ValidateOperationalIntent(PublicationRequest) error
 	CreateOperationalIntent(context.Context, PublicationRequest) (PublicationReceipt, error)
 	UpdateOperationalIntent(context.Context, PublicationRequest) (PublicationReceipt, error)
 	DeleteOperationalIntent(context.Context, string, string) (PublicationReceipt, error)
