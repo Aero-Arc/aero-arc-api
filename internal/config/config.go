@@ -170,6 +170,9 @@ func (cfg *Config) Validate() error {
 	if cfg.USSBaseURL != "" && !interussEnabled {
 		return fmt.Errorf("AERO_API_USS_BASE_URL requires airspace provider interuss")
 	}
+	if cfg.USSBaseURL != "" && cfg.DurableStore != DurableStorePostgres {
+		return fmt.Errorf("AERO_API_USS_BASE_URL requires durable store postgres")
+	}
 	if cfg.USSBaseURL != "" && (cfg.USSJWTPublicKeyFile == "" || cfg.USSJWTIssuer == "" || cfg.USSJWTAudience == "") {
 		return fmt.Errorf("AERO_API_USS_JWT_PUBLIC_KEY_FILE, AERO_API_USS_JWT_ISSUER, and AERO_API_USS_JWT_AUDIENCE are required when USS publication is enabled")
 	}

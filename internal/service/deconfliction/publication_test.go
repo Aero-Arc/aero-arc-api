@@ -543,13 +543,16 @@ func TestWithdrawalRefreshesOVNAfterDeleteConflict(t *testing.T) {
 	}
 }
 
-func TestDSSConflictResponseRemainsRetryable(t *testing.T) {
-	err := &dss.SCDResponseError{StatusCode: 409, Status: "409 Conflict"}
-	if permanentPublicationError(err) {
-		t.Fatal("DSS conflict was classified as permanent")
+func TestDSSResponseClassification(t *testing.T) {
+	for _, statusCode := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict} {
+		if permanentPublicationError(&dss.SCDResponseError{StatusCode: statusCode}) {
+			t.Fatalf("DSS response %d was classified as permanent", statusCode)
+		}
 	}
-	if !permanentPublicationError(&dss.SCDResponseError{StatusCode: 403, Status: "403 Forbidden"}) {
-		t.Fatal("DSS authorization failure was not classified as permanent")
+	for _, statusCode := range []int{http.StatusBadRequest, http.StatusRequestEntityTooLarge} {
+		if !permanentPublicationError(&dss.SCDResponseError{StatusCode: statusCode}) {
+			t.Fatalf("DSS response %d was classified as retryable", statusCode)
+		}
 	}
 	if permanentPublicationError(errors.New("network failure")) {
 		t.Fatal("network failure was classified as permanent")

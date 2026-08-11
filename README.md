@@ -133,8 +133,8 @@ AERO_API_DSS_OAUTH_SUBJECT='aero-arc-api'
 AERO_API_DSS_ALLOW_INSECURE_PEER_URLS=true
 ```
 
-Setting a USS base URL enables DSS publication and requires peer-request JWT
-verification:
+Setting a USS base URL enables DSS publication and requires the PostgreSQL
+durable store plus peer-request JWT verification:
 
 ```bash
 AERO_API_USS_BASE_URL='https://uss.example.com'

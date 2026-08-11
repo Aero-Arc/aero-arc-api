@@ -92,6 +92,8 @@ func TestValidateAirspaceConfiguration(t *testing.T) {
 
 func TestValidateUSSWriteConfiguration(t *testing.T) {
 	cfg := Defaults()
+	cfg.DurableStore = DurableStorePostgres
+	cfg.DatabaseURL = "postgres://aero_arc:secret@localhost:5432/aero_arc"
 	cfg.AirspaceProviders = []string{AirspaceProviderInterUSS}
 	cfg.DSSBaseURL = "http://localhost:8082"
 	cfg.USSBaseURL = "https://uss.example"
@@ -109,5 +111,19 @@ func TestValidateUSSWriteConfiguration(t *testing.T) {
 	cfg.DSSAllowInsecurePeerURLs = true
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate rejected local insecure USS URL: %v", err)
+	}
+}
+
+func TestValidateUSSWriteConfigurationRequiresPostgres(t *testing.T) {
+	cfg := Defaults()
+	cfg.AirspaceProviders = []string{AirspaceProviderInterUSS}
+	cfg.DSSBaseURL = "http://localhost:8082"
+	cfg.USSBaseURL = "https://uss.example"
+	cfg.USSJWTPublicKeyFile = "/keys/auth.pem"
+	cfg.USSJWTIssuer = "issuer"
+	cfg.USSJWTAudience = "aero-arc"
+
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "requires durable store postgres") {
+		t.Fatalf("error = %v", err)
 	}
 }
