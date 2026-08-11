@@ -2,11 +2,43 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
+	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 )
+
+func TestGuardedPublicationRejectsStaleIntent(t *testing.T) {
+	ctx := context.Background()
+	store := NewStore()
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	intent := domain.OperationalIntent{
+		ID: "55555555-5555-4555-8555-555555555555", Version: 1,
+		Status: domain.IntentStatusAccepted, PlannedStartAt: now, PlannedEndAt: now.Add(time.Hour), UpdatedAt: now,
+	}
+	if err := store.CreateOperationalIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	withdrawn := domain.OperationalIntentPublication{
+		IntentID: intent.ID, DesiredIntentVersion: intent.Version,
+		DesiredState: domain.OperationalIntentExternalStateWithdrawn, NextAttemptAt: now, UpdatedAt: now,
+	}
+	intent.Status = domain.IntentStatusCanceled
+	if err := store.UpdateOperationalIntentAndRequestPublication(ctx, intent, 0, withdrawn); err != nil {
+		t.Fatal(err)
+	}
+	activated := withdrawn
+	activated.DesiredState = domain.OperationalIntentExternalStateActivated
+	if err := store.RequestOperationalIntentPublicationIfCurrent(ctx, activated, 0, domain.IntentStatusAccepted); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("guarded activation error = %v, want version conflict", err)
+	}
+	publication, err := store.GetOperationalIntentPublication(ctx, intent.ID)
+	if err != nil || publication.DesiredState != domain.OperationalIntentExternalStateWithdrawn {
+		t.Fatalf("publication = %#v, %v; want withdrawal preserved", publication, err)
+	}
+}
 
 func TestExpiredPublicationLeaseCanBeReclaimed(t *testing.T) {
 	ctx := context.Background()

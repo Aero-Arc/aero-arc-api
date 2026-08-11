@@ -315,6 +315,20 @@ func (s *Store) RequestOperationalIntentPublication(_ context.Context, publicati
 	return nil
 }
 
+func (s *Store) RequestOperationalIntentPublicationIfCurrent(_ context.Context, publication domain.OperationalIntentPublication, expectedIntentRevision int64, expectedStatus domain.IntentStatus) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.latestOperationalIntent(publication.IntentID)
+	if !ok {
+		return durable.ErrNotFound
+	}
+	if current.Version != publication.DesiredIntentVersion || current.Revision != expectedIntentRevision || current.Status != expectedStatus {
+		return durable.ErrVersionConflict
+	}
+	s.requestPublicationLocked(publication)
+	return nil
+}
+
 func (s *Store) requestPublicationLocked(request domain.OperationalIntentPublication) {
 	current, exists := s.publications[request.IntentID]
 	request.LeaseUntil = nil

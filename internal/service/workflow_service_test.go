@@ -25,11 +25,21 @@ func TestCreateIntentRejectsInvalidPlannedWindow(t *testing.T) {
 	}
 }
 
-func TestCreateIntentRejectsNonUUIDIdentifier(t *testing.T) {
+func TestCreateIntentPreservesNonUUIDIdentifierWithoutPublishing(t *testing.T) {
 	now := fixedWorkflowTime()
 	request := workflowIntentRequest(now)
 	request.ID = "human-readable-intent"
-	_, err := NewIntentServiceWithClock(durablememory.NewStore(), fixedClock(now), nil).CreateIntent(context.Background(), request)
+	intent, err := NewIntentServiceWithClock(durablememory.NewStore(), fixedClock(now), nil).CreateIntent(context.Background(), request)
+	if err != nil || intent.ID != request.ID {
+		t.Fatalf("CreateIntent intent = %#v, error = %v", intent, err)
+	}
+}
+
+func TestCreateIntentRejectsNonUUIDIdentifierWithPublishing(t *testing.T) {
+	now := fixedWorkflowTime()
+	request := workflowIntentRequest(now)
+	request.ID = "human-readable-intent"
+	_, err := NewIntentServiceWithClock(durablememory.NewStore(), fixedClock(now), &workflowCoordinator{}).CreateIntent(context.Background(), request)
 	if !errors.Is(err, ErrValidation) {
 		t.Fatalf("CreateIntent error = %v, want ErrValidation", err)
 	}

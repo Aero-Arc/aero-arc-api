@@ -303,6 +303,33 @@ func TestPublicationRequestIsAtomicAndLeasedAcrossReplicas(t *testing.T) {
 	}
 }
 
+func TestGuardedPublicationRejectsStaleIntentAcrossReplicas(t *testing.T) {
+	ctx, first, second := integrationStores(t)
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	intent := integrationIntent("55555555-5555-4555-8555-555555555555", now)
+	intent.Status = domain.IntentStatusAccepted
+	if err := first.CreateOperationalIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	withdrawn := domain.OperationalIntentPublication{
+		IntentID: intent.ID, DesiredIntentVersion: intent.Version,
+		DesiredState: domain.OperationalIntentExternalStateWithdrawn, NextAttemptAt: now, UpdatedAt: now,
+	}
+	intent.Status = domain.IntentStatusCanceled
+	if err := second.UpdateOperationalIntentAndRequestPublication(ctx, intent, 0, withdrawn); err != nil {
+		t.Fatal(err)
+	}
+	activated := withdrawn
+	activated.DesiredState = domain.OperationalIntentExternalStateActivated
+	if err := first.RequestOperationalIntentPublicationIfCurrent(ctx, activated, 0, domain.IntentStatusAccepted); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("guarded activation error = %v, want version conflict", err)
+	}
+	publication, err := first.GetOperationalIntentPublication(ctx, intent.ID)
+	if err != nil || publication.DesiredState != domain.OperationalIntentExternalStateWithdrawn {
+		t.Fatalf("publication = %#v, %v; want withdrawal preserved", publication, err)
+	}
+}
+
 func TestReplacementPublicationPreservesLeaseAcrossReplicas(t *testing.T) {
 	ctx, first, second := integrationStores(t)
 	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
