@@ -38,6 +38,9 @@ func (servingPublisher) DeleteOperationalIntent(context.Context, string, string)
 func (servingPublisher) GetOperationalIntentReference(context.Context, string) (airspaceprovider.PublicationReceipt, error) {
 	return airspaceprovider.PublicationReceipt{}, nil
 }
+func (servingPublisher) FindSubscribers(context.Context, []domain.OperationalVolume) ([]airspaceprovider.Subscriber, error) {
+	return nil, nil
+}
 func (servingPublisher) BuildPeerNotification(airspaceprovider.PublicationRequest, airspaceprovider.PublicationReceipt, airspaceprovider.Subscriber, bool) ([]byte, error) {
 	return nil, nil
 }

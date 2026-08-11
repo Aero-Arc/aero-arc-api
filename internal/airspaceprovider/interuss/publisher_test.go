@@ -36,6 +36,13 @@ func TestPublisherWriteAndPeerNotificationFlow(t *testing.T) {
 			response.WriteHeader(http.StatusNoContent)
 			return
 		}
+		if request.URL.Path == "/dss/v1/subscriptions/query" {
+			if request.Method != http.MethodPost {
+				t.Errorf("subscription query method = %s", request.Method)
+			}
+			_, _ = fmt.Fprintf(response, `{"subscriptions":[{"id":"22222222-2222-4222-8222-222222222222","uss_base_url":%q,"version":"v1","notification_index":2,"notify_for_operational_intents":true}]}`, server.URL)
+			return
+		}
 		if !strings.HasPrefix(request.URL.Path, "/dss/v1/operational_intent_references/"+intentID) {
 			http.NotFound(response, request)
 			return
@@ -118,6 +125,10 @@ func TestPublisherWriteAndPeerNotificationFlow(t *testing.T) {
 	}
 	if _, err := provider.BuildPeerNotification(request, updated, updated.Subscribers[0], true); err != nil {
 		t.Fatal(err)
+	}
+	subscribers, err := provider.FindSubscribers(context.Background(), request.Volumes)
+	if err != nil || len(subscribers) != 1 || len(subscribers[0].Subscriptions) != 1 || subscribers[0].Subscriptions[0].NotificationIndex != 2 {
+		t.Fatalf("subscribers = %#v, %v", subscribers, err)
 	}
 	deleted, err := provider.DeleteOperationalIntent(context.Background(), intentID, updated.OVN)
 	if err != nil || deleted.Version != 3 {

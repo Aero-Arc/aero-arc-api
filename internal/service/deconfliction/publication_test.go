@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
@@ -26,12 +27,15 @@ type recordingPublisher struct {
 	createFn   func(airspaceprovider.PublicationRequest) (airspaceprovider.PublicationReceipt, error)
 	updateFn   func(airspaceprovider.PublicationRequest) (airspaceprovider.PublicationReceipt, error)
 	getFn      func(string) (airspaceprovider.PublicationReceipt, error)
+	deleteFn   func(string, string) (airspaceprovider.PublicationReceipt, error)
+	findFn     func([]domain.OperationalVolume) ([]airspaceprovider.Subscriber, error)
+	queryErr   error
 	deleteOVN  string
 }
 
 func (p *recordingPublisher) ID() string { return "recording" }
 func (p *recordingPublisher) FindOperationalIntents(context.Context, airspaceprovider.Query) ([]airspaceprovider.OperationalIntent, error) {
-	return []airspaceprovider.OperationalIntent{}, nil
+	return []airspaceprovider.OperationalIntent{}, p.queryErr
 }
 func (p *recordingPublisher) PublicationEnabled() bool { return true }
 func (p *recordingPublisher) CreateOperationalIntent(_ context.Context, request airspaceprovider.PublicationRequest) (airspaceprovider.PublicationReceipt, error) {
@@ -51,6 +55,9 @@ func (p *recordingPublisher) UpdateOperationalIntent(_ context.Context, request 
 func (p *recordingPublisher) DeleteOperationalIntent(_ context.Context, intentID, ovn string) (airspaceprovider.PublicationReceipt, error) {
 	p.deletes++
 	p.deleteOVN = ovn
+	if p.deleteFn != nil {
+		return p.deleteFn(intentID, ovn)
+	}
 	return airspaceprovider.PublicationReceipt{Version: p.creates + p.updates + p.deletes, OVN: intentID + "-deleted", ReferenceJSON: []byte(`{}`)}, nil
 }
 func (p *recordingPublisher) GetOperationalIntentReference(_ context.Context, intentID string) (airspaceprovider.PublicationReceipt, error) {
@@ -59,6 +66,12 @@ func (p *recordingPublisher) GetOperationalIntentReference(_ context.Context, in
 		return p.getFn(intentID)
 	}
 	return airspaceprovider.PublicationReceipt{}, nil
+}
+func (p *recordingPublisher) FindSubscribers(_ context.Context, volumes []domain.OperationalVolume) ([]airspaceprovider.Subscriber, error) {
+	if p.findFn != nil {
+		return p.findFn(volumes)
+	}
+	return nil, nil
 }
 func (p *recordingPublisher) BuildPeerNotification(airspaceprovider.PublicationRequest, airspaceprovider.PublicationReceipt, airspaceprovider.Subscriber, bool) ([]byte, error) {
 	return []byte(`{}`), nil
@@ -297,6 +310,121 @@ func TestLostMutationResponseRetriesUpdateToRecoverSubscribers(t *testing.T) {
 	}
 	if len(notifications) != 1 {
 		t.Fatalf("notifications = %#v, want recovered subscriber notification", notifications)
+	}
+}
+
+func TestTransientIndeterminateDeconflictionRetriesPublication(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 10, 18, 0, 0, 0, time.UTC)
+	currentTime := now
+	store := durablememory.NewStore()
+	intent := publicationTestIntent(t, ctx, store, now)
+	publisher := &recordingPublisher{queryErr: errors.New("DSS temporarily unavailable")}
+	deconflictionService, err := NewDeconflictionServiceWithClock(store, func() time.Time { return currentTime }, publisher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := deconflictionService.PublicationRequest(intent, domain.OperationalIntentExternalStateAccepted)
+	if err := store.RequestOperationalIntentPublication(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := deconflictionService.ReconcileIntent(ctx, intent.ID); err == nil {
+		t.Fatal("transient indeterminate deconfliction returned no error")
+	}
+	publication, err := store.GetOperationalIntentPublication(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if publication.SyncStatus != domain.PublicationSyncRetrying {
+		t.Fatalf("sync status = %q, want retrying", publication.SyncStatus)
+	}
+
+	publisher.queryErr = nil
+	currentTime = now.Add(2 * time.Second)
+	if err := deconflictionService.ReconcileDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	publication, err = store.GetOperationalIntentPublication(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if publisher.creates != 1 || publication.SyncStatus != domain.PublicationSyncConfirmed {
+		t.Fatalf("publisher=%+v publication=%+v", publisher, publication)
+	}
+}
+
+func TestAmbiguousDeleteReconstructsWithdrawalNotifications(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 10, 18, 0, 0, 0, time.UTC)
+	store := durablememory.NewStore()
+	intent := publicationTestIntent(t, ctx, store, now)
+	lostResponse := errors.New("connection closed after DSS deletion")
+	publisher := &recordingPublisher{}
+	publisher.deleteFn = func(string, string) (airspaceprovider.PublicationReceipt, error) {
+		if publisher.deletes == 1 {
+			return airspaceprovider.PublicationReceipt{}, lostResponse
+		}
+		return airspaceprovider.PublicationReceipt{}, &dss.SCDResponseError{StatusCode: http.StatusNotFound, Status: "404 Not Found"}
+	}
+	queries := 0
+	publisher.findFn = func(volumes []domain.OperationalVolume) ([]airspaceprovider.Subscriber, error) {
+		queries++
+		if len(volumes) != 1 || volumes[0].IntentVersion != intent.Version {
+			t.Fatalf("recovery volumes = %#v", volumes)
+		}
+		return []airspaceprovider.Subscriber{{
+			USSBaseURL: "https://subscriber.example",
+			Subscriptions: []airspaceprovider.SubscriptionState{{
+				ID: "22222222-2222-4222-8222-222222222222", NotificationIndex: 2,
+			}},
+		}}, nil
+	}
+	deconflictionService, err := NewDeconflictionServiceWithClock(store, func() time.Time { return now }, publisher)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	accepted := deconflictionService.PublicationRequest(intent, domain.OperationalIntentExternalStateAccepted)
+	if err := store.RequestOperationalIntentPublication(ctx, accepted); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimOperationalIntentPublication(ctx, intent.ID, now, now.Add(publicationLease))
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyReceipt(&claimed, testReceipt(airspaceprovider.PublicationRequest{
+		Intent: intent, State: domain.OperationalIntentExternalStateAccepted,
+	}, 1))
+	claimed.PublishedIntentVersion = intent.Version
+	claimed.ConfirmedState = domain.OperationalIntentExternalStateAccepted
+	claimed.SyncStatus = domain.PublicationSyncConfirmed
+	if err := store.ConfirmOperationalIntentPublication(ctx, claimed, claimed.Revision, nil); err != nil {
+		t.Fatal(err)
+	}
+	withdrawn := deconflictionService.PublicationRequest(intent, domain.OperationalIntentExternalStateWithdrawn)
+	if err := store.RequestOperationalIntentPublication(ctx, withdrawn); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := deconflictionService.ReconcileIntent(ctx, intent.ID); !errors.Is(err, lostResponse) {
+		t.Fatalf("first reconciliation error = %v, want lost response", err)
+	}
+	if err := deconflictionService.ReconcileIntent(ctx, intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	publication, err := store.GetOperationalIntentPublication(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if publisher.deletes != 2 || queries != 1 || publication.SyncStatus != domain.PublicationSyncWithdrawn {
+		t.Fatalf("publisher=%+v queries=%d publication=%+v", publisher, queries, publication)
+	}
+	notifications, err := store.ClaimDuePeerNotifications(ctx, now, now.Add(time.Minute), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notifications) != 1 || notifications[0].USSBaseURL != "https://subscriber.example" {
+		t.Fatalf("withdrawal notifications = %#v", notifications)
 	}
 }
 

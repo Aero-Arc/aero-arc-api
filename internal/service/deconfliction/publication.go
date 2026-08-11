@@ -116,12 +116,7 @@ func (s *DeconflictionService) reconcileClaimed(ctx context.Context, publication
 			if err != nil {
 				var responseErr *dss.SCDResponseError
 				if errors.As(err, &responseErr) && responseErr.StatusCode == http.StatusNotFound {
-					publication.SyncStatus = domain.PublicationSyncWithdrawn
-					publication.ConfirmedState = domain.OperationalIntentExternalStateWithdrawn
-					publication.PublishedIntentVersion = 0
-					publication.ConfirmedAt = &now
-					publication.UpdatedAt = now
-					return s.durable.UpdateOperationalIntentPublication(ctx, publication, expectedRevision)
+					return s.confirmWithdrawal(ctx, publication, expectedRevision, airspaceprovider.PublicationReceipt{})
 				}
 				return s.recordPublicationFailure(ctx, publication, expectedRevision, err, false)
 			}
@@ -135,27 +130,15 @@ func (s *DeconflictionService) reconcileClaimed(ctx context.Context, publication
 		if err != nil {
 			var responseErr *dss.SCDResponseError
 			if errors.As(err, &responseErr) && responseErr.StatusCode == http.StatusNotFound {
-				publication.SyncStatus = domain.PublicationSyncWithdrawn
-				publication.ConfirmedState = domain.OperationalIntentExternalStateWithdrawn
-				publication.PublishedIntentVersion = 0
-				publication.ConfirmedAt = &now
-				publication.UpdatedAt = now
-				return s.durable.UpdateOperationalIntentPublication(ctx, publication, expectedRevision)
+				recovered, recoverErr := s.recoverWithdrawalReceipt(ctx, publication)
+				if recoverErr != nil {
+					return s.recordPublicationFailure(ctx, publication, expectedRevision, recoverErr, false)
+				}
+				return s.confirmWithdrawal(ctx, publication, expectedRevision, recovered)
 			}
 			return s.recordPublicationFailure(ctx, publication, expectedRevision, err, false)
 		}
-		applyReceipt(&publication, receipt)
-		publication.SyncStatus = domain.PublicationSyncWithdrawn
-		publication.ConfirmedState = domain.OperationalIntentExternalStateWithdrawn
-		publication.PublishedIntentVersion = 0
-		publication.ConfirmedAt = &now
-		publication.UpdatedAt = now
-		request := airspaceprovider.PublicationRequest{Intent: domain.OperationalIntent{ID: publication.IntentID, Version: publication.DesiredIntentVersion}}
-		notifications, err := s.buildPeerNotifications(request, receipt, true)
-		if err != nil {
-			return s.recordPublicationFailure(ctx, publication, expectedRevision, err, false)
-		}
-		return s.durable.ConfirmOperationalIntentPublication(ctx, publication, expectedRevision, notifications)
+		return s.confirmWithdrawal(ctx, publication, expectedRevision, receipt)
 	}
 
 	intent, err := s.durable.GetOperationalIntentVersion(ctx, publication.IntentID, publication.DesiredIntentVersion)
@@ -173,7 +156,7 @@ func (s *DeconflictionService) reconcileClaimed(ctx context.Context, publication
 	}
 	if result.Posture != domain.DeconflictionPostureClear {
 		return s.recordPublicationFailure(ctx, publication, expectedRevision,
-			fmt.Errorf("deconfliction posture is %s", result.Posture), true)
+			fmt.Errorf("deconfliction posture is %s", result.Posture), !retryableDeconflictionResult(result))
 	}
 	keySet := make(map[string]struct{})
 	for _, record := range records {
@@ -235,6 +218,59 @@ func permanentPublicationError(err error) bool {
 		responseErr.StatusCode == 403 || responseErr.StatusCode == 413
 }
 
+func retryableDeconflictionResult(result domain.DeconflictionResult) bool {
+	if result.Posture != domain.DeconflictionPostureIndeterminate {
+		return false
+	}
+	for _, finding := range result.Findings {
+		if finding.Status == domain.ConflictFindingStatusIndeterminate &&
+			finding.SourceType == domain.ConflictFindingSourceExternal {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *DeconflictionService) recoverWithdrawalReceipt(ctx context.Context, publication domain.OperationalIntentPublication) (airspaceprovider.PublicationReceipt, error) {
+	volumes, err := s.durable.ListOperationalVolumes(ctx, publication.IntentID)
+	if err != nil {
+		return airspaceprovider.PublicationReceipt{}, err
+	}
+	version := publication.PublishedIntentVersion
+	if version == 0 {
+		version = publication.DesiredIntentVersion
+	}
+	subscribers, err := s.publisher.FindSubscribers(ctx, volumesForVersion(volumes, version))
+	if err != nil {
+		return airspaceprovider.PublicationReceipt{}, fmt.Errorf("recover subscribers after DSS deletion: %w", err)
+	}
+	return airspaceprovider.PublicationReceipt{
+		Manager: publication.Manager, Version: publication.DSSVersion, OVN: publication.OVN,
+		SubscriptionID: publication.SubscriptionID, USSBaseURL: publication.USSBaseURL,
+		State: publication.ConfirmedState, ReferenceJSON: append([]byte(nil), publication.ReferenceJSON...),
+		Subscribers: subscribers,
+	}, nil
+}
+
+func (s *DeconflictionService) confirmWithdrawal(ctx context.Context, publication domain.OperationalIntentPublication, expectedRevision int64, receipt airspaceprovider.PublicationReceipt) error {
+	now := s.now().UTC()
+	if receipt.OVN != "" {
+		applyReceipt(&publication, receipt)
+	}
+	request := airspaceprovider.PublicationRequest{Intent: domain.OperationalIntent{ID: publication.IntentID, Version: publication.DesiredIntentVersion}}
+	notifications, err := s.buildPeerNotifications(request, receipt, true)
+	if err != nil {
+		return s.recordPublicationFailure(ctx, publication, expectedRevision, err, false)
+	}
+	publication.SyncStatus = domain.PublicationSyncWithdrawn
+	publication.ConfirmedState = domain.OperationalIntentExternalStateWithdrawn
+	publication.PublishedIntentVersion = 0
+	publication.ConfirmedAt = &now
+	publication.LastError = ""
+	publication.UpdatedAt = now
+	return s.durable.ConfirmOperationalIntentPublication(ctx, publication, expectedRevision, notifications)
+}
+
 func (s *DeconflictionService) buildPeerNotifications(request airspaceprovider.PublicationRequest, receipt airspaceprovider.PublicationReceipt, deleted bool) ([]domain.PeerNotification, error) {
 	now := s.now().UTC()
 	notifications := make([]domain.PeerNotification, 0, len(receipt.Subscribers))
@@ -243,7 +279,11 @@ func (s *DeconflictionService) buildPeerNotifications(request airspaceprovider.P
 		if err != nil {
 			return nil, err
 		}
-		digest := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%s", request.Intent.ID, receipt.Version, subscriber.USSBaseURL)))
+		identity := fmt.Sprintf("%s\x00%d\x00%s", request.Intent.ID, receipt.Version, subscriber.USSBaseURL)
+		if deleted {
+			identity = fmt.Sprintf("%s\x00withdrawn\x00%d\x00%s", request.Intent.ID, request.Intent.Version, subscriber.USSBaseURL)
+		}
+		digest := sha256.Sum256([]byte(identity))
 		notifications = append(notifications, domain.PeerNotification{
 			ID: hex.EncodeToString(digest[:]), IntentID: request.Intent.ID,
 			IntentVersion: request.Intent.Version, USSBaseURL: subscriber.USSBaseURL,

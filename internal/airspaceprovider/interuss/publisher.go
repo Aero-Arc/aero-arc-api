@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 
 	dss "github.com/Aero-Arc/dss-clients/interuss"
 	"github.com/Aero-Arc/dss-clients/interuss/gen/scdv1"
@@ -94,6 +95,66 @@ func (p *Provider) GetOperationalIntentReference(ctx context.Context, intentID s
 		return airspaceprovider.PublicationReceipt{}, responseError(response.StatusCode(), response.Status(), response.Body)
 	}
 	return referenceReceipt(response.JSON200.OperationalIntentReference)
+}
+
+func (p *Provider) FindSubscribers(ctx context.Context, volumes []domain.OperationalVolume) ([]airspaceprovider.Subscriber, error) {
+	if p.dssClient == nil {
+		return nil, fmt.Errorf("InterUSS publication is not configured")
+	}
+	byURL := make(map[string]map[string]airspaceprovider.SubscriptionState)
+	for _, volume := range volumes {
+		area, err := toSCDVolume(volume)
+		if err != nil {
+			return nil, fmt.Errorf("convert subscription query volume %q: %w", volume.ID, err)
+		}
+		response, err := p.dssClient.SCDv1.QuerySubscriptionsWithResponse(ctx, scdv1.QuerySubscriptionParameters{AreaOfInterest: &area})
+		if err != nil {
+			return nil, fmt.Errorf("query DSS subscriptions: %w", err)
+		}
+		if response.StatusCode() != http.StatusOK || response.JSON200 == nil {
+			return nil, responseError(response.StatusCode(), response.Status(), response.Body)
+		}
+		for _, subscription := range response.JSON200.Subscriptions {
+			if subscription.NotifyForOperationalIntents == nil || !*subscription.NotifyForOperationalIntents {
+				continue
+			}
+			baseURL, err := subscription.UssBaseUrl.AsUssBaseURL()
+			if err != nil {
+				return nil, fmt.Errorf("read subscriber URL: %w", err)
+			}
+			id, err := subscription.Id.AsUUIDv4Format()
+			if err != nil {
+				return nil, fmt.Errorf("convert subscriber subscription ID: %w", err)
+			}
+			if byURL[baseURL] == nil {
+				byURL[baseURL] = make(map[string]airspaceprovider.SubscriptionState)
+			}
+			byURL[baseURL][id.String()] = airspaceprovider.SubscriptionState{
+				ID: id.String(), NotificationIndex: int(subscription.NotificationIndex),
+			}
+		}
+	}
+
+	urls := make([]string, 0, len(byURL))
+	for baseURL := range byURL {
+		urls = append(urls, baseURL)
+	}
+	sort.Strings(urls)
+	subscribers := make([]airspaceprovider.Subscriber, 0, len(urls))
+	for _, baseURL := range urls {
+		states := byURL[baseURL]
+		ids := make([]string, 0, len(states))
+		for id := range states {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		subscriber := airspaceprovider.Subscriber{USSBaseURL: baseURL, Subscriptions: make([]airspaceprovider.SubscriptionState, 0, len(ids))}
+		for _, id := range ids {
+			subscriber.Subscriptions = append(subscriber.Subscriptions, states[id])
+		}
+		subscribers = append(subscribers, subscriber)
+	}
+	return subscribers, nil
 }
 
 func (p *Provider) publicationParameters(request airspaceprovider.PublicationRequest) (scdv1.PutOperationalIntentReferenceParameters, error) {
