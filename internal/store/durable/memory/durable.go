@@ -419,6 +419,21 @@ func (s *Store) ClaimDueOperationalIntentPublications(_ context.Context, now, le
 	return claimed, nil
 }
 
+func (s *Store) RenewOperationalIntentPublicationLease(_ context.Context, intentID string, expectedRevision int64, leaseUntil time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	publication, ok := s.publications[intentID]
+	if !ok {
+		return durable.ErrNotFound
+	}
+	if publication.Revision != expectedRevision {
+		return durable.ErrVersionConflict
+	}
+	publication.LeaseUntil = &leaseUntil
+	s.publications[intentID] = clonePublication(publication)
+	return nil
+}
+
 func (s *Store) UpdateOperationalIntentPublication(_ context.Context, publication domain.OperationalIntentPublication, expectedRevision int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

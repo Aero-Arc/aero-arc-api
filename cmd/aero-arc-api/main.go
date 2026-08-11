@@ -219,7 +219,11 @@ func run(ctx context.Context, cfg *config.Config) error {
 		slog.Info("seeded demo data")
 	}
 	fleetService := service.NewFleetService(durableStore, telemetryStore, replayStore, registryClient)
-	deconflictionService, err := deconfliction.NewDeconflictionService(durableStore, providers...)
+	deconflictionService, err := deconfliction.NewDeconflictionServiceWithPublicationLease(
+		durableStore,
+		cfg.RequestTimeout+30*time.Second,
+		providers...,
+	)
 	if err != nil {
 		return err
 	}

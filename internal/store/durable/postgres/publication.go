@@ -207,6 +207,25 @@ func claimPublication(publication *domain.OperationalIntentPublication, now, lea
 	publication.UpdatedAt = now
 }
 
+func (s *Store) RenewOperationalIntentPublicationLease(ctx context.Context, intentID string, expectedRevision int64, leaseUntil time.Time) error {
+	rawLease, err := json.Marshal(leaseUntil)
+	if err != nil {
+		return fmt.Errorf("encode publication lease: %w", err)
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE operational_intent_publications SET
+			lease_until = $3,
+			data = jsonb_set(data, '{lease_until}', $4::jsonb, true)
+		WHERE intent_id = $1 AND revision = $2`, intentID, expectedRevision, leaseUntil, string(rawLease))
+	if err != nil {
+		return fmt.Errorf("renew publication lease: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return durable.ErrVersionConflict
+	}
+	return nil
+}
+
 func (s *Store) UpdateOperationalIntentPublication(ctx context.Context, publication domain.OperationalIntentPublication, expectedRevision int64) error {
 	return updateOperationalIntentPublication(ctx, s.pool, publication, expectedRevision)
 }

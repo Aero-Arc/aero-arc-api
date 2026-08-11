@@ -65,7 +65,7 @@ func (s *DeconflictionService) ReconcileIntent(ctx context.Context, intentID str
 		return fmt.Errorf("DSS publication is not configured")
 	}
 	now := s.now().UTC()
-	publication, err := s.durable.ClaimOperationalIntentPublication(ctx, intentID, now, now.Add(publicationLease))
+	publication, err := s.durable.ClaimOperationalIntentPublication(ctx, intentID, now, now.Add(s.publicationLease))
 	if err != nil {
 		return err
 	}
@@ -94,7 +94,7 @@ func (s *DeconflictionService) ReconcileDue(ctx context.Context) error {
 	var reconcileErrors []error
 	for range publicationBatch {
 		now := s.now().UTC()
-		publications, err := s.durable.ClaimDueOperationalIntentPublications(ctx, now, now.Add(publicationLease), 1)
+		publications, err := s.durable.ClaimDueOperationalIntentPublications(ctx, now, now.Add(s.publicationLease), 1)
 		if err != nil {
 			reconcileErrors = append(reconcileErrors, err)
 			break
@@ -130,6 +130,9 @@ func (s *DeconflictionService) reconcileClaimed(ctx context.Context, publication
 					fmt.Errorf("DSS reference omitted manager OVN"), false)
 			}
 			applyReceipt(&publication, current)
+		}
+		if err := s.renewPublicationLease(ctx, publication); err != nil {
+			return err
 		}
 		receipt, err := s.publisher.DeleteOperationalIntent(ctx, publication.IntentID, publication.OVN)
 		if err != nil {
@@ -190,6 +193,9 @@ func (s *DeconflictionService) reconcileClaimed(ctx context.Context, publication
 		OVN: publication.OVN, SubscriptionID: publication.SubscriptionID,
 	}
 	var receipt airspaceprovider.PublicationReceipt
+	if err := s.renewPublicationLease(ctx, publication); err != nil {
+		return err
+	}
 	if publication.OVN == "" {
 		receipt, err = s.publisher.CreateOperationalIntent(ctx, request)
 	} else {
@@ -316,7 +322,7 @@ func (s *DeconflictionService) DeliverDuePeerNotifications(ctx context.Context) 
 	var deliveryErrors []error
 	for range peerNotificationBatch {
 		now := s.now().UTC()
-		notifications, err := s.durable.ClaimDuePeerNotifications(ctx, now, now.Add(publicationLease), 1)
+		notifications, err := s.durable.ClaimDuePeerNotifications(ctx, now, now.Add(s.publicationLease), 1)
 		if err != nil {
 			deliveryErrors = append(deliveryErrors, err)
 			break
@@ -342,6 +348,11 @@ func (s *DeconflictionService) DeliverDuePeerNotifications(ctx context.Context) 
 		}
 	}
 	return errors.Join(deliveryErrors...)
+}
+
+func (s *DeconflictionService) renewPublicationLease(ctx context.Context, publication domain.OperationalIntentPublication) error {
+	leaseUntil := s.now().UTC().Add(s.publicationLease)
+	return s.durable.RenewOperationalIntentPublicationLease(ctx, publication.IntentID, publication.Revision, leaseUntil)
 }
 
 func applyReceipt(publication *domain.OperationalIntentPublication, receipt airspaceprovider.PublicationReceipt) {

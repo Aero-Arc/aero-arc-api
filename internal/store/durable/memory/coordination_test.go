@@ -88,7 +88,12 @@ func TestReplacementPublicationPreservesActiveLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	leaseUntil := now.Add(time.Minute)
-	if _, err := store.ClaimOperationalIntentPublication(ctx, intentID, now, leaseUntil); err != nil {
+	claimedPublication, err := store.ClaimOperationalIntentPublication(ctx, intentID, now, leaseUntil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaseUntil = now.Add(2 * time.Minute)
+	if err := store.RenewOperationalIntentPublicationLease(ctx, intentID, claimedPublication.Revision, leaseUntil); err != nil {
 		t.Fatal(err)
 	}
 	withdrawn := accepted
@@ -96,6 +101,9 @@ func TestReplacementPublicationPreservesActiveLease(t *testing.T) {
 	withdrawn.UpdatedAt = now.Add(time.Second)
 	if err := store.RequestOperationalIntentPublication(ctx, withdrawn); err != nil {
 		t.Fatal(err)
+	}
+	if err := store.RenewOperationalIntentPublicationLease(ctx, intentID, claimedPublication.Revision, leaseUntil.Add(time.Minute)); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("stale renewal error = %v, want version conflict", err)
 	}
 	stored, err := store.GetOperationalIntentPublication(ctx, intentID)
 	if err != nil {

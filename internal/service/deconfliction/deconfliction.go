@@ -14,17 +14,26 @@ import (
 const deconflictionRuleVersion = "provider-aggregate-v1"
 
 type DeconflictionService struct {
-	durable   durable.Store
-	providers []airspaceprovider.Provider
-	publisher airspaceprovider.Publisher
-	now       func() time.Time
+	durable          durable.Store
+	providers        []airspaceprovider.Provider
+	publisher        airspaceprovider.Publisher
+	publicationLease time.Duration
+	now              func() time.Time
 }
 
 func NewDeconflictionService(
 	store durable.Store,
 	providers ...airspaceprovider.Provider,
 ) (*DeconflictionService, error) {
-	return NewDeconflictionServiceWithClock(store, nil, providers...)
+	return newDeconflictionService(store, nil, publicationLease, providers...)
+}
+
+func NewDeconflictionServiceWithPublicationLease(
+	store durable.Store,
+	lease time.Duration,
+	providers ...airspaceprovider.Provider,
+) (*DeconflictionService, error) {
+	return newDeconflictionService(store, nil, lease, providers...)
 }
 
 func NewDeconflictionServiceWithClock(
@@ -32,8 +41,20 @@ func NewDeconflictionServiceWithClock(
 	now func() time.Time,
 	providers ...airspaceprovider.Provider,
 ) (*DeconflictionService, error) {
+	return newDeconflictionService(store, now, publicationLease, providers...)
+}
+
+func newDeconflictionService(
+	store durable.Store,
+	now func() time.Time,
+	lease time.Duration,
+	providers ...airspaceprovider.Provider,
+) (*DeconflictionService, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
+	}
+	if lease <= 0 {
+		return nil, fmt.Errorf("DSS publication lease must be positive")
 	}
 	configured := make([]airspaceprovider.Provider, 0, len(providers))
 	for _, provider := range providers {
@@ -44,7 +65,7 @@ func NewDeconflictionServiceWithClock(
 	if len(configured) == 0 {
 		return nil, fmt.Errorf("deconfliction airspace provider is required")
 	}
-	service := &DeconflictionService{durable: store, providers: configured, now: now}
+	service := &DeconflictionService{durable: store, providers: configured, publicationLease: lease, now: now}
 	for _, provider := range configured {
 		if publisher, ok := provider.(airspaceprovider.Publisher); ok {
 			if service.publisher != nil {
