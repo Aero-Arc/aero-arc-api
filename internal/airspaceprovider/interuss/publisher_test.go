@@ -137,7 +137,11 @@ func TestPublisherRejectsInvalidRequests(t *testing.T) {
 	if _, err := provider.CreateOperationalIntent(context.Background(), request); err == nil {
 		t.Fatal("CreateOperationalIntent accepted an unconfigured provider")
 	}
-	server := httptest.NewServer(http.NotFoundHandler())
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		requests++
+		response.WriteHeader(http.StatusNotFound)
+	}))
 	defer server.Close()
 	configured, err := New(Config{
 		BaseURL: server.URL, StaticToken: "test-token", USSBaseURL: "https://uss.example", RequestTimeout: time.Second,
@@ -156,6 +160,21 @@ func TestPublisherRejectsInvalidRequests(t *testing.T) {
 	}
 	if _, err := configured.GetOperationalIntentReference(context.Background(), request.Intent.ID); err == nil {
 		t.Fatal("GetOperationalIntentReference accepted an invalid intent UUID")
+	}
+	offNominal := airspaceprovider.PublicationRequest{
+		Intent:  domain.OperationalIntent{ID: "44444444-4444-4444-8444-444444444444"},
+		State:   domain.OperationalIntentExternalStateAccepted,
+		Volumes: []domain.OperationalVolume{{VolumeType: domain.OperationalVolumeContingency}},
+	}
+	if _, err := configured.CreateOperationalIntent(context.Background(), offNominal); err == nil || !strings.Contains(err.Error(), "off-nominal") {
+		t.Fatalf("CreateOperationalIntent off-nominal error = %v", err)
+	}
+	offNominal.OVN = "owned-ovn"
+	if _, err := configured.UpdateOperationalIntent(context.Background(), offNominal); err == nil || !strings.Contains(err.Error(), "off-nominal") {
+		t.Fatalf("UpdateOperationalIntent off-nominal error = %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("invalid details issued %d DSS mutations", requests)
 	}
 }
 

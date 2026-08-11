@@ -303,6 +303,49 @@ func TestPublicationRequestIsAtomicAndLeasedAcrossReplicas(t *testing.T) {
 	}
 }
 
+func TestReplacementPublicationPreservesLeaseAcrossReplicas(t *testing.T) {
+	ctx, first, second := integrationStores(t)
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	intent := integrationIntent("44444444-4444-4444-8444-444444444444", now)
+	if err := first.CreateOperationalIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	accepted := domain.OperationalIntentPublication{
+		IntentID: intent.ID, DesiredIntentVersion: intent.Version,
+		DesiredState: domain.OperationalIntentExternalStateAccepted, NextAttemptAt: now, UpdatedAt: now,
+	}
+	if err := first.RequestOperationalIntentPublication(ctx, accepted); err != nil {
+		t.Fatal(err)
+	}
+	leaseUntil := now.Add(time.Minute)
+	if _, err := first.ClaimOperationalIntentPublication(ctx, intent.ID, now, leaseUntil); err != nil {
+		t.Fatal(err)
+	}
+	withdrawn := accepted
+	withdrawn.DesiredState = domain.OperationalIntentExternalStateWithdrawn
+	withdrawn.UpdatedAt = now.Add(time.Second)
+	if err := second.RequestOperationalIntentPublication(ctx, withdrawn); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := first.GetOperationalIntentPublication(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.LeaseUntil == nil || !stored.LeaseUntil.Equal(leaseUntil) {
+		t.Fatalf("replacement lease = %v, want %v", stored.LeaseUntil, leaseUntil)
+	}
+	if stored.LastAttemptAt == nil || !stored.LastAttemptAt.Equal(now) {
+		t.Fatalf("replacement last attempt = %v, want %v", stored.LastAttemptAt, now)
+	}
+	if claimed, err := first.ClaimDueOperationalIntentPublications(ctx, now.Add(30*time.Second), now.Add(2*time.Minute), 1); err != nil || len(claimed) != 0 {
+		t.Fatalf("replacement claimed during active lease: %#v, %v", claimed, err)
+	}
+	claimed, err := second.ClaimDueOperationalIntentPublications(ctx, leaseUntil, leaseUntil.Add(time.Minute), 1)
+	if err != nil || len(claimed) != 1 || claimed[0].DesiredState != domain.OperationalIntentExternalStateWithdrawn {
+		t.Fatalf("replacement after lease = %#v, %v", claimed, err)
+	}
+}
+
 func TestConcurrentFindingReplacementsDoNotMerge(t *testing.T) {
 	ctx, first, second := integrationStores(t)
 	now := time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC)

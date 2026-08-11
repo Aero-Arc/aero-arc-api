@@ -80,6 +80,7 @@ func requestPublicationTx(ctx context.Context, tx pgx.Tx, request domain.Operati
 	if !exists {
 		return durable.ErrNotFound
 	}
+	request.LeaseUntil = nil
 	current, err := scanPublication(tx.QueryRow(ctx, `SELECT data, revision FROM operational_intent_publications WHERE intent_id = $1 FOR UPDATE`, request.IntentID))
 	if err != nil && !errors.Is(err, durable.ErrNotFound) {
 		return err
@@ -95,10 +96,11 @@ func requestPublicationTx(ctx context.Context, tx pgx.Tx, request domain.Operati
 		request.USSBaseURL = current.USSBaseURL
 		request.ReferenceJSON = append([]byte(nil), current.ReferenceJSON...)
 		request.ConfirmedAt = current.ConfirmedAt
+		request.LeaseUntil = current.LeaseUntil
+		request.LastAttemptAt = current.LastAttemptAt
 	}
 	request.SyncStatus = domain.PublicationSyncPending
 	request.AttemptCount = 0
-	request.LeaseUntil = nil
 	request.LastError = ""
 	return writePublication(ctx, tx, request)
 }
