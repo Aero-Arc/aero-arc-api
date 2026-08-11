@@ -1,3 +1,8 @@
+// Package deconfliction discovers operational intents, evaluates conflicts,
+// and reconciles locally owned intents with external coordination providers.
+//
+// The DSS publication state machine and its recovery guarantees are documented
+// in docs/deconfliction-publication.md.
 package deconfliction
 
 import (

@@ -109,6 +109,11 @@ service. Durable and replay stores still run in `memory` mode in this scaffold.
 
 ## Deconfliction Read, Check, and Publication Slice
 
+The [DSS operational-intent publication guide](docs/deconfliction-publication.md)
+documents the lifecycle, durable state model, concurrency invariants, ambiguous
+remote-outcome recovery, peer notification semantics, and current production
+limits. This section focuses on configuration and the public API surface.
+
 Set `AERO_API_DURABLE_STORE=postgres` and `AERO_API_DATABASE_URL` to persist
 the deconfliction slice in PostgreSQL and use PostGIS for local spatial
 candidate discovery. The required schema is initialized automatically.
@@ -156,6 +161,8 @@ transaction. A leased background reconciler performs a fresh conflict check,
 creates or updates the DSS reference with the current peer OVN key, persists
 the returned OVN/version/subscription, and durably retries peer notifications.
 Cancellation and completion enqueue withdrawal of a published reference.
+Operational synchronization state is available from
+`GET /api/v1/operational-intents/{intent_id}/coordination`.
 
 Use `AERO_API_DSS_STATIC_TOKEN` instead of the dummy OAuth settings when a
 bearer token is managed externally. WGS84 polygon volumes are supported in this
