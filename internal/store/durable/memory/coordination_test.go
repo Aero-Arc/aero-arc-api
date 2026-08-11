@@ -38,6 +38,52 @@ func TestExpiredPublicationLeaseCanBeReclaimed(t *testing.T) {
 	}
 }
 
+func TestReplacementPublicationPreservesActiveLease(t *testing.T) {
+	ctx := context.Background()
+	store := NewStore()
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	const intentID = "33333333-3333-4333-8333-333333333333"
+	if err := store.CreateOperationalIntent(ctx, domain.OperationalIntent{
+		ID: intentID, Version: 1, PlannedStartAt: now, PlannedEndAt: now.Add(time.Hour), UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	accepted := domain.OperationalIntentPublication{
+		IntentID: intentID, DesiredIntentVersion: 1,
+		DesiredState: domain.OperationalIntentExternalStateAccepted, NextAttemptAt: now, UpdatedAt: now,
+	}
+	if err := store.RequestOperationalIntentPublication(ctx, accepted); err != nil {
+		t.Fatal(err)
+	}
+	leaseUntil := now.Add(time.Minute)
+	if _, err := store.ClaimOperationalIntentPublication(ctx, intentID, now, leaseUntil); err != nil {
+		t.Fatal(err)
+	}
+	withdrawn := accepted
+	withdrawn.DesiredState = domain.OperationalIntentExternalStateWithdrawn
+	withdrawn.UpdatedAt = now.Add(time.Second)
+	if err := store.RequestOperationalIntentPublication(ctx, withdrawn); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.GetOperationalIntentPublication(ctx, intentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.LeaseUntil == nil || !stored.LeaseUntil.Equal(leaseUntil) {
+		t.Fatalf("replacement lease = %v, want %v", stored.LeaseUntil, leaseUntil)
+	}
+	if stored.LastAttemptAt == nil || !stored.LastAttemptAt.Equal(now) {
+		t.Fatalf("replacement last attempt = %v, want %v", stored.LastAttemptAt, now)
+	}
+	if claimed, err := store.ClaimDueOperationalIntentPublications(ctx, now.Add(30*time.Second), now.Add(2*time.Minute), 1); err != nil || len(claimed) != 0 {
+		t.Fatalf("replacement claimed during active lease: %#v, %v", claimed, err)
+	}
+	claimed, err := store.ClaimDueOperationalIntentPublications(ctx, leaseUntil, leaseUntil.Add(time.Minute), 1)
+	if err != nil || len(claimed) != 1 || claimed[0].DesiredState != domain.OperationalIntentExternalStateWithdrawn {
+		t.Fatalf("replacement after lease = %#v, %v", claimed, err)
+	}
+}
+
 func TestPeerNotificationEnqueueIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	store := NewStore()

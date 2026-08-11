@@ -317,6 +317,7 @@ func (s *Store) RequestOperationalIntentPublication(_ context.Context, publicati
 
 func (s *Store) requestPublicationLocked(request domain.OperationalIntentPublication) {
 	current, exists := s.publications[request.IntentID]
+	request.LeaseUntil = nil
 	if exists {
 		request.Revision = current.Revision + 1
 		request.PublishedIntentVersion = current.PublishedIntentVersion
@@ -328,10 +329,11 @@ func (s *Store) requestPublicationLocked(request domain.OperationalIntentPublica
 		request.USSBaseURL = current.USSBaseURL
 		request.ReferenceJSON = append([]byte(nil), current.ReferenceJSON...)
 		request.ConfirmedAt = current.ConfirmedAt
+		request.LeaseUntil = current.LeaseUntil
+		request.LastAttemptAt = current.LastAttemptAt
 	}
 	request.SyncStatus = domain.PublicationSyncPending
 	request.AttemptCount = 0
-	request.LeaseUntil = nil
 	request.LastError = ""
 	s.publications[request.IntentID] = clonePublication(request)
 }

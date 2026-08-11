@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sort"
 	"time"
 
@@ -111,16 +112,29 @@ func (s *DeconflictionService) reconcileClaimed(ctx context.Context, publication
 	now := s.now().UTC()
 	if publication.DesiredState == domain.OperationalIntentExternalStateWithdrawn {
 		if publication.OVN == "" {
-			publication.SyncStatus = domain.PublicationSyncWithdrawn
-			publication.ConfirmedState = domain.OperationalIntentExternalStateWithdrawn
-			publication.ConfirmedAt = &now
-			publication.UpdatedAt = now
-			return s.durable.UpdateOperationalIntentPublication(ctx, publication, expectedRevision)
+			current, err := s.publisher.GetOperationalIntentReference(ctx, publication.IntentID)
+			if err != nil {
+				var responseErr *dss.SCDResponseError
+				if errors.As(err, &responseErr) && responseErr.StatusCode == http.StatusNotFound {
+					publication.SyncStatus = domain.PublicationSyncWithdrawn
+					publication.ConfirmedState = domain.OperationalIntentExternalStateWithdrawn
+					publication.PublishedIntentVersion = 0
+					publication.ConfirmedAt = &now
+					publication.UpdatedAt = now
+					return s.durable.UpdateOperationalIntentPublication(ctx, publication, expectedRevision)
+				}
+				return s.recordPublicationFailure(ctx, publication, expectedRevision, err, false)
+			}
+			if current.OVN == "" {
+				return s.recordPublicationFailure(ctx, publication, expectedRevision,
+					fmt.Errorf("DSS reference omitted manager OVN"), false)
+			}
+			applyReceipt(&publication, current)
 		}
 		receipt, err := s.publisher.DeleteOperationalIntent(ctx, publication.IntentID, publication.OVN)
 		if err != nil {
 			var responseErr *dss.SCDResponseError
-			if errors.As(err, &responseErr) && responseErr.StatusCode == 404 {
+			if errors.As(err, &responseErr) && responseErr.StatusCode == http.StatusNotFound {
 				publication.SyncStatus = domain.PublicationSyncWithdrawn
 				publication.ConfirmedState = domain.OperationalIntentExternalStateWithdrawn
 				publication.PublishedIntentVersion = 0
@@ -185,10 +199,12 @@ func (s *DeconflictionService) reconcileClaimed(ctx context.Context, publication
 	if err != nil {
 		current, readErr := s.publisher.GetOperationalIntentReference(ctx, publication.IntentID)
 		if readErr == nil && current.Version > publication.DSSVersion && current.State == publication.DesiredState {
-			// The mutation succeeded but its response was lost. Subscriber URLs
-			// are not recoverable from the read response, but the owned DSS state
-			// and published details can be reconciled safely.
-			receipt = current
+			// A read recovers the new OVN but not the mutation response's
+			// subscribers. Persist the recovered reference and retry as an update
+			// so peer notifications are built from a complete mutation receipt.
+			applyReceipt(&publication, current)
+			return s.recordPublicationFailure(ctx, publication, expectedRevision,
+				fmt.Errorf("DSS mutation response was lost before subscribers were recorded: %w", err), false)
 		} else {
 			if readErr == nil && current.OVN != "" {
 				applyReceipt(&publication, current)

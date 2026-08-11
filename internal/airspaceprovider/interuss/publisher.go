@@ -97,6 +97,9 @@ func (p *Provider) GetOperationalIntentReference(ctx context.Context, intentID s
 }
 
 func (p *Provider) publicationParameters(request airspaceprovider.PublicationRequest) (scdv1.PutOperationalIntentReferenceParameters, error) {
+	if err := validateOperationalIntentDetails(request.State, request.Volumes); err != nil {
+		return scdv1.PutOperationalIntentReferenceParameters{}, err
+	}
 	extents := make([]scdv1.Volume4D, 0, len(request.Volumes))
 	for _, volume := range request.Volumes {
 		extent, err := toSCDVolume(volume)

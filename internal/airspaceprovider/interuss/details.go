@@ -31,8 +31,8 @@ func PublishedOperationalIntent(referenceJSON []byte, volumes []domain.Operation
 			nominal = append(nominal, converted)
 		}
 	}
-	if (reference.State == scdv1.Accepted || reference.State == scdv1.Activated) && len(offNominal) > 0 {
-		return scdv1.OperationalIntent{}, fmt.Errorf("accepted and activated intents cannot publish off-nominal volumes")
+	if err := validateOperationalIntentDetails(domain.OperationalIntentExternalState(reference.State), volumes); err != nil {
+		return scdv1.OperationalIntent{}, err
 	}
 	priority := scdv1.Priority(0)
 	details := scdv1.OperationalIntentDetails{Priority: &priority}
@@ -43,4 +43,16 @@ func PublishedOperationalIntent(referenceJSON []byte, volumes []domain.Operation
 		details.OffNominalVolumes = &offNominal
 	}
 	return scdv1.OperationalIntent{Reference: reference, Details: details}, nil
+}
+
+func validateOperationalIntentDetails(state domain.OperationalIntentExternalState, volumes []domain.OperationalVolume) error {
+	if state != domain.OperationalIntentExternalStateAccepted && state != domain.OperationalIntentExternalStateActivated {
+		return nil
+	}
+	for _, volume := range volumes {
+		if volume.VolumeType == domain.OperationalVolumeContingency || volume.VolumeType == domain.OperationalVolumeEmergency {
+			return fmt.Errorf("accepted and activated intents cannot publish off-nominal volumes")
+		}
+	}
+	return nil
 }
