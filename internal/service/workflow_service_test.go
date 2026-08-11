@@ -45,6 +45,32 @@ func TestCreateIntentRejectsNonUUIDIdentifierWithPublishing(t *testing.T) {
 	}
 }
 
+func TestAcceptIntentRejectsDSSIncompatiblePublication(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	now := fixedWorkflowTime()
+	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+	intent := seedSubmittedIntentWithVolume(t, ctx, store, now)
+	coordinator := &durableWorkflowCoordinator{
+		store: store, now: now, validationErr: errors.New("altitude reference AGL is not supported by SCD"),
+	}
+
+	_, err := NewIntentServiceWithClock(store, fixedClock(now), coordinator).AcceptIntent(ctx, intent.ID)
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("AcceptIntent error = %v, want ErrValidation", err)
+	}
+	current, getErr := store.GetOperationalIntent(ctx, intent.ID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if current.Status != domain.IntentStatusSubmitted {
+		t.Fatalf("status = %q, want submitted", current.Status)
+	}
+	if _, publicationErr := store.GetOperationalIntentPublication(ctx, intent.ID); !errors.Is(publicationErr, durable.ErrNotFound) {
+		t.Fatalf("publication error = %v, want not found", publicationErr)
+	}
+}
+
 type workflowCoordinator struct {
 	publication domain.OperationalIntentPublication
 	reconciles  int
@@ -54,6 +80,7 @@ type durableWorkflowCoordinator struct {
 	store         durable.Store
 	now           time.Time
 	reconciles    int
+	validationErr error
 	beforeConfirm func(context.Context, domain.OperationalIntentPublication) error
 }
 
@@ -62,6 +89,10 @@ func (c *durableWorkflowCoordinator) CheckIntent(context.Context, string) (domai
 }
 
 func (c *durableWorkflowCoordinator) PublishingEnabled() bool { return true }
+
+func (c *durableWorkflowCoordinator) ValidatePublication(context.Context, domain.OperationalIntent, domain.OperationalIntentExternalState) error {
+	return c.validationErr
+}
 
 func (c *durableWorkflowCoordinator) PublicationRequest(intent domain.OperationalIntent, state domain.OperationalIntentExternalState) domain.OperationalIntentPublication {
 	return domain.OperationalIntentPublication{
@@ -102,6 +133,10 @@ func (c *workflowCoordinator) CheckIntent(context.Context, string) (domain.Decon
 }
 
 func (c *workflowCoordinator) PublishingEnabled() bool { return true }
+
+func (c *workflowCoordinator) ValidatePublication(context.Context, domain.OperationalIntent, domain.OperationalIntentExternalState) error {
+	return nil
+}
 
 func (c *workflowCoordinator) PublicationRequest(intent domain.OperationalIntent, state domain.OperationalIntentExternalState) domain.OperationalIntentPublication {
 	return domain.OperationalIntentPublication{

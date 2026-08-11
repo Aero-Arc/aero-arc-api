@@ -26,6 +26,9 @@ func (servingPublisher) FindOperationalIntents(context.Context, airspaceprovider
 	return nil, nil
 }
 func (servingPublisher) PublicationEnabled() bool { return true }
+func (servingPublisher) ValidateOperationalIntent(airspaceprovider.PublicationRequest) error {
+	return nil
+}
 func (servingPublisher) CreateOperationalIntent(context.Context, airspaceprovider.PublicationRequest) (airspaceprovider.PublicationReceipt, error) {
 	return airspaceprovider.PublicationReceipt{}, nil
 }

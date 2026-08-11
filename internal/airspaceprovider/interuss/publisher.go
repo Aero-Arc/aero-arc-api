@@ -16,6 +16,11 @@ import (
 
 func (p *Provider) PublicationEnabled() bool { return p.dssClient != nil && p.ussBaseURL != "" }
 
+func (p *Provider) ValidateOperationalIntent(request airspaceprovider.PublicationRequest) error {
+	_, err := p.publicationParameters(request)
+	return err
+}
+
 func (p *Provider) CreateOperationalIntent(ctx context.Context, request airspaceprovider.PublicationRequest) (airspaceprovider.PublicationReceipt, error) {
 	if p.dssClient == nil || p.ussBaseURL == "" {
 		return airspaceprovider.PublicationReceipt{}, fmt.Errorf("InterUSS publication is not configured")

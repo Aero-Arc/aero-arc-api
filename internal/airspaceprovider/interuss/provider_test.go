@@ -456,6 +456,20 @@ func testSCDIntent(t *testing.T, reference scdv1.OperationalIntentReference, vol
 	}
 }
 
+func TestValidateOperationalIntentRejectsUnsupportedAltitudeReference(t *testing.T) {
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	volume := testVolume(now)
+	volume.AltitudeRef = domain.AltitudeReferenceAGL
+	provider := &Provider{ussBaseURL: "https://uss.example"}
+	err := provider.ValidateOperationalIntent(airspaceprovider.PublicationRequest{
+		Intent:  domain.OperationalIntent{ID: "11111111-1111-4111-8111-111111111111"},
+		Volumes: []domain.OperationalVolume{volume}, State: domain.OperationalIntentExternalStateAccepted,
+	})
+	if err == nil || !strings.Contains(err.Error(), "not supported by SCD") {
+		t.Fatalf("validation error = %v", err)
+	}
+}
+
 func testVolume(now time.Time) domain.OperationalVolume {
 	return domain.OperationalVolume{
 		ID:            "target-volume",

@@ -45,6 +45,7 @@ type DeconflictionChecker interface {
 type DeconflictionCoordinator interface {
 	DeconflictionChecker
 	PublishingEnabled() bool
+	ValidatePublication(context.Context, domain.OperationalIntent, domain.OperationalIntentExternalState) error
 	PublicationRequest(domain.OperationalIntent, domain.OperationalIntentExternalState) domain.OperationalIntentPublication
 	GetPublication(context.Context, string) (domain.OperationalIntentPublication, error)
 	ReconcileIntent(context.Context, string) error
@@ -338,6 +339,9 @@ func (s *IntentService) AcceptIntent(ctx context.Context, intentID string) (doma
 	if s.deconfliction != nil && s.deconfliction.PublishingEnabled() {
 		if _, err := canonicalDSSIntentID(intent.ID); err != nil {
 			return domain.OperationalIntent{}, err
+		}
+		if err := s.deconfliction.ValidatePublication(ctx, intent, domain.OperationalIntentExternalStateAccepted); err != nil {
+			return domain.OperationalIntent{}, fmt.Errorf("%w: intent is not compatible with DSS publication: %v", ErrValidation, err)
 		}
 	}
 

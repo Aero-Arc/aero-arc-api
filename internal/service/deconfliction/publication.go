@@ -35,6 +35,16 @@ func (s *DeconflictionService) PublicationRequest(intent domain.OperationalInten
 	}
 }
 
+func (s *DeconflictionService) ValidatePublication(ctx context.Context, intent domain.OperationalIntent, state domain.OperationalIntentExternalState) error {
+	volumes, err := s.durable.ListOperationalVolumes(ctx, intent.ID)
+	if err != nil {
+		return err
+	}
+	return s.publisher.ValidateOperationalIntent(airspaceprovider.PublicationRequest{
+		Intent: intent, Volumes: volumesForVersion(volumes, intent.Version), State: state,
+	})
+}
+
 func (s *DeconflictionService) GetPublication(ctx context.Context, intentID string) (domain.OperationalIntentPublication, error) {
 	return s.durable.GetOperationalIntentPublication(ctx, intentID)
 }
