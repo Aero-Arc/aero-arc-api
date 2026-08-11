@@ -77,6 +77,7 @@ type Publisher interface {
 	UpdateOperationalIntent(context.Context, PublicationRequest) (PublicationReceipt, error)
 	DeleteOperationalIntent(context.Context, string, string) (PublicationReceipt, error)
 	GetOperationalIntentReference(context.Context, string) (PublicationReceipt, error)
+	FindSubscribers(context.Context, []domain.OperationalVolume) ([]Subscriber, error)
 	BuildPeerNotification(PublicationRequest, PublicationReceipt, Subscriber, bool) ([]byte, error)
 	DeliverPeerNotification(context.Context, string, []byte) error
 }
