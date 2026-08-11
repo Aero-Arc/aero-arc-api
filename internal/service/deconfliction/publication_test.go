@@ -33,6 +33,22 @@ type recordingPublisher struct {
 	deleteOVN  string
 }
 
+type publicationRenewalRaceStore struct {
+	durable.Store
+	beforeRenew func() error
+}
+
+func (s *publicationRenewalRaceStore) RenewOperationalIntentPublicationLease(ctx context.Context, intentID string, expectedRevision int64, leaseUntil time.Time) error {
+	if s.beforeRenew != nil {
+		beforeRenew := s.beforeRenew
+		s.beforeRenew = nil
+		if err := beforeRenew(); err != nil {
+			return err
+		}
+	}
+	return s.Store.RenewOperationalIntentPublicationLease(ctx, intentID, expectedRevision, leaseUntil)
+}
+
 func (p *recordingPublisher) ID() string { return "recording" }
 func (p *recordingPublisher) FindOperationalIntents(context.Context, airspaceprovider.Query) ([]airspaceprovider.OperationalIntent, error) {
 	return []airspaceprovider.OperationalIntent{}, p.queryErr
@@ -145,6 +161,40 @@ func TestPublicationReconcilerCreatesUpdatesAndWithdrawsOneDSSReference(t *testi
 	publication, _ = deconflictionService.GetPublication(ctx, intent.ID)
 	if publisher.deletes != 1 || publication.SyncStatus != domain.PublicationSyncWithdrawn || publication.PublishedIntentVersion != 0 {
 		t.Fatalf("after delete: publisher=%+v publication=%+v", publisher, publication)
+	}
+}
+
+func TestPublicationMutationDoesNotStartAfterConcurrentWithdrawal(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 10, 18, 0, 0, 0, time.UTC)
+	store := durablememory.NewStore()
+	intent := publicationTestIntent(t, ctx, store, now)
+	publisher := &recordingPublisher{}
+	leaseRaceStore := &publicationRenewalRaceStore{Store: store}
+	deconflictionService, err := NewDeconflictionServiceWithClock(leaseRaceStore, func() time.Time { return now }, publisher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := deconflictionService.PublicationRequest(intent, domain.OperationalIntentExternalStateAccepted)
+	if err := store.RequestOperationalIntentPublication(ctx, accepted); err != nil {
+		t.Fatal(err)
+	}
+	leaseRaceStore.beforeRenew = func() error {
+		withdrawn := deconflictionService.PublicationRequest(intent, domain.OperationalIntentExternalStateWithdrawn)
+		return store.RequestOperationalIntentPublication(ctx, withdrawn)
+	}
+	if err := deconflictionService.ReconcileIntent(ctx, intent.ID); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("reconciliation error = %v, want version conflict", err)
+	}
+	if publisher.creates != 0 {
+		t.Fatalf("DSS creates = %d, want 0", publisher.creates)
+	}
+	publication, err := store.GetOperationalIntentPublication(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if publication.DesiredState != domain.OperationalIntentExternalStateWithdrawn {
+		t.Fatalf("desired state = %s, want withdrawn", publication.DesiredState)
 	}
 }
 
