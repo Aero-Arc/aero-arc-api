@@ -428,6 +428,71 @@ func TestAmbiguousDeleteReconstructsWithdrawalNotifications(t *testing.T) {
 	}
 }
 
+func TestWithdrawalRefreshesOVNAfterDeleteConflict(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 10, 18, 0, 0, 0, time.UTC)
+	store := durablememory.NewStore()
+	intent := publicationTestIntent(t, ctx, store, now)
+	publisher := &recordingPublisher{}
+	current := testReceipt(airspaceprovider.PublicationRequest{
+		Intent: intent, State: domain.OperationalIntentExternalStateActivated,
+	}, 2)
+	current.OVN = intent.ID + "-current-ovn"
+	publisher.getFn = func(string) (airspaceprovider.PublicationReceipt, error) { return current, nil }
+	publisher.deleteFn = func(intentID, _ string) (airspaceprovider.PublicationReceipt, error) {
+		if publisher.deletes == 1 {
+			return airspaceprovider.PublicationReceipt{}, &dss.SCDResponseError{StatusCode: http.StatusConflict, Status: "409 Conflict"}
+		}
+		return airspaceprovider.PublicationReceipt{Version: 3, OVN: intentID + "-deleted"}, nil
+	}
+	deconflictionService, err := NewDeconflictionServiceWithClock(store, func() time.Time { return now }, publisher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := deconflictionService.PublicationRequest(intent, domain.OperationalIntentExternalStateAccepted)
+	if err := store.RequestOperationalIntentPublication(ctx, accepted); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimOperationalIntentPublication(ctx, intent.ID, now, now.Add(publicationLease))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := testReceipt(airspaceprovider.PublicationRequest{
+		Intent: intent, State: domain.OperationalIntentExternalStateAccepted,
+	}, 1)
+	applyReceipt(&claimed, stale)
+	claimed.PublishedIntentVersion = intent.Version
+	claimed.ConfirmedState = domain.OperationalIntentExternalStateAccepted
+	claimed.SyncStatus = domain.PublicationSyncConfirmed
+	if err := store.ConfirmOperationalIntentPublication(ctx, claimed, claimed.Revision, nil); err != nil {
+		t.Fatal(err)
+	}
+	withdrawn := deconflictionService.PublicationRequest(intent, domain.OperationalIntentExternalStateWithdrawn)
+	if err := store.RequestOperationalIntentPublication(ctx, withdrawn); err != nil {
+		t.Fatal(err)
+	}
+	if err := deconflictionService.ReconcileIntent(ctx, intent.ID); err == nil {
+		t.Fatal("stale OVN delete returned no conflict")
+	}
+	publication, err := store.GetOperationalIntentPublication(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if publication.OVN != current.OVN || publication.SyncStatus != domain.PublicationSyncRetrying {
+		t.Fatalf("refreshed publication = %+v", publication)
+	}
+	if err := deconflictionService.ReconcileIntent(ctx, intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	publication, err = store.GetOperationalIntentPublication(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if publisher.deletes != 2 || publisher.deleteOVN != current.OVN || publication.SyncStatus != domain.PublicationSyncWithdrawn {
+		t.Fatalf("publisher=%+v publication=%+v", publisher, publication)
+	}
+}
+
 func TestDSSConflictResponseRemainsRetryable(t *testing.T) {
 	err := &dss.SCDResponseError{StatusCode: 409, Status: "409 Conflict"}
 	if permanentPublicationError(err) {

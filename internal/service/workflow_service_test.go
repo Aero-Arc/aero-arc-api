@@ -51,9 +51,10 @@ type workflowCoordinator struct {
 }
 
 type durableWorkflowCoordinator struct {
-	store      durable.Store
-	now        time.Time
-	reconciles int
+	store         durable.Store
+	now           time.Time
+	reconciles    int
+	beforeConfirm func(context.Context, domain.OperationalIntentPublication) error
 }
 
 func (c *durableWorkflowCoordinator) CheckIntent(context.Context, string) (domain.DeconflictionResult, error) {
@@ -79,7 +80,16 @@ func (c *durableWorkflowCoordinator) ReconcileIntent(ctx context.Context, intent
 	if err != nil {
 		return err
 	}
-	publication.PublishedIntentVersion = publication.DesiredIntentVersion
+	if c.beforeConfirm != nil {
+		if err := c.beforeConfirm(ctx, publication); err != nil {
+			return err
+		}
+	}
+	if publication.DesiredState == domain.OperationalIntentExternalStateWithdrawn {
+		publication.PublishedIntentVersion = 0
+	} else {
+		publication.PublishedIntentVersion = publication.DesiredIntentVersion
+	}
 	publication.ConfirmedState = publication.DesiredState
 	publication.SyncStatus = domain.PublicationSyncConfirmed
 	publication.ConfirmedAt = &c.now
@@ -226,6 +236,74 @@ func TestActivateIntentBackfillsAcceptedPublication(t *testing.T) {
 	if intent.Status != domain.IntentStatusActive || coordinator.reconciles != 2 ||
 		publication.ConfirmedState != domain.OperationalIntentExternalStateActivated {
 		t.Fatalf("intent=%+v coordinator=%+v publication=%+v", intent, coordinator, publication)
+	}
+}
+
+func TestActivateIntentWithdrawsDSSActivationAfterConcurrentModification(t *testing.T) {
+	ctx := context.Background()
+	now := fixedWorkflowTime()
+	store := durablememory.NewStore()
+	coordinator := &durableWorkflowCoordinator{store: store, now: now}
+	intents := NewIntentServiceWithClock(store, fixedClock(now), coordinator)
+	intent, err := intents.CreateIntent(ctx, workflowIntentRequest(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := intents.AddOperationalVolume(ctx, intent.ID, workflowVolumeRequest(now)); err != nil {
+		t.Fatal(err)
+	}
+	if intent, err = intents.SubmitIntent(ctx, intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if intent, err = intents.AcceptIntent(ctx, intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.ReconcileIntent(ctx, intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordPreflightCheck(ctx, domain.PreflightCheck{
+		ID: "preflight", IntentID: intent.ID, IntentVersion: intent.Version,
+		Status: domain.PreflightStatusClear, CapturedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	modified := false
+	coordinator.beforeConfirm = func(ctx context.Context, publication domain.OperationalIntentPublication) error {
+		if modified || publication.DesiredState != domain.OperationalIntentExternalStateActivated {
+			return nil
+		}
+		modified = true
+		current, err := store.GetOperationalIntent(ctx, intent.ID)
+		if err != nil {
+			return err
+		}
+		volumes, err := store.ListOperationalVolumes(ctx, intent.ID)
+		if err != nil {
+			return err
+		}
+		current.Version++
+		current.Status = domain.IntentStatusDraft
+		current.UpdatedAt = now.Add(time.Second)
+		for index := range volumes {
+			volumes[index].IntentVersion = current.Version
+		}
+		return store.ReplaceOperationalIntent(ctx, intent.Version, intent.Revision, current, volumes)
+	}
+	if _, err := intents.ActivateIntent(ctx, intent.ID); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("ActivateIntent error = %v, want version conflict", err)
+	}
+	publication, err := store.GetOperationalIntentPublication(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.GetOperationalIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Version != 2 || current.Status != domain.IntentStatusDraft ||
+		publication.DesiredState != domain.OperationalIntentExternalStateWithdrawn ||
+		publication.ConfirmedState != domain.OperationalIntentExternalStateWithdrawn {
+		t.Fatalf("current=%+v publication=%+v", current, publication)
 	}
 }
 

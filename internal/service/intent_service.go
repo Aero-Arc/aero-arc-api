@@ -412,10 +412,41 @@ func (s *IntentService) ActivateIntent(ctx context.Context, intentID string) (do
 	intent.ActivatedAt = &now
 	intent.UpdatedAt = now
 	if err := s.durable.UpdateOperationalIntent(ctx, intent, expectedRevision); err != nil {
+		if errors.Is(err, durable.ErrVersionConflict) && s.deconfliction != nil && s.deconfliction.PublishingEnabled() {
+			if compensationErr := s.compensatePublishedActivation(ctx, intent.ID); compensationErr != nil {
+				return domain.OperationalIntent{}, errors.Join(
+					fmt.Errorf("update operational intent: %w", err),
+					fmt.Errorf("compensate DSS activation: %w", compensationErr),
+				)
+			}
+		}
 		return domain.OperationalIntent{}, fmt.Errorf("update operational intent: %w", err)
 	}
 	intent.Revision = expectedRevision + 1
 	return intent, nil
+}
+
+func (s *IntentService) compensatePublishedActivation(ctx context.Context, intentID string) error {
+	current, err := s.durable.GetOperationalIntent(ctx, intentID)
+	if err != nil {
+		return err
+	}
+	if current.Status == domain.IntentStatusActive {
+		return nil
+	}
+	publication, err := s.deconfliction.GetPublication(ctx, intentID)
+	if err != nil {
+		return err
+	}
+	if publication.ConfirmedState != domain.OperationalIntentExternalStateActivated ||
+		publication.DesiredState != domain.OperationalIntentExternalStateActivated {
+		return nil
+	}
+	request := s.deconfliction.PublicationRequest(current, domain.OperationalIntentExternalStateWithdrawn)
+	if err := s.durable.RequestOperationalIntentPublicationIfCurrent(ctx, request, current.Revision, current.Status); err != nil {
+		return err
+	}
+	return s.deconfliction.ReconcileIntent(ctx, intentID)
 }
 
 func canonicalDSSIntentID(id string) (string, error) {

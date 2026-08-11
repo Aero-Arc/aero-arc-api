@@ -141,6 +141,17 @@ func (s *DeconflictionService) reconcileClaimed(ctx context.Context, publication
 				}
 				return s.confirmWithdrawal(ctx, publication, expectedRevision, recovered)
 			}
+			if errors.As(err, &responseErr) && responseErr.StatusCode == http.StatusConflict {
+				current, readErr := s.publisher.GetOperationalIntentReference(ctx, publication.IntentID)
+				if readErr != nil {
+					return s.recordPublicationFailure(ctx, publication, expectedRevision, errors.Join(err, readErr), false)
+				}
+				if current.OVN == "" {
+					return s.recordPublicationFailure(ctx, publication, expectedRevision,
+						fmt.Errorf("DSS reference omitted manager OVN after delete conflict"), false)
+				}
+				applyReceipt(&publication, current)
+			}
 			return s.recordPublicationFailure(ctx, publication, expectedRevision, err, false)
 		}
 		return s.confirmWithdrawal(ctx, publication, expectedRevision, receipt)
