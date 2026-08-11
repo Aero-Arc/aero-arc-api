@@ -143,9 +143,9 @@ AERO_API_USS_JWT_ISSUER='trusted-oauth-issuer'
 AERO_API_USS_JWT_AUDIENCE='aero-arc-api'
 ```
 
-When using Compose, set `AERO_API_USS_JWT_PUBLIC_KEY_HOST_FILE` to the public
-key's host path instead. Compose mounts it read-only at the container path
-shown above.
+When using Compose, keep `AERO_API_USS_JWT_PUBLIC_KEY_FILE` set to the container
+path shown above and set `AERO_API_USS_JWT_PUBLIC_KEY_HOST_FILE` to the public
+key's host path. Compose mounts the host file read-only at the container path.
 
 New intents receive UUIDv4 identifiers by default. When DSS publication is
 enabled, caller-supplied intent IDs must also be UUIDv4 so the same identifier
