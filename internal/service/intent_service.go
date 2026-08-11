@@ -18,6 +18,8 @@ var (
 	ErrValidation        = errors.New("validation failed")
 )
 
+const activationCompensationTimeout = 5 * time.Second
+
 type ActiveIntentModificationError struct {
 	IntentID string
 	Status   domain.IntentStatus
@@ -396,7 +398,12 @@ func (s *IntentService) ActivateIntent(ctx context.Context, intentID string) (do
 				return domain.OperationalIntent{}, fmt.Errorf("request DSS activation: %w", err)
 			}
 			if err := s.deconfliction.ReconcileIntent(ctx, intent.ID); err != nil {
-				return domain.OperationalIntent{}, fmt.Errorf("%w: coordinate DSS activation: %v", ErrActivationBlocked, err)
+				activationErr := fmt.Errorf("%w: coordinate DSS activation: %v", ErrActivationBlocked, err)
+				if compensationErr := s.compensatePublishedActivation(ctx, intent.ID); compensationErr != nil {
+					return domain.OperationalIntent{}, errors.Join(activationErr,
+						fmt.Errorf("compensate DSS activation: %w", compensationErr))
+				}
+				return domain.OperationalIntent{}, activationErr
 			}
 			publication, err = s.deconfliction.GetPublication(ctx, intent.ID)
 		case domain.OperationalIntentExternalStateActivated:
@@ -431,19 +438,20 @@ func (s *IntentService) ActivateIntent(ctx context.Context, intentID string) (do
 }
 
 func (s *IntentService) compensatePublishedActivation(ctx context.Context, intentID string) error {
-	current, err := s.durable.GetOperationalIntent(ctx, intentID)
+	compensationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), activationCompensationTimeout)
+	defer cancel()
+	current, err := s.durable.GetOperationalIntent(compensationCtx, intentID)
 	if err != nil {
 		return err
 	}
 	if current.Status == domain.IntentStatusActive {
 		return nil
 	}
-	publication, err := s.deconfliction.GetPublication(ctx, intentID)
+	publication, err := s.deconfliction.GetPublication(compensationCtx, intentID)
 	if err != nil {
 		return err
 	}
-	if publication.ConfirmedState != domain.OperationalIntentExternalStateActivated ||
-		publication.DesiredState != domain.OperationalIntentExternalStateActivated {
+	if publication.DesiredState != domain.OperationalIntentExternalStateActivated {
 		return nil
 	}
 	desiredState := domain.OperationalIntentExternalStateWithdrawn
@@ -452,7 +460,7 @@ func (s *IntentService) compensatePublishedActivation(ctx context.Context, inten
 	case domain.IntentStatusAccepted:
 		desiredState = domain.OperationalIntentExternalStateAccepted
 	case domain.IntentStatusDraft, domain.IntentStatusSubmitted, domain.IntentStatusReview:
-		published, err := s.durable.GetOperationalIntentVersion(ctx, intentID, publication.PublishedIntentVersion)
+		published, err := s.durable.GetOperationalIntentVersion(compensationCtx, intentID, publication.PublishedIntentVersion)
 		if err != nil {
 			return err
 		}
@@ -462,10 +470,13 @@ func (s *IntentService) compensatePublishedActivation(ctx context.Context, inten
 		}
 	}
 	request := s.deconfliction.PublicationRequest(desiredIntent, desiredState)
-	if err := s.durable.RequestOperationalIntentPublicationIfCurrent(ctx, request, current.Version, current.Revision, current.Status); err != nil {
+	if err := s.durable.RequestOperationalIntentPublicationIfCurrent(compensationCtx, request, current.Version, current.Revision, current.Status); err != nil {
 		return err
 	}
-	return s.deconfliction.ReconcileIntent(ctx, intentID)
+	// The desired state is durably restored before this best-effort fast path.
+	// The publication worker will retry it if immediate reconciliation fails.
+	_ = s.deconfliction.ReconcileIntent(compensationCtx, intentID)
+	return nil
 }
 
 func canonicalDSSIntentID(id string) (string, error) {
