@@ -44,7 +44,9 @@ func NewUSSJWTAuthorizer(publicKeyFile, issuer, audience string) (*USSJWTAuthori
 	}
 	parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
 	if err != nil {
-		if certificate, certificateErr := x509.ParseCertificate(block.Bytes); certificateErr == nil {
+		if publicKey, pkcs1Err := x509.ParsePKCS1PublicKey(block.Bytes); pkcs1Err == nil {
+			parsed = publicKey
+		} else if certificate, certificateErr := x509.ParseCertificate(block.Bytes); certificateErr == nil {
 			parsed = certificate.PublicKey
 		} else {
 			return nil, fmt.Errorf("parse USS JWT public key: %w", err)

@@ -71,6 +71,18 @@ func TestNewUSSJWTAuthorizerReadsRSAPublicKey(t *testing.T) {
 	if authorizer.publicKey.N.Cmp(privateKey.N) != 0 {
 		t.Fatal("authorizer loaded a different public key")
 	}
+	pkcs1Path := filepath.Join(t.TempDir(), "uss-public-pkcs1.pem")
+	pkcs1DER := x509.MarshalPKCS1PublicKey(&privateKey.PublicKey)
+	if err := os.WriteFile(pkcs1Path, pem.EncodeToMemory(&pem.Block{Type: "RSA PUBLIC KEY", Bytes: pkcs1DER}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pkcs1Authorizer, err := NewUSSJWTAuthorizer(pkcs1Path, "issuer", "aero-arc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pkcs1Authorizer.publicKey.N.Cmp(privateKey.N) != 0 {
+		t.Fatal("authorizer loaded a different PKCS#1 public key")
+	}
 	invalidPath := filepath.Join(t.TempDir(), "invalid.pem")
 	if err := os.WriteFile(invalidPath, []byte("not PEM"), 0o600); err != nil {
 		t.Fatal(err)
