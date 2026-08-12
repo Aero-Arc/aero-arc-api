@@ -378,8 +378,8 @@ func requiredFloat(row map[string]any, key string) (float64, error) {
 	if !ok || v == nil {
 		return 0, fmt.Errorf("decode influxdb telemetry: missing %s", key)
 	}
-	f := floatValue(v)
-	if math.IsNaN(f) || math.IsInf(f, 0) {
+	f, ok := numericFloat(v)
+	if !ok || math.IsNaN(f) || math.IsInf(f, 0) {
 		return 0, fmt.Errorf("decode influxdb telemetry: invalid %s", key)
 	}
 	return f, nil

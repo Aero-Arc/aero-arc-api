@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 )
 
 type fakeRunner struct {
@@ -66,6 +68,62 @@ func TestGetLatestSample(t *testing.T) {
 	}
 	if runner.params["message_name"] != "global_position_int" || runner.params["aircraft_id"] != "aircraft-1" {
 		t.Fatalf("unexpected params: %#v", runner.params)
+	}
+}
+
+func TestRequiredCoordinatesRejectNonNumericValues(t *testing.T) {
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name  string
+		key   string
+		value any
+	}{
+		{name: "latitude string", key: "latitude_deg", value: "not-a-number"},
+		{name: "longitude boolean", key: "longitude_deg", value: true},
+		{name: "latitude object", key: "latitude_deg", value: struct{}{}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			row := map[string]any{"time": now, "latitude_deg": 0.0, "longitude_deg": 0.0}
+			row[test.key] = test.value
+			if _, err := sampleFromRow(row); err == nil || !strings.Contains(err.Error(), "invalid "+test.key) {
+				t.Fatalf("sample error = %v, want invalid %s", err, test.key)
+			}
+			if _, err := decodePosition(row); err == nil || !strings.Contains(err.Error(), "invalid "+test.key) {
+				t.Fatalf("position error = %v, want invalid %s", err, test.key)
+			}
+		})
+	}
+}
+
+func TestRequiredCoordinatesPreserveNumericZero(t *testing.T) {
+	row := map[string]any{
+		"time": time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC), "latitude_deg": float64(0), "longitude_deg": int64(0),
+	}
+	sample, err := sampleFromRow(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sample.Latitude != 0 || sample.Longitude != 0 {
+		t.Fatalf("sample coordinates = (%v, %v), want (0, 0)", sample.Latitude, sample.Longitude)
+	}
+	decoded, err := decodePosition(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	position := decoded.(*domain.PositionTelemetry)
+	if position.LatitudeDeg != 0 || position.LongitudeDeg != 0 {
+		t.Fatalf("position coordinates = (%v, %v), want (0, 0)", position.LatitudeDeg, position.LongitudeDeg)
+	}
+}
+
+func TestRequiredUintRejectsInvalidAndPreservesZero(t *testing.T) {
+	if _, err := requiredUint(map[string]any{"battery_id": "0"}, "battery_id"); err == nil {
+		t.Fatal("requiredUint accepted a nonnumeric string")
+	}
+	value, err := requiredUint(map[string]any{"battery_id": uint64(0)}, "battery_id")
+	if err != nil || value != 0 {
+		t.Fatalf("requiredUint zero = %d, %v; want 0, nil", value, err)
 	}
 }
 
