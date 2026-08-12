@@ -548,6 +548,58 @@ func TestPostgresIntegrityAndReplacementScope(t *testing.T) {
 	}
 }
 
+func TestOperationalIntentListsPersistAcrossStoreInstances(t *testing.T) {
+	ctx, writer, reader := integrationStores(t)
+	now := time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC)
+
+	primaryV1 := integrationIntent("list-primary", now.Add(2*time.Hour))
+	primaryV1.AircraftID = "aircraft-list-one"
+	primaryV1.Name = "primary-v1"
+	if err := writer.CreateOperationalIntent(ctx, primaryV1); err != nil {
+		t.Fatal(err)
+	}
+	primaryV2 := primaryV1
+	primaryV2.Version = 2
+	primaryV2.Name = "primary-v2"
+	primaryV2.UpdatedAt = now.Add(time.Minute)
+	if err := writer.ReplaceOperationalIntent(ctx, primaryV1.Version, primaryV1.Revision, primaryV2, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	earlier := integrationIntent("list-earlier", now)
+	earlier.AircraftID = primaryV1.AircraftID
+	if err := writer.CreateOperationalIntent(ctx, earlier); err != nil {
+		t.Fatal(err)
+	}
+	other := integrationIntent("list-other-aircraft", now.Add(time.Hour))
+	other.AircraftID = "aircraft-list-two"
+	if err := writer.CreateOperationalIntent(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+
+	versions, err := reader.ListOperationalIntentVersions(ctx, primaryV1.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 2 || versions[0].Version != 1 || versions[0].Name != "primary-v1" || versions[1].Version != 2 || versions[1].Name != "primary-v2" {
+		t.Fatalf("persisted versions = %#v", versions)
+	}
+	filtered, err := reader.ListOperationalIntents(ctx, primaryV1.AircraftID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != 2 || filtered[0].ID != earlier.ID || filtered[1].ID != primaryV2.ID || filtered[1].Version != 2 {
+		t.Fatalf("aircraft-filtered current intents = %#v", filtered)
+	}
+	all, err := reader.ListOperationalIntents(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("all current intents = %#v, want three latest records", all)
+	}
+}
+
 func integrationStores(t *testing.T) (context.Context, *Store, *Store) {
 	t.Helper()
 	ctx := context.Background()
