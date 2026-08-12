@@ -120,6 +120,18 @@ func (s *Server) handleGetAircraft(c *mach.Context) {
 	writeJSON(c, http.StatusOK, dashboard)
 }
 
+func (s *Server) handleGetAircraftLiveState(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+
+	state, err := s.fleet.GetAircraftLiveState(ctx, c.Param("aircraft_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, state)
+}
+
 func (s *Server) handleGetAircraftMap(c *mach.Context) {
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()

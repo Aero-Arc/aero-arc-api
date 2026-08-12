@@ -8,6 +8,7 @@ type AircraftDashboard struct {
 	ActiveBattery      *domain.Battery                  `json:"active_battery,omitempty"`
 	MaintenanceEvents  []domain.MaintenanceEvent        `json:"maintenance_events"`
 	LatestTelemetry    *domain.TelemetrySample          `json:"latest_telemetry,omitempty"`
+	Telemetry          domain.AircraftTelemetryState    `json:"telemetry"`
 	LiveState          *domain.LiveAircraftState        `json:"live_state,omitempty"`
 	LiveStateAvailable bool                             `json:"live_state_available"`
 	Readiness          domain.Readiness                 `json:"readiness"`
@@ -33,6 +34,15 @@ type OperationsDashboard struct {
 	Metrics            []DashboardMetric           `json:"metrics"`
 	OperationalIntents []domain.OperationalIntent  `json:"operational_intents"`
 	Conformance        []domain.ConformanceSummary `json:"conformance"`
+	LiveAircraft       []AircraftLiveState         `json:"live_aircraft"`
+}
+
+type AircraftLiveState struct {
+	AircraftID string                        `json:"aircraft_id"`
+	OperatorID string                        `json:"operator_id,omitempty"`
+	AgentID    string                        `json:"agent_id,omitempty"`
+	Connection domain.LiveAircraftState      `json:"connection"`
+	Telemetry  domain.AircraftTelemetryState `json:"telemetry"`
 }
 
 type PreflightDashboard struct {

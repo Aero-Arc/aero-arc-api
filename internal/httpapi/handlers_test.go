@@ -25,7 +25,7 @@ func TestHandleListAircraft(t *testing.T) {
 	replay := replaymemory.NewStore()
 	reg := registry.NewMemoryClient()
 
-	if err := durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1", TailNumber: "N100AA"}); err != nil {
+	if err := durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1", AgentID: "agent-1", TailNumber: "N100AA"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := durable.CreateBattery(ctx, domain.Battery{ID: "battery-1", StateOfHealth: float64Ptr(91)}); err != nil {
@@ -36,7 +36,7 @@ func TestHandleListAircraft(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := reg.SetLiveAircraftState(ctx, domain.LiveAircraftState{AircraftID: "aircraft-1", Connected: true}); err != nil {
+	if err := reg.SetLiveAircraftState(ctx, domain.LiveAircraftState{AircraftID: "aircraft-1", AgentID: "agent-1", RelayID: "relay-1", Connected: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -65,6 +65,44 @@ func TestHandleListAircraft(t *testing.T) {
 	}
 	if body.Aircraft[0].Readiness.Status != "ready" {
 		t.Fatalf("readiness = %q, want ready", body.Aircraft[0].Readiness.Status)
+	}
+}
+
+func TestHandleGetAircraftLiveState(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	durable := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	reg := registry.NewMemoryClient()
+	if err := durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1", OperatorID: "operator-1", AgentID: "agent-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := telemetry.AddSample(ctx, domain.TelemetrySample{ID: "frame-1", AircraftID: "aircraft-1", RecordedAt: now, Latitude: 41.88, Longitude: -87.63, BatteryPct: float64Ptr(82)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.SetLiveAircraftState(ctx, domain.LiveAircraftState{AgentID: "agent-1", RelayID: "relay-1", Connected: true, LastHeartbeatAt: now}); err != nil {
+		t.Fatal(err)
+	}
+
+	server := New(service.NewFleetService(durable, telemetry, replaymemory.NewStore(), reg), time.Second)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/aircraft/aircraft-1/state", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body readmodel.AircraftLiveState
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Connection.ConnectionStatus != domain.ConnectionStatusConnected || body.Connection.RelayID != "relay-1" {
+		t.Fatalf("connection = %#v", body.Connection)
+	}
+	if body.Telemetry.Status != domain.DataFreshnessFresh || body.Telemetry.Position == nil || body.Telemetry.Battery == nil {
+		t.Fatalf("telemetry = %#v", body.Telemetry)
+	}
+	if body.Telemetry.Position.RecordedAt.IsZero() || body.Telemetry.Battery.RecordedAt.IsZero() {
+		t.Fatalf("observation timestamps missing: %#v", body.Telemetry)
 	}
 }
 

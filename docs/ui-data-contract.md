@@ -30,6 +30,7 @@ API JSON uses snake_case. Flutter/Dart DTO fields may use camelCase, but their
 | Records | `GET /api/v1/records` | `RecordsDashboard` | `EvidenceRecord`, `ReportabilityReview`, `DashboardMetric` | Durable evidence and reportability workflow records | Existing API, UI absent |
 | Fleet aircraft list | `GET /api/v1/aircraft` | `{ "aircraft": AircraftDashboard[] }` | `Aircraft`, `Battery`, `MaintenanceEvent`, `TelemetrySample`, `LiveAircraftState`, `Readiness` | Durable aircraft composed with active battery, latest telemetry, and registry live state | First UI slice |
 | Aircraft detail | `GET /api/v1/aircraft/{aircraft_id}` | `AircraftDashboard` | `Aircraft`, `Battery`, `MaintenanceEvent`, `TelemetrySample`, `LiveAircraftState`, `Readiness` | Bare dashboard object for one aircraft | First UI slice |
+| Aircraft live state | `GET /api/v1/aircraft/{aircraft_id}/state` | `AircraftLiveState` | Registry agent/placement plus independent InfluxDB message groups | Focused live-state response; missing groups are omitted | Implemented |
 | Replay | `GET /api/v1/flights/{flight_id}/replay` | `ReplayResponse` | `FlightRecord`, `ReplayManifest`, `TelemetrySample`, `ConformanceEvent` | Durable flight, replay store manifest, telemetry samples | Existing API, UI absent |
 
 ## Entity To UI Mapping
@@ -70,6 +71,7 @@ The Flutter DTOs for this slice should mirror:
 - `active_battery`
 - `maintenance_events`
 - `latest_telemetry`
+- `telemetry`
 - `live_state`
 - `live_state_available`
 - `readiness`
@@ -78,14 +80,31 @@ The Flutter DTOs for this slice should mirror:
 UI-only labels, colors, formatted dates, maintenance summaries, and telemetry
 summaries must live in frontend view-model/helper code, not in API DTOs.
 
+## Live Aircraft Contract
+
+`GET /api/v1/aircraft/{aircraft_id}/state` and each entry in
+`OperationsDashboard.live_aircraft` contain durable identity plus:
+
+- `connection`: registry status, heartbeat, and placement. Status is
+  `connected`, `stale`, `offline`, `unmapped`, or `unavailable`.
+- `telemetry`: aggregate status and nullable `position`, `battery`, `vehicle`,
+  `system`, `hud`, `extended_state`, and `gps` observations.
+- Every telemetry observation has its own `recorded_at` and `status`; consumers
+  must not assume independently emitted MAVLink messages share a sample time.
+- Optional numeric fields distinguish an absent InfluxDB column from a valid
+  zero. UI DTOs should therefore use nullable numbers for optional fields.
+
+By default a registry heartbeat is connected through 30 seconds and a
+telemetry observation is fresh through 15 seconds. These server-side policies
+are configurable. The aggregate telemetry status describes its newest
+observation; render group status when showing a specific value.
+
 ## Known Gaps
 
 - `AircraftDashboard.operating_profile` exists but is not currently populated
   by `FleetService`.
-- `LiveAircraftState.connected` currently means the registry returned an agent;
-  no freshness threshold or explicit stale/offline policy is applied yet.
 - `LiveAircraftState` does not include location; latest position comes from
-  `latest_telemetry`.
+  `telemetry.position` (with `latest_telemetry` retained for compatibility).
 - Aircraft cards do not yet receive latest preflight or conformance summaries
   directly; consumers must use the broader dashboard endpoints for now.
 - `DashboardMetric` uses display labels and string values, not stable metric

@@ -36,17 +36,25 @@ func (c *MemoryClient) SetLiveAircraftState(_ context.Context, state domain.Live
 
 	agentID := state.AgentID
 	if agentID == "" {
-		agentID = state.AircraftID
+		return status.Error(codes.InvalidArgument, "agent_id is required")
+	}
+	heartbeatAt := state.LastHeartbeatAt
+	if heartbeatAt.IsZero() && state.Connected {
+		heartbeatAt = time.Now().UTC()
 	}
 	c.agents[agentID] = &registryv1.Agent{
 		AgentId:             agentID,
-		LastHeartbeatUnixMs: unixMillis(state.LastHeartbeatAt),
+		LastHeartbeatUnixMs: unixMillis(heartbeatAt),
 	}
 	if state.RelayID != "" {
+		placementAt := state.PlacementLastUpdatedAt
+		if placementAt.IsZero() {
+			placementAt = heartbeatAt
+		}
 		c.placements[agentID] = &registryv1.AgentPlacement{
 			AgentId:           agentID,
 			RelayId:           state.RelayID,
-			LastUpdatedUnixMs: unixMillis(state.PlacementLastUpdatedAt),
+			LastUpdatedUnixMs: unixMillis(placementAt),
 		}
 	} else {
 		delete(c.placements, agentID)

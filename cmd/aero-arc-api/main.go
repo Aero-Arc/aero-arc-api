@@ -113,6 +113,8 @@ func newCommand() *cli.Command {
 						Usage:   "registry gRPC dial timeout",
 						Sources: cli.EnvVars("AERO_API_REGISTRY_DIAL_TIMEOUT"),
 					},
+					&cli.DurationFlag{Name: "registry-freshness", Value: defaults.RegistryFreshness, Usage: "maximum registry heartbeat age considered connected", Sources: cli.EnvVars("AERO_API_REGISTRY_FRESHNESS")},
+					&cli.DurationFlag{Name: "telemetry-freshness", Value: defaults.TelemetryFreshness, Usage: "maximum telemetry observation age considered fresh", Sources: cli.EnvVars("AERO_API_TELEMETRY_FRESHNESS")},
 					&cli.DurationFlag{
 						Name:    "request-timeout",
 						Value:   defaults.RequestTimeout,
@@ -157,6 +159,8 @@ func newCommand() *cli.Command {
 						RegistryMode:             cmd.String("registry-mode"),
 						RegistryAddress:          cmd.String("registry-addr"),
 						RegistryDialTimeout:      cmd.Duration("registry-dial-timeout"),
+						RegistryFreshness:        cmd.Duration("registry-freshness"),
+						TelemetryFreshness:       cmd.Duration("telemetry-freshness"),
 						RequestTimeout:           cmd.Duration("request-timeout"),
 						Seed:                     cmd.String("seed"),
 						Debug:                    cmd.Bool("debug"),
@@ -221,7 +225,8 @@ func run(ctx context.Context, cfg *config.Config) error {
 		}
 		slog.Info("seeded demo data")
 	}
-	fleetService := service.NewFleetService(durableStore, telemetryStore, replayStore, registryClient)
+	fleetService := service.NewFleetService(durableStore, telemetryStore, replayStore, registryClient).
+		WithLiveStatePolicy(cfg.RegistryFreshness, cfg.TelemetryFreshness, nil)
 	deconflictionService, err := deconfliction.NewDeconflictionServiceWithPublicationLease(
 		durableStore,
 		cfg.RequestTimeout+30*time.Second,
@@ -265,6 +270,8 @@ func run(ctx context.Context, cfg *config.Config) error {
 			slog.String("replay_store", cfg.ReplayStore),
 			slog.String("registry_mode", cfg.RegistryMode),
 			slog.String("registry_addr", cfg.RegistryAddress),
+			slog.Duration("registry_freshness", cfg.RegistryFreshness),
+			slog.Duration("telemetry_freshness", cfg.TelemetryFreshness),
 			slog.String("seed", cfg.Seed),
 			slog.Bool("debug", cfg.Debug),
 		)

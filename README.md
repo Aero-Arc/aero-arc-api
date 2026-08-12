@@ -93,12 +93,14 @@ AERO_API_REPLAY_STORE=memory
 AERO_API_REGISTRY_MODE=memory
 AERO_API_REGISTRY_ADDR=localhost:50051
 AERO_API_REGISTRY_DIAL_TIMEOUT=5s
+AERO_API_REGISTRY_FRESHNESS=30s
+AERO_API_TELEMETRY_FRESHNESS=15s
 AERO_API_REQUEST_TIMEOUT=3s
 AERO_API_SEED=demo
 AERO_API_DEBUG=true
 ```
 
-To read normalized position telemetry from InfluxDB 3 Core, set
+To read normalized live telemetry from InfluxDB 3 Core, set
 `AERO_API_TELEMETRY_STORE=influxdb` together with
 `AERO_API_INFLUXDB_HOST`, `AERO_API_INFLUXDB_TOKEN`, and
 `AERO_API_INFLUXDB_DATABASE`. Demo seeding remains available only with the
@@ -106,6 +108,43 @@ memory telemetry store.
 
 `AERO_API_REGISTRY_MODE=grpc` connects to the real `aero-arc-registry` gRPC
 service. Durable and replay stores still run in `memory` mode in this scaffold.
+
+### Live aircraft state
+
+The relay writes independent normalized MAVLink observations to the
+`aircraft_telemetry` InfluxDB measurement. The API queries the latest
+`global_position_int`, `battery_status`, `heartbeat`, `sys_status`, `vfr_hud`,
+`extended_sys_state`, and `gps_raw_int` record for each aircraft and composes
+them with registry liveness and relay placement:
+
+```bash
+curl http://localhost:8080/api/v1/aircraft/aircraft-1/state
+```
+
+The response contains `connection` and `telemetry`. Every present telemetry
+group has its own `recorded_at` and `status` (`fresh` or `stale`); absent groups
+are omitted. The aggregate telemetry status is `fresh` when the newest group is
+within the configured window, `stale` otherwise, `missing` when no observations
+exist, and `unavailable` when the telemetry query fails. Connection status is
+`connected`, `stale`, `offline`, `unmapped`, or `unavailable`.
+
+Aircraft-to-agent association is explicit: `aircraft.agent_id` must match the
+registry agent ID. The API never substitutes `aircraft.id`. Registry heartbeats
+are fresh for 30 seconds and telemetry for 15 seconds by default; change these
+with `AERO_API_REGISTRY_FRESHNESS` and `AERO_API_TELEMETRY_FRESHNESS`.
+
+`GET /api/v1/operations` includes the same composites in `live_aircraft`, and
+aircraft list/detail/map responses retain their legacy `live_state` and
+`latest_telemetry` fields while also exposing the grouped `telemetry` object.
+
+The real InfluxDB integration test is opt-in:
+
+```bash
+AERO_API_TEST_INFLUXDB_HOST=http://localhost:8181 \
+AERO_API_TEST_INFLUXDB_TOKEN=replace-me \
+AERO_API_TEST_INFLUXDB_DATABASE=aero_arc_test \
+go test -tags=integration ./internal/store/telemetry/influxdb
+```
 
 ## Deconfliction Read, Check, and Publication Slice
 
@@ -308,10 +347,8 @@ make check
 
 - Migrate the remaining in-memory durable domain groups to PostgreSQL and add a
   versioned migration runner before production deployment.
-- Harden the InfluxDB telemetry schema and production query integration.
 - Add real replay storage backed by S3/object storage manifests and log chunks.
-- Expand registry mapping once aircraft-to-agent identity is finalized. For now,
-  `aircraft.agent_id` maps durable aircraft records to registry agents, falling
-  back to `aircraft.id`.
+- Persist and administer explicit aircraft-to-agent assignments rather than
+  relying on fixture-created mappings.
 - Add auth, tenancy, and authorization policy before exposing beyond local
   development.

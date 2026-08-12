@@ -19,11 +19,19 @@ import (
 )
 
 type FleetService struct {
-	durable   durable.Store
-	telemetry telemetry.Store
-	replay    replay.Store
-	registry  registryv1.AeroRegistryClient
+	durable            durable.Store
+	telemetry          telemetry.Store
+	replay             replay.Store
+	registry           registryv1.AeroRegistryClient
+	now                func() time.Time
+	registryFreshness  time.Duration
+	telemetryFreshness time.Duration
 }
+
+const (
+	defaultRegistryFreshness  = 30 * time.Second
+	defaultTelemetryFreshness = 15 * time.Second
+)
 
 type ReplayResponse struct {
 	Flight            domain.FlightRecord       `json:"flight"`
@@ -34,11 +42,27 @@ type ReplayResponse struct {
 
 func NewFleetService(durableStore durable.Store, telemetryStore telemetry.Store, replayStore replay.Store, registry registryv1.AeroRegistryClient) *FleetService {
 	return &FleetService{
-		durable:   durableStore,
-		telemetry: telemetryStore,
-		replay:    replayStore,
-		registry:  registry,
+		durable:            durableStore,
+		telemetry:          telemetryStore,
+		replay:             replayStore,
+		registry:           registry,
+		now:                time.Now,
+		registryFreshness:  defaultRegistryFreshness,
+		telemetryFreshness: defaultTelemetryFreshness,
 	}
+}
+
+func (s *FleetService) WithLiveStatePolicy(registryFreshness, telemetryFreshness time.Duration, now func() time.Time) *FleetService {
+	if registryFreshness > 0 {
+		s.registryFreshness = registryFreshness
+	}
+	if telemetryFreshness > 0 {
+		s.telemetryFreshness = telemetryFreshness
+	}
+	if now != nil {
+		s.now = now
+	}
+	return s
 }
 
 func (s *FleetService) CreateAircraft(ctx context.Context, aircraft domain.Aircraft) error {
@@ -89,11 +113,17 @@ func (s *FleetService) GetOperationsDashboard(ctx context.Context) (readmodel.Op
 	if err != nil {
 		return readmodel.OperationsDashboard{}, fmt.Errorf("list conformance summaries: %w", err)
 	}
+	aircraft, err := s.durable.ListAircraft(ctx)
+	if err != nil {
+		return readmodel.OperationsDashboard{}, fmt.Errorf("list aircraft: %w", err)
+	}
+	liveAircraft := s.composeLiveAircraft(ctx, aircraft)
 
 	return readmodel.OperationsDashboard{
 		Metrics:            operationsMetrics(intents, conformance),
 		OperationalIntents: intents,
 		Conformance:        conformance,
+		LiveAircraft:       liveAircraft,
 	}, nil
 }
 
@@ -166,9 +196,11 @@ func (s *FleetService) ListAircraftDashboards(ctx context.Context) ([]readmodel.
 		return nil, fmt.Errorf("list aircraft: %w", err)
 	}
 
+	liveAircraft := s.composeLiveAircraft(ctx, aircraft)
 	dashboards := make([]readmodel.AircraftDashboard, 0, len(aircraft))
 	for _, item := range aircraft {
-		dashboard, err := s.buildDashboard(ctx, item)
+		live := liveAircraftForID(liveAircraft, item.ID)
+		dashboard, err := s.buildDashboard(ctx, item, live)
 		if err != nil {
 			return nil, err
 		}
@@ -182,7 +214,16 @@ func (s *FleetService) GetAircraftDashboard(ctx context.Context, aircraftID stri
 	if err != nil {
 		return readmodel.AircraftDashboard{}, fmt.Errorf("get aircraft: %w", err)
 	}
-	return s.buildDashboard(ctx, aircraft)
+	live := s.composeLiveAircraft(ctx, []domain.Aircraft{aircraft})[0]
+	return s.buildDashboard(ctx, aircraft, live)
+}
+
+func (s *FleetService) GetAircraftLiveState(ctx context.Context, aircraftID string) (readmodel.AircraftLiveState, error) {
+	aircraft, err := s.durable.GetAircraft(ctx, aircraftID)
+	if err != nil {
+		return readmodel.AircraftLiveState{}, fmt.Errorf("get aircraft: %w", err)
+	}
+	return s.composeLiveAircraft(ctx, []domain.Aircraft{aircraft})[0], nil
 }
 
 func (s *FleetService) GetAircraftMapView(ctx context.Context, aircraftID string, limit int) (readmodel.AircraftMapView, error) {
@@ -191,8 +232,10 @@ func (s *FleetService) GetAircraftMapView(ctx context.Context, aircraftID string
 		return readmodel.AircraftMapView{}, fmt.Errorf("get aircraft: %w", err)
 	}
 
-	latestTelemetry, _ := s.telemetry.GetLatestSample(ctx, aircraft.ID)
-	liveState, liveAvailable := s.liveState(ctx, aircraft)
+	live := s.composeLiveAircraft(ctx, []domain.Aircraft{aircraft})[0]
+	latestTelemetry := legacySample(aircraft.ID, live.Telemetry)
+	liveState := &live.Connection
+	liveAvailable := live.Connection.Connected
 
 	replaySamples, err := s.telemetry.QueryAircraftSamples(ctx, aircraft.ID, limit)
 	if err != nil {
@@ -204,6 +247,7 @@ func (s *FleetService) GetAircraftMapView(ctx context.Context, aircraftID string
 		LiveState:          liveState,
 		LiveStateAvailable: liveAvailable,
 		LatestTelemetry:    latestTelemetry,
+		Telemetry:          live.Telemetry,
 		ReplaySamples:      replaySamples,
 		OperationalVolumes: make([]domain.OperationalVolume, 0),
 		ConformanceEvents:  make([]domain.ConformanceEvent, 0),
@@ -291,7 +335,7 @@ func (s *FleetService) GetFlightReplay(ctx context.Context, flightID string, lim
 	}, nil
 }
 
-func (s *FleetService) buildDashboard(ctx context.Context, aircraft domain.Aircraft) (readmodel.AircraftDashboard, error) {
+func (s *FleetService) buildDashboard(ctx context.Context, aircraft domain.Aircraft, live readmodel.AircraftLiveState) (readmodel.AircraftDashboard, error) {
 	battery, err := s.activeBattery(ctx, aircraft.ID)
 	if err != nil {
 		return readmodel.AircraftDashboard{}, err
@@ -302,8 +346,9 @@ func (s *FleetService) buildDashboard(ctx context.Context, aircraft domain.Aircr
 		return readmodel.AircraftDashboard{}, fmt.Errorf("list maintenance events: %w", err)
 	}
 
-	latestTelemetry, _ := s.telemetry.GetLatestSample(ctx, aircraft.ID)
-	liveState, liveAvailable := s.liveState(ctx, aircraft)
+	latestTelemetry := legacySample(aircraft.ID, live.Telemetry)
+	liveState := &live.Connection
+	liveAvailable := live.Connection.Connected
 	currentIntent, err := s.currentIntent(ctx, aircraft.ID)
 	if err != nil {
 		return readmodel.AircraftDashboard{}, err
@@ -314,6 +359,7 @@ func (s *FleetService) buildDashboard(ctx context.Context, aircraft domain.Aircr
 		ActiveBattery:      battery,
 		MaintenanceEvents:  maintenanceEvents,
 		LatestTelemetry:    latestTelemetry,
+		Telemetry:          live.Telemetry,
 		LiveState:          liveState,
 		LiveStateAvailable: liveAvailable,
 		Readiness:          CalculateReadiness(battery, maintenanceEvents, liveAvailable),
@@ -375,49 +421,168 @@ func (s *FleetService) intentByStatus(ctx context.Context, aircraftID string, st
 	return &matching[0], nil
 }
 
-func (s *FleetService) liveState(ctx context.Context, aircraft domain.Aircraft) (*domain.LiveAircraftState, bool) {
-	agentID := aircraft.AgentID
-	if agentID == "" {
-		agentID = aircraft.ID
+func (s *FleetService) composeLiveAircraft(ctx context.Context, aircraft []domain.Aircraft) []readmodel.AircraftLiveState {
+	result := make([]readmodel.AircraftLiveState, len(aircraft))
+	telemetryIDs := make([]string, 0, len(aircraft))
+	hasMappings := false
+	for index, item := range aircraft {
+		result[index] = readmodel.AircraftLiveState{
+			AircraftID: item.ID, OperatorID: item.OperatorID, AgentID: item.AgentID,
+			Connection: domain.LiveAircraftState{AircraftID: item.ID, OperatorID: item.OperatorID, AgentID: item.AgentID, ConnectionStatus: domain.ConnectionStatusUnmapped},
+			Telemetry:  domain.AircraftTelemetryState{Status: domain.DataFreshnessMissing},
+		}
+		telemetryIDs = append(telemetryIDs, item.ID)
+		hasMappings = hasMappings || item.AgentID != ""
 	}
 
-	agents, err := s.registry.ListAgents(ctx, &registryv1.ListAgentsRequest{})
+	telemetryStates, telemetryErr := s.telemetry.GetLatestAircraftStates(ctx, telemetryIDs)
+	for index := range result {
+		if telemetryErr != nil {
+			result[index].Telemetry.Status = domain.DataFreshnessUnavailable
+			continue
+		}
+		state := telemetryStates[result[index].AircraftID]
+		s.applyTelemetryFreshness(&state)
+		result[index].Telemetry = state
+	}
+	if !hasMappings {
+		return result
+	}
+
+	agentResponse, err := s.registry.ListAgents(ctx, &registryv1.ListAgentsRequest{})
 	if err != nil {
-		return nil, false
+		for index := range result {
+			if result[index].AgentID != "" {
+				result[index].Connection.ConnectionStatus = domain.ConnectionStatusUnavailable
+			}
+		}
+		return result
 	}
-
-	var agent *registryv1.Agent
-	for _, item := range agents.GetAgents() {
-		if item.GetAgentId() == agentID {
-			agent = item
-			break
+	agents := make(map[string]*registryv1.Agent, len(agentResponse.GetAgents()))
+	for _, agent := range agentResponse.GetAgents() {
+		if agent != nil && agent.GetAgentId() != "" {
+			agents[agent.GetAgentId()] = agent
 		}
 	}
-	if agent == nil {
-		return nil, false
-	}
-
-	state := &domain.LiveAircraftState{
-		AircraftID:      aircraft.ID,
-		AgentID:         agent.GetAgentId(),
-		Connected:       true,
-		LastHeartbeatAt: unixMillis(agent.GetLastHeartbeatUnixMs()),
-		LastConnectedAt: unixMillis(agent.GetLastHeartbeatUnixMs()),
-	}
-
-	placement, err := s.registry.GetAgentPlacement(ctx, &registryv1.GetAgentPlacementRequest{AgentId: agent.GetAgentId()})
-	if err != nil {
-		if status.Code(err) == codes.NotFound {
-			return state, true
+	for index := range result {
+		state := &result[index].Connection
+		if state.AgentID == "" {
+			continue
 		}
-		return nil, false
-	}
-	if placement.GetPlacement() != nil {
+		state.ConnectionStatus = domain.ConnectionStatusOffline
+		agent := agents[state.AgentID]
+		if agent == nil {
+			continue
+		}
+		state.LastHeartbeatAt = unixMillis(agent.GetLastHeartbeatUnixMs())
+		state.LastConnectedAt = state.LastHeartbeatAt
+		if freshAt(state.LastHeartbeatAt, s.now().UTC(), s.registryFreshness) {
+			state.Connected = true
+			state.ConnectionStatus = domain.ConnectionStatusConnected
+		} else {
+			state.ConnectionStatus = domain.ConnectionStatusStale
+		}
+		placement, placementErr := s.registry.GetAgentPlacement(ctx, &registryv1.GetAgentPlacementRequest{AgentId: state.AgentID})
+		if placementErr != nil {
+			state.Connected = false
+			if status.Code(placementErr) == codes.NotFound {
+				state.ConnectionStatus = domain.ConnectionStatusOffline
+			} else {
+				state.ConnectionStatus = domain.ConnectionStatusUnavailable
+			}
+			continue
+		}
+		if placement.GetPlacement() == nil || placement.GetPlacement().GetRelayId() == "" {
+			state.Connected = false
+			state.ConnectionStatus = domain.ConnectionStatusOffline
+			continue
+		}
 		state.RelayID = placement.GetPlacement().GetRelayId()
 		state.PlacementLastUpdatedAt = unixMillis(placement.GetPlacement().GetLastUpdatedUnixMs())
 	}
+	return result
+}
 
-	return state, true
+func (s *FleetService) applyTelemetryFreshness(state *domain.AircraftTelemetryState) {
+	now := s.now().UTC()
+	observations := []*domain.TelemetryObservation{}
+	if state.Position != nil {
+		observations = append(observations, &state.Position.TelemetryObservation)
+	}
+	if state.Battery != nil {
+		observations = append(observations, &state.Battery.TelemetryObservation)
+	}
+	if state.Vehicle != nil {
+		observations = append(observations, &state.Vehicle.TelemetryObservation)
+	}
+	if state.System != nil {
+		observations = append(observations, &state.System.TelemetryObservation)
+	}
+	if state.HUD != nil {
+		observations = append(observations, &state.HUD.TelemetryObservation)
+	}
+	if state.ExtendedState != nil {
+		observations = append(observations, &state.ExtendedState.TelemetryObservation)
+	}
+	if state.GPS != nil {
+		observations = append(observations, &state.GPS.TelemetryObservation)
+	}
+	if len(observations) == 0 {
+		state.Status = domain.DataFreshnessMissing
+		return
+	}
+	state.Status = domain.DataFreshnessStale
+	for _, observation := range observations {
+		observation.Status = domain.DataFreshnessStale
+		if freshAt(observation.RecordedAt, now, s.telemetryFreshness) {
+			observation.Status = domain.DataFreshnessFresh
+		}
+		if state.LastObservedAt == nil || observation.RecordedAt.After(*state.LastObservedAt) {
+			observedAt := observation.RecordedAt
+			state.LastObservedAt = &observedAt
+		}
+	}
+	if state.LastObservedAt != nil && freshAt(*state.LastObservedAt, now, s.telemetryFreshness) {
+		state.Status = domain.DataFreshnessFresh
+	}
+}
+
+func freshAt(observedAt, now time.Time, freshness time.Duration) bool {
+	return !observedAt.IsZero() && !observedAt.Before(now.Add(-freshness)) && !observedAt.After(now.Add(freshness))
+}
+
+func legacySample(aircraftID string, telemetry domain.AircraftTelemetryState) *domain.TelemetrySample {
+	if telemetry.Position == nil {
+		return nil
+	}
+	position := telemetry.Position
+	sample := &domain.TelemetrySample{ID: position.FrameID, AircraftID: aircraftID, RecordedAt: position.RecordedAt,
+		OperatorID: position.OperatorID, IntentID: position.IntentID, IntentVersion: position.IntentVersion, FlightID: position.FlightID,
+		Latitude: position.LatitudeDeg, Longitude: position.LongitudeDeg}
+	if position.AltitudeMSLM != nil {
+		sample.AltitudeM = *position.AltitudeMSLM
+	}
+	if position.GroundspeedMPS != nil {
+		sample.VelocityMPS = *position.GroundspeedMPS
+	}
+	if position.HeadingDeg != nil {
+		sample.HeadingDeg = *position.HeadingDeg
+	}
+	if telemetry.Battery != nil && telemetry.Battery.RecordedAt.Equal(position.RecordedAt) && telemetry.Battery.FrameID == position.FrameID {
+		sample.BatteryPct = telemetry.Battery.BatteryRemainingPct
+	}
+	return sample
+}
+
+func liveAircraftForID(states []readmodel.AircraftLiveState, aircraftID string) readmodel.AircraftLiveState {
+	for _, state := range states {
+		if state.AircraftID == aircraftID {
+			return state
+		}
+	}
+	return readmodel.AircraftLiveState{AircraftID: aircraftID,
+		Connection: domain.LiveAircraftState{AircraftID: aircraftID, ConnectionStatus: domain.ConnectionStatusUnavailable},
+		Telemetry:  domain.AircraftTelemetryState{Status: domain.DataFreshnessUnavailable}}
 }
 
 func CalculateReadiness(battery *domain.Battery, maintenanceEvents []domain.MaintenanceEvent, liveStateAvailable bool) domain.Readiness {

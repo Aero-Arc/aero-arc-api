@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
+	"github.com/Aero-Arc/aero-arc-api/internal/readmodel"
 	"github.com/Aero-Arc/aero-arc-api/internal/registry"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 	replaymemory "github.com/Aero-Arc/aero-arc-api/internal/store/replay/memory"
@@ -159,7 +160,7 @@ func TestFleetServiceGracefullyDegradesWhenRegistryUnavailable(t *testing.T) {
 	telemetry := telemetrymemory.NewStore()
 	replay := replaymemory.NewStore()
 
-	must(t, durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1"}))
+	must(t, durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1", AgentID: "agent-1"}))
 	must(t, durable.CreateBattery(ctx, domain.Battery{ID: "battery-1", StateOfHealth: float64Ptr(92)}))
 	must(t, durable.RecordBatteryInstallation(ctx, domain.BatteryInstallation{
 		ID: "install-1", AircraftID: "aircraft-1", BatteryID: "battery-1", InstalledAt: time.Now().UTC(),
@@ -175,6 +176,98 @@ func TestFleetServiceGracefullyDegradesWhenRegistryUnavailable(t *testing.T) {
 	}
 	if dashboard.Readiness.Status != "warning" {
 		t.Fatalf("readiness = %q, want warning", dashboard.Readiness.Status)
+	}
+}
+
+func TestFleetServiceBatchesRegistryAndComposesFreshness(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 11, 18, 0, 0, 0, time.UTC)
+	durable := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	replay := replaymemory.NewStore()
+	registry := newTestRegistry()
+	for _, aircraft := range []domain.Aircraft{
+		{ID: "aircraft-fresh", AgentID: "agent-fresh"},
+		{ID: "aircraft-stale", AgentID: "agent-stale"},
+		{ID: "aircraft-unmapped"},
+	} {
+		must(t, durable.CreateAircraft(ctx, aircraft))
+	}
+	must(t, registry.SetLiveAircraftState(ctx, domain.LiveAircraftState{AgentID: "agent-fresh", RelayID: "relay-1", Connected: true, LastHeartbeatAt: now.Add(-5 * time.Second)}))
+	must(t, registry.SetLiveAircraftState(ctx, domain.LiveAircraftState{AgentID: "agent-stale", RelayID: "relay-2", Connected: true, LastHeartbeatAt: now.Add(-31 * time.Second)}))
+	must(t, telemetry.AddSample(ctx, domain.TelemetrySample{ID: "battery-frame", AircraftID: "aircraft-fresh", RecordedAt: now.Add(-20 * time.Second), BatteryPct: float64Ptr(70)}))
+	must(t, telemetry.AddSample(ctx, domain.TelemetrySample{ID: "position-frame", AircraftID: "aircraft-fresh", RecordedAt: now.Add(-2 * time.Second), Latitude: 41, Longitude: -87}))
+
+	svc := NewFleetService(durable, telemetry, replay, registry).WithLiveStatePolicy(30*time.Second, 15*time.Second, func() time.Time { return now })
+	dashboards, err := svc.ListAircraftDashboards(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if registry.listAgentCalls != 1 {
+		t.Fatalf("ListAgents calls = %d, want 1 for the whole collection", registry.listAgentCalls)
+	}
+	byID := make(map[string]readmodel.AircraftDashboard, len(dashboards))
+	for _, dashboard := range dashboards {
+		byID[dashboard.Aircraft.ID] = dashboard
+	}
+	fresh := byID["aircraft-fresh"]
+	if fresh.LiveState == nil || fresh.LiveState.ConnectionStatus != domain.ConnectionStatusConnected || !fresh.LiveState.Connected {
+		t.Fatalf("fresh connection = %#v", fresh.LiveState)
+	}
+	if fresh.Telemetry.Status != domain.DataFreshnessFresh || fresh.Telemetry.Position == nil || fresh.Telemetry.Position.Status != domain.DataFreshnessFresh {
+		t.Fatalf("fresh telemetry = %#v", fresh.Telemetry)
+	}
+	if fresh.Telemetry.Battery == nil || fresh.Telemetry.Battery.Status != domain.DataFreshnessStale {
+		t.Fatalf("battery freshness = %#v", fresh.Telemetry.Battery)
+	}
+	stale := byID["aircraft-stale"]
+	if stale.LiveState.ConnectionStatus != domain.ConnectionStatusStale || stale.LiveState.Connected {
+		t.Fatalf("stale connection = %#v", stale.LiveState)
+	}
+	unmapped := byID["aircraft-unmapped"]
+	if unmapped.LiveState.ConnectionStatus != domain.ConnectionStatusUnmapped || unmapped.LiveState.AgentID != "" {
+		t.Fatalf("unmapped connection = %#v", unmapped.LiveState)
+	}
+}
+
+func TestFleetServiceDoesNotUseAircraftIDAsAgentFallback(t *testing.T) {
+	ctx := context.Background()
+	durable := durablememory.NewStore()
+	registry := newTestRegistry()
+	must(t, durable.CreateAircraft(ctx, domain.Aircraft{ID: "same-id"}))
+	_, err := registry.RegisterAgent(ctx, &registryv1.RegisterAgentRequest{Agent: &registryv1.Agent{AgentId: "same-id", LastHeartbeatUnixMs: time.Now().UnixMilli()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := NewFleetService(durable, telemetrymemory.NewStore(), replaymemory.NewStore(), registry).GetAircraftLiveState(ctx, "same-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Connection.ConnectionStatus != domain.ConnectionStatusUnmapped || state.Connection.Connected {
+		t.Fatalf("connection = %#v, want unmapped", state.Connection)
+	}
+	if registry.listAgentCalls != 0 {
+		t.Fatalf("ListAgents calls = %d, want none without an explicit mapping", registry.listAgentCalls)
+	}
+}
+
+func TestFleetServiceRequiresLivePlacementForConnectedState(t *testing.T) {
+	ctx := context.Background()
+	durable := durablememory.NewStore()
+	registry := newTestRegistry()
+	must(t, durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1", AgentID: "agent-1"}))
+	must(t, registry.SetLiveAircraftState(ctx, domain.LiveAircraftState{
+		AgentID: "agent-1", Connected: true, LastHeartbeatAt: time.Now().UTC(),
+	}))
+
+	state, err := NewFleetService(durable, telemetrymemory.NewStore(), replaymemory.NewStore(), registry).
+		GetAircraftLiveState(ctx, "aircraft-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Connection.Connected || state.Connection.ConnectionStatus != domain.ConnectionStatusOffline {
+		t.Fatalf("connection without placement = %#v, want offline", state.Connection)
 	}
 }
 
@@ -330,6 +423,12 @@ func newTestRegistry() *testRegistry {
 
 type testRegistry struct {
 	*registry.MemoryClient
+	listAgentCalls int
+}
+
+func (r *testRegistry) ListAgents(ctx context.Context, request *registryv1.ListAgentsRequest, options ...grpc.CallOption) (*registryv1.ListAgentsResponse, error) {
+	r.listAgentCalls++
+	return r.MemoryClient.ListAgents(ctx, request, options...)
 }
 
 func must(t *testing.T, err error) {
