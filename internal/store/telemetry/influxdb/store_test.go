@@ -9,15 +9,35 @@ import (
 )
 
 type fakeRunner struct {
-	query  string
-	params map[string]any
-	rows   []map[string]any
-	err    error
-	closed bool
+	query         string
+	queries       []string
+	params        map[string]any
+	rows          []map[string]any
+	rowsByMessage map[string][]map[string]any
+	err           error
+	closed        bool
 }
 
 func (f *fakeRunner) Query(_ context.Context, query string, params map[string]any) ([]map[string]any, error) {
 	f.query, f.params = query, params
+	f.queries = append(f.queries, query)
+	if f.rowsByMessage != nil {
+		if message := stringValue(params["message_name"]); message != "" {
+			return f.rowsByMessage[message], f.err
+		}
+		rows := make([]map[string]any, 0)
+		for message, messageRows := range f.rowsByMessage {
+			for _, row := range messageRows {
+				cloned := make(map[string]any, len(row)+1)
+				for key, value := range row {
+					cloned[key] = value
+				}
+				cloned["message_name"] = message
+				rows = append(rows, cloned)
+			}
+		}
+		return rows, f.err
+	}
 	return f.rows, f.err
 }
 func (f *fakeRunner) Close() error { f.closed = true; return nil }
@@ -46,6 +66,68 @@ func TestGetLatestSample(t *testing.T) {
 	}
 	if runner.params["message_name"] != "global_position_int" || runner.params["aircraft_id"] != "aircraft-1" {
 		t.Fatalf("unexpected params: %#v", runner.params)
+	}
+}
+
+func TestGetLatestAircraftStatesQueriesAndDecodesIndependentGroups(t *testing.T) {
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	base := func(aircraftID string) map[string]any {
+		return map[string]any{"time": now, "aircraft_id": aircraftID, "frame_id": "frame-1", "relay_id": "relay-1", "session_id": "session-1", "timestamp_source": "agent_capture"}
+	}
+	position := base("aircraft-1")
+	position["latitude_deg"], position["longitude_deg"] = 41.1, -87.2
+	position["relative_altitude_m"], position["groundspeed_mps"] = 22.5, 8.75
+	battery := base("aircraft-1")
+	battery["battery_id"], battery["battery_remaining_pct"], battery["battery_voltage_v"] = uint64(2), 74.0, 23.4
+	vehicle := base("aircraft-1")
+	vehicle["vehicle_type"], vehicle["system_status"], vehicle["custom_mode"] = "quadrotor", "active", uint64(4)
+	gps := base("aircraft-2")
+	gps["gps_fix_type"], gps["gps_satellites_visible"], gps["gps_hdop"] = "3d_fix", uint64(14), 0.8
+	runner := &fakeRunner{rowsByMessage: map[string][]map[string]any{
+		messageName: {position}, messageBatteryStatus: {battery}, messageHeartbeat: {vehicle}, messageGPSRaw: {gps},
+	}}
+
+	states, err := newWithRunner(runner).GetLatestAircraftStates(context.Background(), []string{"aircraft-1", "aircraft-2", "aircraft-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.queries) != 1 {
+		t.Fatalf("queries = %d, want one batched latest-state query", len(runner.queries))
+	}
+	for _, query := range runner.queries {
+		if !strings.Contains(query, "ROW_NUMBER() OVER (PARTITION BY aircraft_id, message_name ORDER BY time DESC)") {
+			t.Fatalf("query is not bounded to latest per aircraft: %s", query)
+		}
+		if strings.Count(query, "$aircraft_id_") != 2 {
+			t.Fatalf("query has duplicate/missing bindings: %s", query)
+		}
+		if strings.Count(query, "$message_name_") != 7 {
+			t.Fatalf("query does not bind all message groups: %s", query)
+		}
+	}
+	first := states["aircraft-1"]
+	if first.Position == nil || first.Position.RelativeAltitudeM == nil || *first.Position.RelativeAltitudeM != 22.5 {
+		t.Fatalf("position = %#v", first.Position)
+	}
+	if first.Battery == nil || first.Battery.BatteryID != 2 || first.Battery.BatteryRemainingPct == nil || *first.Battery.BatteryRemainingPct != 74 {
+		t.Fatalf("battery = %#v", first.Battery)
+	}
+	if first.Vehicle == nil || first.Vehicle.SystemStatus != "active" || first.Vehicle.CustomMode == nil || *first.Vehicle.CustomMode != 4 {
+		t.Fatalf("vehicle = %#v", first.Vehicle)
+	}
+	second := states["aircraft-2"]
+	if second.GPS == nil || second.GPS.SatellitesVisible == nil || *second.GPS.SatellitesVisible != 14 {
+		t.Fatalf("gps = %#v", second.GPS)
+	}
+}
+
+func TestGetLatestAircraftStatesRejectsMalformedRequiredFields(t *testing.T) {
+	runner := &fakeRunner{rowsByMessage: map[string][]map[string]any{messageBatteryStatus: {{
+		"time": time.Now().UTC(), "aircraft_id": "aircraft-1", "battery_remaining_pct": 50.0,
+	}}}}
+	_, err := newWithRunner(runner).GetLatestAircraftStates(context.Background(), []string{"aircraft-1"})
+	if err == nil || !strings.Contains(err.Error(), "battery_id") {
+		t.Fatalf("error = %v, want battery_id decode error", err)
 	}
 }
 

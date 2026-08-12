@@ -34,6 +34,9 @@ jobs:
           --health-retries 10
     env:
       AERO_API_TEST_POSTGIS_URL: postgres://aero_arc_test:aero_arc_test@localhost:5432/aero_arc_test?sslmode=disable
+      AERO_API_TEST_INFLUXDB_HOST: http://localhost:8181
+      AERO_API_TEST_INFLUXDB_TOKEN: integration-test-token
+      AERO_API_TEST_INFLUXDB_DATABASE: aero_arc_test
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,6 +46,23 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Start InfluxDB 3 Core
+        run: >-
+          docker run --detach --name influxdb3 --publish 8181:8181
+          influxdb:3.10.3-core influxdb3 serve --node-id=api-ci
+          --object-store=memory --without-auth
+      - name: Configure InfluxDB test database
+        run: |
+          for attempt in $(seq 1 120); do
+            if curl --fail --silent http://localhost:8181/health >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --show-error --silent \
+            --header 'Content-Type: application/json' \
+            --data '{"db":"aero_arc_test"}' \
+            http://localhost:8181/api/v3/configure/database
       - run: mkdir -p coverage
       - run: go test -tags=integration -coverprofile=coverage/coverage.out -covermode=atomic ./...
       - run: go vet ./...

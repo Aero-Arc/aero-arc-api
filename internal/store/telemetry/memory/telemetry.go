@@ -25,6 +25,43 @@ func (s *Store) AddSample(_ context.Context, sample domain.TelemetrySample) erro
 	return nil
 }
 
+func (s *Store) GetLatestAircraftStates(_ context.Context, aircraftIDs []string) (map[string]domain.AircraftTelemetryState, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	states := make(map[string]domain.AircraftTelemetryState, len(aircraftIDs))
+	requested := make(map[string]struct{}, len(aircraftIDs))
+	for _, aircraftID := range aircraftIDs {
+		states[aircraftID] = domain.AircraftTelemetryState{}
+		requested[aircraftID] = struct{}{}
+	}
+	for _, sample := range s.samples {
+		if _, ok := requested[sample.AircraftID]; !ok {
+			continue
+		}
+		state := states[sample.AircraftID]
+		if state.Position == nil || sample.RecordedAt.After(state.Position.RecordedAt) {
+			altitude := sample.AltitudeM
+			groundspeed := sample.VelocityMPS
+			heading := sample.HeadingDeg
+			state.Position = &domain.PositionTelemetry{
+				TelemetryObservation: domain.TelemetryObservation{RecordedAt: sample.RecordedAt, FrameID: sample.ID, OperatorID: sample.OperatorID, IntentID: sample.IntentID, IntentVersion: sample.IntentVersion, FlightID: sample.FlightID},
+				LatitudeDeg:          sample.Latitude, LongitudeDeg: sample.Longitude,
+				AltitudeMSLM: &altitude, GroundspeedMPS: &groundspeed, HeadingDeg: &heading,
+			}
+		}
+		if sample.BatteryPct != nil && (state.Battery == nil || sample.RecordedAt.After(state.Battery.RecordedAt)) {
+			remaining := *sample.BatteryPct
+			state.Battery = &domain.BatteryTelemetry{
+				TelemetryObservation: domain.TelemetryObservation{RecordedAt: sample.RecordedAt, FrameID: sample.ID, OperatorID: sample.OperatorID, IntentID: sample.IntentID, IntentVersion: sample.IntentVersion, FlightID: sample.FlightID},
+				BatteryRemainingPct:  &remaining,
+			}
+		}
+		states[sample.AircraftID] = state
+	}
+	return states, nil
+}
+
 func (s *Store) GetLatestSample(_ context.Context, aircraftID string) (*domain.TelemetrySample, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

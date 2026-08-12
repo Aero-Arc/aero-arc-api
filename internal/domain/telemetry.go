@@ -1,6 +1,19 @@
 package domain
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
+
+type ConnectionStatus string
+
+const (
+	ConnectionStatusConnected   ConnectionStatus = "connected"
+	ConnectionStatusStale       ConnectionStatus = "stale"
+	ConnectionStatusOffline     ConnectionStatus = "offline"
+	ConnectionStatusUnmapped    ConnectionStatus = "unmapped"
+	ConnectionStatusUnavailable ConnectionStatus = "unavailable"
+)
 
 type TelemetrySample struct {
 	ID            string    `json:"id"`
@@ -30,12 +43,40 @@ type ReplayManifest struct {
 }
 
 type LiveAircraftState struct {
-	AircraftID             string    `json:"aircraft_id"`
-	OperatorID             string    `json:"operator_id,omitempty"`
-	AgentID                string    `json:"agent_id,omitempty"`
-	RelayID                string    `json:"relay_id,omitempty"`
-	Connected              bool      `json:"connected"`
-	LastConnectedAt        time.Time `json:"last_connected_at,omitempty"`
-	LastHeartbeatAt        time.Time `json:"last_heartbeat_at,omitempty"`
-	PlacementLastUpdatedAt time.Time `json:"placement_last_updated_at,omitempty"`
+	AircraftID             string           `json:"aircraft_id"`
+	OperatorID             string           `json:"operator_id,omitempty"`
+	AgentID                string           `json:"agent_id,omitempty"`
+	RelayID                string           `json:"relay_id,omitempty"`
+	Connected              bool             `json:"connected"`
+	ConnectionStatus       ConnectionStatus `json:"connection_status"`
+	LastConnectedAt        time.Time        `json:"last_connected_at,omitempty"`
+	LastHeartbeatAt        time.Time        `json:"last_heartbeat_at,omitempty"`
+	PlacementLastUpdatedAt time.Time        `json:"placement_last_updated_at,omitempty"`
+}
+
+func (s LiveAircraftState) MarshalJSON() ([]byte, error) {
+	type wireState struct {
+		AircraftID             string           `json:"aircraft_id"`
+		OperatorID             string           `json:"operator_id,omitempty"`
+		AgentID                string           `json:"agent_id,omitempty"`
+		RelayID                string           `json:"relay_id,omitempty"`
+		Connected              bool             `json:"connected"`
+		ConnectionStatus       ConnectionStatus `json:"connection_status"`
+		LastConnectedAt        *time.Time       `json:"last_connected_at,omitempty"`
+		LastHeartbeatAt        *time.Time       `json:"last_heartbeat_at,omitempty"`
+		PlacementLastUpdatedAt *time.Time       `json:"placement_last_updated_at,omitempty"`
+	}
+	return json.Marshal(wireState{
+		AircraftID: s.AircraftID, OperatorID: s.OperatorID, AgentID: s.AgentID, RelayID: s.RelayID,
+		Connected: s.Connected, ConnectionStatus: s.ConnectionStatus,
+		LastConnectedAt: timePointer(s.LastConnectedAt), LastHeartbeatAt: timePointer(s.LastHeartbeatAt),
+		PlacementLastUpdatedAt: timePointer(s.PlacementLastUpdatedAt),
+	})
+}
+
+func timePointer(value time.Time) *time.Time {
+	if value.IsZero() {
+		return nil
+	}
+	return &value
 }

@@ -27,6 +27,8 @@ const (
 	defaultRegistryMode        = "memory"
 	defaultRegistryAddress     = "localhost:50051"
 	defaultRegistryDialTimeout = 5 * time.Second
+	defaultRegistryFreshness   = 30 * time.Second
+	defaultTelemetryFreshness  = 15 * time.Second
 	defaultRequestTimeout      = 3 * time.Second
 	defaultDSSOAuthAudience    = "localhost"
 	defaultDSSOAuthIssuer      = "localhost"
@@ -59,6 +61,8 @@ type Config struct {
 	RegistryMode             string
 	RegistryAddress          string
 	RegistryDialTimeout      time.Duration
+	RegistryFreshness        time.Duration
+	TelemetryFreshness       time.Duration
 	RequestTimeout           time.Duration
 	Seed                     string
 	Debug                    bool
@@ -74,6 +78,8 @@ func Defaults() *Config {
 		RegistryMode:        defaultRegistryMode,
 		RegistryAddress:     defaultRegistryAddress,
 		RegistryDialTimeout: defaultRegistryDialTimeout,
+		RegistryFreshness:   defaultRegistryFreshness,
+		TelemetryFreshness:  defaultTelemetryFreshness,
 		RequestTimeout:      defaultRequestTimeout,
 		DSSOAuthAudience:    defaultDSSOAuthAudience,
 		DSSOAuthIssuer:      defaultDSSOAuthIssuer,
@@ -115,6 +121,12 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if err := applyDurationEnv("AERO_API_REGISTRY_DIAL_TIMEOUT", &cfg.RegistryDialTimeout); err != nil {
+		return nil, err
+	}
+	if err := applyDurationEnv("AERO_API_REGISTRY_FRESHNESS", &cfg.RegistryFreshness); err != nil {
+		return nil, err
+	}
+	if err := applyDurationEnv("AERO_API_TELEMETRY_FRESHNESS", &cfg.TelemetryFreshness); err != nil {
 		return nil, err
 	}
 	if err := applyDurationEnv("AERO_API_REQUEST_TIMEOUT", &cfg.RequestTimeout); err != nil {
@@ -207,6 +219,12 @@ func (cfg *Config) Validate() error {
 	}
 	if cfg.RegistryDialTimeout <= 0 {
 		return fmt.Errorf("AERO_API_REGISTRY_DIAL_TIMEOUT must be > 0")
+	}
+	if cfg.RegistryFreshness <= 0 {
+		return fmt.Errorf("AERO_API_REGISTRY_FRESHNESS must be > 0")
+	}
+	if cfg.TelemetryFreshness <= 0 {
+		return fmt.Errorf("AERO_API_TELEMETRY_FRESHNESS must be > 0")
 	}
 	if cfg.RequestTimeout <= 0 {
 		return fmt.Errorf("AERO_API_REQUEST_TIMEOUT must be > 0")
