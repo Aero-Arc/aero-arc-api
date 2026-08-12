@@ -29,6 +29,7 @@ const (
 	defaultRegistryDialTimeout = 5 * time.Second
 	defaultRegistryFreshness   = 30 * time.Second
 	defaultTelemetryFreshness  = 15 * time.Second
+	defaultTelemetryLookback   = 5 * time.Minute
 	defaultRequestTimeout      = 3 * time.Second
 	defaultDSSOAuthAudience    = "localhost"
 	defaultDSSOAuthIssuer      = "localhost"
@@ -63,6 +64,7 @@ type Config struct {
 	RegistryDialTimeout      time.Duration
 	RegistryFreshness        time.Duration
 	TelemetryFreshness       time.Duration
+	TelemetryLatestLookback  time.Duration
 	RequestTimeout           time.Duration
 	Seed                     string
 	Debug                    bool
@@ -70,22 +72,23 @@ type Config struct {
 
 func Defaults() *Config {
 	return &Config{
-		Addr:                defaultAddr,
-		DurableStore:        defaultDurableStore,
-		AirspaceProviders:   []string{AirspaceProviderLocal},
-		TelemetryStore:      defaultTelemetryStore,
-		ReplayStore:         defaultReplayStore,
-		RegistryMode:        defaultRegistryMode,
-		RegistryAddress:     defaultRegistryAddress,
-		RegistryDialTimeout: defaultRegistryDialTimeout,
-		RegistryFreshness:   defaultRegistryFreshness,
-		TelemetryFreshness:  defaultTelemetryFreshness,
-		RequestTimeout:      defaultRequestTimeout,
-		DSSOAuthAudience:    defaultDSSOAuthAudience,
-		DSSOAuthIssuer:      defaultDSSOAuthIssuer,
-		DSSOAuthSubject:     defaultDSSOAuthSubject,
-		Seed:                defaultSeed,
-		Debug:               defaultDebug,
+		Addr:                    defaultAddr,
+		DurableStore:            defaultDurableStore,
+		AirspaceProviders:       []string{AirspaceProviderLocal},
+		TelemetryStore:          defaultTelemetryStore,
+		ReplayStore:             defaultReplayStore,
+		RegistryMode:            defaultRegistryMode,
+		RegistryAddress:         defaultRegistryAddress,
+		RegistryDialTimeout:     defaultRegistryDialTimeout,
+		RegistryFreshness:       defaultRegistryFreshness,
+		TelemetryFreshness:      defaultTelemetryFreshness,
+		TelemetryLatestLookback: defaultTelemetryLookback,
+		RequestTimeout:          defaultRequestTimeout,
+		DSSOAuthAudience:        defaultDSSOAuthAudience,
+		DSSOAuthIssuer:          defaultDSSOAuthIssuer,
+		DSSOAuthSubject:         defaultDSSOAuthSubject,
+		Seed:                    defaultSeed,
+		Debug:                   defaultDebug,
 	}
 }
 
@@ -127,6 +130,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if err := applyDurationEnv("AERO_API_TELEMETRY_FRESHNESS", &cfg.TelemetryFreshness); err != nil {
+		return nil, err
+	}
+	if err := applyDurationEnv("AERO_API_TELEMETRY_LATEST_LOOKBACK", &cfg.TelemetryLatestLookback); err != nil {
 		return nil, err
 	}
 	if err := applyDurationEnv("AERO_API_REQUEST_TIMEOUT", &cfg.RequestTimeout); err != nil {
@@ -225,6 +231,12 @@ func (cfg *Config) Validate() error {
 	}
 	if cfg.TelemetryFreshness <= 0 {
 		return fmt.Errorf("AERO_API_TELEMETRY_FRESHNESS must be > 0")
+	}
+	if cfg.TelemetryLatestLookback <= 0 {
+		return fmt.Errorf("AERO_API_TELEMETRY_LATEST_LOOKBACK must be > 0")
+	}
+	if cfg.TelemetryLatestLookback < cfg.TelemetryFreshness {
+		return fmt.Errorf("AERO_API_TELEMETRY_LATEST_LOOKBACK must be >= AERO_API_TELEMETRY_FRESHNESS")
 	}
 	if cfg.RequestTimeout <= 0 {
 		return fmt.Errorf("AERO_API_REQUEST_TIMEOUT must be > 0")

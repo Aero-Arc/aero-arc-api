@@ -22,6 +22,7 @@ const (
 	messageVFRHUD              = "vfr_hud"
 	messageExtendedSystemState = "extended_sys_state"
 	messageGPSRaw              = "gps_raw_int"
+	defaultLatestLookback      = 5 * time.Minute
 )
 
 type queryRunner interface {
@@ -29,7 +30,11 @@ type queryRunner interface {
 	Close() error
 }
 
-type Store struct{ runner queryRunner }
+type Store struct {
+	runner         queryRunner
+	latestLookback time.Duration
+	now            func() time.Time
+}
 
 type sampleWindow uint8
 
@@ -54,16 +59,26 @@ func (w sampleWindow) policy() (sampleWindowPolicy, error) {
 	}
 }
 
-func New(host, token, database string) (*Store, error) {
+func New(host, token, database string, latestLookback time.Duration) (*Store, error) {
+	if latestLookback <= 0 {
+		return nil, fmt.Errorf("latest telemetry lookback must be > 0")
+	}
 	client, err := influxdb3.New(influxdb3.ClientConfig{Host: host, Token: token, Database: database})
 	if err != nil {
 		return nil, fmt.Errorf("create influxdb client: %w", err)
 	}
-	return &Store{runner: &clientRunner{client: client}}, nil
+	return &Store{runner: &clientRunner{client: client}, latestLookback: latestLookback, now: time.Now}, nil
 }
 
-func newWithRunner(runner queryRunner) *Store { return &Store{runner: runner} }
-func (s *Store) Close() error                 { return s.runner.Close() }
+func newWithRunner(runner queryRunner) *Store {
+	return newWithRunnerPolicy(runner, defaultLatestLookback, time.Now)
+}
+
+func newWithRunnerPolicy(runner queryRunner, latestLookback time.Duration, now func() time.Time) *Store {
+	return &Store{runner: runner, latestLookback: latestLookback, now: now}
+}
+
+func (s *Store) Close() error { return s.runner.Close() }
 
 func (s *Store) GetLatestAircraftStates(ctx context.Context, aircraftIDs []string) (map[string]domain.AircraftTelemetryState, error) {
 	states := make(map[string]domain.AircraftTelemetryState, len(aircraftIDs))
@@ -133,7 +148,8 @@ func (s *Store) GetLatestAircraftStates(ctx context.Context, aircraftIDs []strin
 }
 
 func (s *Store) queryLatestRowsByAircraft(ctx context.Context, aircraftIDs []string) ([]map[string]any, error) {
-	params := make(map[string]any, len(aircraftIDs)+7)
+	params := make(map[string]any, len(aircraftIDs)+8)
+	params["latest_after"] = s.now().UTC().Add(-s.latestLookback).Format(time.RFC3339Nano)
 	aircraftBindings := make([]string, 0, len(aircraftIDs))
 	for index, aircraftID := range aircraftIDs {
 		name := fmt.Sprintf("aircraft_id_%d", index)
@@ -150,7 +166,7 @@ func (s *Store) queryLatestRowsByAircraft(ctx context.Context, aircraftIDs []str
 	query := fmt.Sprintf(`SELECT * FROM (
 SELECT *, ROW_NUMBER() OVER (PARTITION BY aircraft_id, message_name ORDER BY time DESC) AS latest_rank
 FROM %q
-WHERE message_name IN (%s) AND aircraft_id IN (%s)
+WHERE time >= $latest_after AND message_name IN (%s) AND aircraft_id IN (%s)
 ) AS latest WHERE latest_rank = 1`, tableName, strings.Join(messageBindings, ", "), strings.Join(aircraftBindings, ", "))
 	rows, err := s.runner.Query(ctx, query, params)
 	if err != nil {
