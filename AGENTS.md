@@ -23,6 +23,9 @@
 - Registry liveness and telemetry freshness are separate. Defaults are 30s and
   15s, configured by `AERO_API_REGISTRY_FRESHNESS` and
   `AERO_API_TELEMETRY_FRESHNESS`.
+- Latest-state InfluxDB ranking is limited to five minutes by default through
+  `AERO_API_TELEMETRY_LATEST_LOOKBACK`. Keep it at least as large as telemetry
+  freshness. This bound does not apply to replay/history queries.
 - Preserve missing versus numeric zero when decoding sparse InfluxDB columns.
 
 ## Testing

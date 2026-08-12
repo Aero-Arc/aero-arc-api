@@ -115,6 +115,7 @@ func newCommand() *cli.Command {
 					},
 					&cli.DurationFlag{Name: "registry-freshness", Value: defaults.RegistryFreshness, Usage: "maximum registry heartbeat age considered connected", Sources: cli.EnvVars("AERO_API_REGISTRY_FRESHNESS")},
 					&cli.DurationFlag{Name: "telemetry-freshness", Value: defaults.TelemetryFreshness, Usage: "maximum telemetry observation age considered fresh", Sources: cli.EnvVars("AERO_API_TELEMETRY_FRESHNESS")},
+					&cli.DurationFlag{Name: "telemetry-latest-lookback", Value: defaults.TelemetryLatestLookback, Usage: "maximum telemetry history scanned for live state", Sources: cli.EnvVars("AERO_API_TELEMETRY_LATEST_LOOKBACK")},
 					&cli.DurationFlag{
 						Name:    "request-timeout",
 						Value:   defaults.RequestTimeout,
@@ -161,6 +162,7 @@ func newCommand() *cli.Command {
 						RegistryDialTimeout:      cmd.Duration("registry-dial-timeout"),
 						RegistryFreshness:        cmd.Duration("registry-freshness"),
 						TelemetryFreshness:       cmd.Duration("telemetry-freshness"),
+						TelemetryLatestLookback:  cmd.Duration("telemetry-latest-lookback"),
 						RequestTimeout:           cmd.Duration("request-timeout"),
 						Seed:                     cmd.String("seed"),
 						Debug:                    cmd.Bool("debug"),
@@ -272,6 +274,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 			slog.String("registry_addr", cfg.RegistryAddress),
 			slog.Duration("registry_freshness", cfg.RegistryFreshness),
 			slog.Duration("telemetry_freshness", cfg.TelemetryFreshness),
+			slog.Duration("telemetry_latest_lookback", cfg.TelemetryLatestLookback),
 			slog.String("seed", cfg.Seed),
 			slog.Bool("debug", cfg.Debug),
 		)
@@ -356,7 +359,7 @@ func newTelemetryStore(cfg *config.Config) (telemetry.Store, error) {
 	case "memory":
 		return telemetrymemory.NewStore(), nil
 	case "influxdb":
-		return telemetryinfluxdb.New(cfg.InfluxDBHost, cfg.InfluxDBToken, cfg.InfluxDBDatabase)
+		return telemetryinfluxdb.New(cfg.InfluxDBHost, cfg.InfluxDBToken, cfg.InfluxDBDatabase, cfg.TelemetryLatestLookback)
 	default:
 		return nil, fmt.Errorf("unsupported telemetry store %q", cfg.TelemetryStore)
 	}

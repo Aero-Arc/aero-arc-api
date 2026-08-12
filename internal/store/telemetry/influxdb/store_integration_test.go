@@ -72,3 +72,66 @@ func TestLiveAircraftStateAgainstInfluxDB(t *testing.T) {
 		}
 	}
 }
+
+func TestLatestAircraftStateLookbackAgainstInfluxDB(t *testing.T) {
+	host := os.Getenv("AERO_API_TEST_INFLUXDB_HOST")
+	token := os.Getenv("AERO_API_TEST_INFLUXDB_TOKEN")
+	database := os.Getenv("AERO_API_TEST_INFLUXDB_DATABASE")
+	if host == "" || token == "" || database == "" {
+		t.Skip("AERO_API_TEST_INFLUXDB_HOST, _TOKEN, and _DATABASE are required")
+	}
+
+	client, err := influxdb3.New(influxdb3.ClientConfig{Host: host, Token: token, Database: database})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	now := time.Now().UTC()
+	lookback := 2 * time.Minute
+	aircraftID := fmt.Sprintf("aircraft-api-lookback-%d", now.UnixNano())
+	commonTags := func(frameID, message string) map[string]string {
+		return map[string]string{
+			"agent_id": "agent-lookback", "frame_id": frameID, "message_name": message, "schema_version": "1",
+		}
+	}
+	commonFields := func(fields map[string]interface{}) map[string]interface{} {
+		fields["aircraft_id"] = aircraftID
+		fields["relay_id"] = "relay-lookback"
+		fields["session_id"] = "session-lookback"
+		fields["timestamp_source"] = "agent_capture"
+		return fields
+	}
+	points := []*influxdb3.Point{
+		influxdb3.NewPoint(tableName, commonTags("old-battery", messageBatteryStatus), commonFields(map[string]interface{}{
+			"battery_id": uint64(1), "battery_remaining_pct": 12.0,
+		}), now.Add(-2*lookback)),
+		influxdb3.NewPoint(tableName, commonTags("recent-position", messageName), commonFields(map[string]interface{}{
+			"latitude_deg": 41.9, "longitude_deg": -87.7,
+		}), now.Add(-time.Second)),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := client.WritePoints(ctx, points); err != nil {
+		t.Fatalf("write telemetry: %v", err)
+	}
+
+	store := newWithRunnerPolicy(&clientRunner{client: client}, lookback, func() time.Time { return now })
+	for {
+		states, queryErr := store.GetLatestAircraftStates(ctx, []string{aircraftID})
+		if queryErr == nil && states[aircraftID].Position != nil {
+			state := states[aircraftID]
+			if state.Position.LatitudeDeg != 41.9 {
+				t.Fatalf("position = %#v, want recent point", state.Position)
+			}
+			if state.Battery != nil {
+				t.Fatalf("battery = %#v, want old point outside lookback excluded", state.Battery)
+			}
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("recent telemetry did not become queryable: %v", ctx.Err())
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}

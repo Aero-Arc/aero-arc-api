@@ -129,6 +129,7 @@ func TestRequiredUintRejectsInvalidAndPreservesZero(t *testing.T) {
 
 func TestGetLatestAircraftStatesQueriesAndDecodesIndependentGroups(t *testing.T) {
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	lookback := 5 * time.Minute
 	base := func(aircraftID string) map[string]any {
 		return map[string]any{"time": now, "aircraft_id": aircraftID, "frame_id": "frame-1", "relay_id": "relay-1", "session_id": "session-1", "timestamp_source": "agent_capture"}
 	}
@@ -145,7 +146,7 @@ func TestGetLatestAircraftStatesQueriesAndDecodesIndependentGroups(t *testing.T)
 		messageName: {position}, messageBatteryStatus: {battery}, messageHeartbeat: {vehicle}, messageGPSRaw: {gps},
 	}}
 
-	states, err := newWithRunner(runner).GetLatestAircraftStates(context.Background(), []string{"aircraft-1", "aircraft-2", "aircraft-1"})
+	states, err := newWithRunnerPolicy(runner, lookback, func() time.Time { return now }).GetLatestAircraftStates(context.Background(), []string{"aircraft-1", "aircraft-2", "aircraft-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,12 +157,19 @@ func TestGetLatestAircraftStatesQueriesAndDecodesIndependentGroups(t *testing.T)
 		if !strings.Contains(query, "ROW_NUMBER() OVER (PARTITION BY aircraft_id, message_name ORDER BY time DESC)") {
 			t.Fatalf("query is not bounded to latest per aircraft: %s", query)
 		}
+		if !strings.Contains(query, "WHERE time >= $latest_after AND message_name IN") {
+			t.Fatalf("query does not bound retained history before ranking: %s", query)
+		}
 		if strings.Count(query, "$aircraft_id_") != 2 {
 			t.Fatalf("query has duplicate/missing bindings: %s", query)
 		}
 		if strings.Count(query, "$message_name_") != 7 {
 			t.Fatalf("query does not bind all message groups: %s", query)
 		}
+	}
+	wantLatestAfter := now.Add(-lookback).Format(time.RFC3339Nano)
+	if runner.params["latest_after"] != wantLatestAfter {
+		t.Fatalf("latest_after = %#v, want %q", runner.params["latest_after"], wantLatestAfter)
 	}
 	first := states["aircraft-1"]
 	if first.Position == nil || first.Position.RelativeAltitudeM == nil || *first.Position.RelativeAltitudeM != 22.5 {
@@ -176,6 +184,13 @@ func TestGetLatestAircraftStatesQueriesAndDecodesIndependentGroups(t *testing.T)
 	second := states["aircraft-2"]
 	if second.GPS == nil || second.GPS.SatellitesVisible == nil || *second.GPS.SatellitesVisible != 14 {
 		t.Fatalf("gps = %#v", second.GPS)
+	}
+}
+
+func TestNewRejectsInvalidLatestLookback(t *testing.T) {
+	_, err := New("", "", "", 0)
+	if err == nil || !strings.Contains(err.Error(), "lookback must be > 0") {
+		t.Fatalf("error = %v, want invalid lookback", err)
 	}
 }
 
@@ -246,6 +261,9 @@ func TestQueryFlightSamplesReturnsChronologicalOrder(t *testing.T) {
 	if !strings.Contains(runner.query, "flight_id = $flight_id") || !strings.Contains(runner.query, "ORDER BY time ASC LIMIT 25") {
 		t.Fatalf("unexpected query: %s", runner.query)
 	}
+	if strings.Contains(runner.query, "latest_after") {
+		t.Fatalf("replay query was clipped by live-state lookback: %s", runner.query)
+	}
 }
 
 func TestQueryAircraftSamplesReturnsLatestWindowChronologically(t *testing.T) {
@@ -264,6 +282,9 @@ func TestQueryAircraftSamplesReturnsLatestWindowChronologically(t *testing.T) {
 	}
 	if !strings.Contains(runner.query, "aircraft_id = $aircraft_id") || !strings.Contains(runner.query, "ORDER BY time DESC LIMIT 25") {
 		t.Fatalf("unexpected query: %s", runner.query)
+	}
+	if strings.Contains(runner.query, "latest_after") {
+		t.Fatalf("aircraft history query was clipped by live-state lookback: %s", runner.query)
 	}
 }
 

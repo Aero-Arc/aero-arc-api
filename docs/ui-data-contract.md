@@ -99,6 +99,12 @@ telemetry observation is fresh through 15 seconds. These server-side policies
 are configurable. The aggregate telemetry status describes its newest
 observation; render group status when showing a specific value.
 
+Live-state InfluxDB ranking is restricted to a five-minute lookback by default,
+configured by `AERO_API_TELEMETRY_LATEST_LOOKBACK`. The lookback must be at
+least the telemetry freshness window. Once a group falls outside the lookback
+it is `missing`, not indefinitely `stale`; replay/history queries are separate
+and are not restricted by the live-state lookback.
+
 ## Relay To InfluxDB Telemetry Contract
 
 The source of truth for writes is the `Aero-Arc/aero-arc-relay` repository:

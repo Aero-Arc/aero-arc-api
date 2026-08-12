@@ -95,6 +95,7 @@ AERO_API_REGISTRY_ADDR=localhost:50051
 AERO_API_REGISTRY_DIAL_TIMEOUT=5s
 AERO_API_REGISTRY_FRESHNESS=30s
 AERO_API_TELEMETRY_FRESHNESS=15s
+AERO_API_TELEMETRY_LATEST_LOOKBACK=5m
 AERO_API_REQUEST_TIMEOUT=3s
 AERO_API_SEED=demo
 AERO_API_DEBUG=true
@@ -132,6 +133,12 @@ Aircraft-to-agent association is explicit: `aircraft.agent_id` must match the
 registry agent ID. The API never substitutes `aircraft.id`. Registry heartbeats
 are fresh for 30 seconds and telemetry for 15 seconds by default; change these
 with `AERO_API_REGISTRY_FRESHNESS` and `AERO_API_TELEMETRY_FRESHNESS`.
+Live-state InfluxDB queries rank only observations inside the latest lookback
+(five minutes by default) so retained flight history is not scanned on every
+Operations refresh. Configure it with `AERO_API_TELEMETRY_LATEST_LOOKBACK`; it
+must be at least the telemetry freshness window. Replay and aircraft-history
+queries retain their independent explicit limits and are not clipped by this
+live-state policy.
 
 `GET /api/v1/operations` includes the same composites in `live_aircraft`, and
 aircraft list/detail/map responses retain their legacy `live_state` and

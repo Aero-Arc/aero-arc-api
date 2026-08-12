@@ -19,6 +19,32 @@ func TestLiveStateFreshnessMustBePositive(t *testing.T) {
 	}
 }
 
+func TestTelemetryLatestLookbackCoversFreshnessWindow(t *testing.T) {
+	cfg := Defaults()
+	if cfg.TelemetryLatestLookback != 5*time.Minute {
+		t.Fatalf("default telemetry latest lookback = %v, want 5m", cfg.TelemetryLatestLookback)
+	}
+	cfg.TelemetryLatestLookback = 0
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "TELEMETRY_LATEST_LOOKBACK must be > 0") {
+		t.Fatalf("unexpected zero telemetry lookback error: %v", err)
+	}
+
+	cfg = Defaults()
+	cfg.TelemetryLatestLookback = cfg.TelemetryFreshness - time.Second
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "TELEMETRY_LATEST_LOOKBACK") {
+		t.Fatalf("unexpected telemetry lookback error: %v", err)
+	}
+
+	t.Setenv("AERO_API_TELEMETRY_LATEST_LOOKBACK", "7m")
+	loaded, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.TelemetryLatestLookback != 7*time.Minute {
+		t.Fatalf("telemetry latest lookback = %v, want 7m", loaded.TelemetryLatestLookback)
+	}
+}
+
 func TestValidateInfluxDBTelemetry(t *testing.T) {
 	cfg := Defaults()
 	cfg.TelemetryStore = "influxdb"
