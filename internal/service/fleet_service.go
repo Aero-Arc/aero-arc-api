@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
@@ -433,28 +434,62 @@ func (s *FleetService) intentByStatus(ctx context.Context, aircraftID string, st
 }
 
 func (s *FleetService) composeLiveAircraft(ctx context.Context, aircraft []domain.Aircraft) []readmodel.AircraftLiveState {
-	result := make([]readmodel.AircraftLiveState, len(aircraft))
 	telemetryIDs := make([]string, 0, len(aircraft))
-	hasMappings := false
+	for _, item := range aircraft {
+		telemetryIDs = append(telemetryIDs, item.ID)
+	}
+	now := s.now().UTC()
+
+	var connectionStates []domain.LiveAircraftState
+	var telemetryStates []domain.AircraftTelemetryState
+	var branches sync.WaitGroup
+	branches.Add(2)
+	go func() {
+		defer branches.Done()
+		connectionStates = s.composeAircraftConnections(ctx, aircraft, now)
+	}()
+	go func() {
+		defer branches.Done()
+		telemetryStates = s.composeAircraftTelemetry(ctx, telemetryIDs, now)
+	}()
+	branches.Wait()
+
+	result := make([]readmodel.AircraftLiveState, len(aircraft))
 	for index, item := range aircraft {
 		result[index] = readmodel.AircraftLiveState{
-			AircraftID: item.ID, OperatorID: item.OperatorID, AgentID: item.AgentID,
-			Connection: domain.LiveAircraftState{AircraftID: item.ID, OperatorID: item.OperatorID, AgentID: item.AgentID, ConnectionStatus: domain.ConnectionStatusUnmapped},
-			Telemetry:  domain.AircraftTelemetryState{Status: domain.DataFreshnessMissing},
+			AircraftID: item.ID,
+			OperatorID: item.OperatorID,
+			AgentID:    item.AgentID,
+			Connection: connectionStates[index],
+			Telemetry:  telemetryStates[index],
 		}
-		telemetryIDs = append(telemetryIDs, item.ID)
-		hasMappings = hasMappings || item.AgentID != ""
 	}
+	return result
+}
 
-	telemetryStates, telemetryErr := s.telemetry.GetLatestAircraftStates(ctx, telemetryIDs)
-	for index := range result {
-		if telemetryErr != nil {
-			result[index].Telemetry.Status = domain.DataFreshnessUnavailable
+func (s *FleetService) composeAircraftTelemetry(ctx context.Context, aircraftIDs []string, now time.Time) []domain.AircraftTelemetryState {
+	result := make([]domain.AircraftTelemetryState, len(aircraftIDs))
+	telemetryStates, err := s.telemetry.GetLatestAircraftStates(ctx, aircraftIDs)
+	for index, aircraftID := range aircraftIDs {
+		if err != nil {
+			result[index].Status = domain.DataFreshnessUnavailable
 			continue
 		}
-		state := telemetryStates[result[index].AircraftID]
-		s.applyTelemetryFreshness(&state)
-		result[index].Telemetry = state
+		state := telemetryStates[aircraftID]
+		s.applyTelemetryFreshness(&state, now)
+		result[index] = state
+	}
+	return result
+}
+
+func (s *FleetService) composeAircraftConnections(ctx context.Context, aircraft []domain.Aircraft, now time.Time) []domain.LiveAircraftState {
+	result := make([]domain.LiveAircraftState, len(aircraft))
+	hasMappings := false
+	for index, item := range aircraft {
+		result[index] = domain.LiveAircraftState{
+			AircraftID: item.ID, OperatorID: item.OperatorID, AgentID: item.AgentID, ConnectionStatus: domain.ConnectionStatusUnmapped,
+		}
+		hasMappings = hasMappings || item.AgentID != ""
 	}
 	if !hasMappings {
 		return result
@@ -464,7 +499,7 @@ func (s *FleetService) composeLiveAircraft(ctx context.Context, aircraft []domai
 	if err != nil {
 		for index := range result {
 			if result[index].AgentID != "" {
-				result[index].Connection.ConnectionStatus = domain.ConnectionStatusUnavailable
+				result[index].ConnectionStatus = domain.ConnectionStatusUnavailable
 			}
 		}
 		return result
@@ -477,7 +512,7 @@ func (s *FleetService) composeLiveAircraft(ctx context.Context, aircraft []domai
 	}
 	lookups := make([]placementLookup, 0, len(result))
 	for index := range result {
-		state := &result[index].Connection
+		state := &result[index]
 		if state.AgentID == "" {
 			continue
 		}
@@ -488,7 +523,7 @@ func (s *FleetService) composeLiveAircraft(ctx context.Context, aircraft []domai
 		}
 		state.LastHeartbeatAt = unixMillis(agent.GetLastHeartbeatUnixMs())
 		state.LastConnectedAt = state.LastHeartbeatAt
-		if freshAt(state.LastHeartbeatAt, s.now().UTC(), s.registryFreshness) {
+		if freshAt(state.LastHeartbeatAt, now, s.registryFreshness) {
 			state.Connected = true
 			state.ConnectionStatus = domain.ConnectionStatusConnected
 		} else {
@@ -499,7 +534,7 @@ func (s *FleetService) composeLiveAircraft(ctx context.Context, aircraft []domai
 
 	placementResults := s.lookupPlacements(ctx, lookups)
 	for lookupIndex, lookup := range lookups {
-		state := &result[lookup.resultIndex].Connection
+		state := &result[lookup.resultIndex]
 		placementResult := placementResults[lookupIndex]
 		if placementResult.err != nil {
 			state.Connected = false
@@ -552,8 +587,7 @@ func (s *FleetService) lookupPlacements(ctx context.Context, lookups []placement
 	return results
 }
 
-func (s *FleetService) applyTelemetryFreshness(state *domain.AircraftTelemetryState) {
-	now := s.now().UTC()
+func (s *FleetService) applyTelemetryFreshness(state *domain.AircraftTelemetryState, now time.Time) {
 	observations := []*domain.TelemetryObservation{}
 	if state.Position != nil {
 		observations = append(observations, &state.Position.TelemetryObservation)
