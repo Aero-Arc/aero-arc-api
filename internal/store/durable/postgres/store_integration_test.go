@@ -5,7 +5,6 @@ package postgres
 import (
 	"context"
 	"errors"
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -15,17 +14,13 @@ import (
 )
 
 func TestAuthoritativeSpatialReadCheckSlice(t *testing.T) {
-	databaseURL := os.Getenv("AERO_API_TEST_POSTGIS_URL")
-	if databaseURL == "" {
-		t.Skip("AERO_API_TEST_POSTGIS_URL is not set")
-	}
 	ctx := context.Background()
-	store, err := Open(ctx, databaseURL)
+	store, err := Open(ctx, integrationDatabaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(store.Close)
-	observer, err := Open(ctx, databaseURL)
+	observer, err := Open(ctx, integrationDatabaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -555,17 +550,13 @@ func TestPostgresIntegrityAndReplacementScope(t *testing.T) {
 
 func integrationStores(t *testing.T) (context.Context, *Store, *Store) {
 	t.Helper()
-	databaseURL := os.Getenv("AERO_API_TEST_POSTGIS_URL")
-	if databaseURL == "" {
-		t.Skip("AERO_API_TEST_POSTGIS_URL is not set")
-	}
 	ctx := context.Background()
-	first, err := Open(ctx, databaseURL)
+	first, err := Open(ctx, integrationDatabaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(first.Close)
-	second, err := Open(ctx, databaseURL)
+	second, err := Open(ctx, integrationDatabaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}

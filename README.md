@@ -144,7 +144,33 @@ live-state policy.
 aircraft list/detail/map responses retain their legacy `live_state` and
 `latest_telemetry` fields while also exposing the grouped `telemetry` object.
 
-The real InfluxDB integration test is opt-in:
+### Integration tests
+
+Integration tests use Testcontainers and own their PostGIS and InfluxDB
+dependencies by default. With Docker available, the suite pulls the pinned
+`postgis/postgis:14-3.5-alpine` and `influxdb:3.10.3-core` images, assigns
+dynamic host ports, creates the test databases, waits for readiness, and
+removes the containers after the owning package finishes:
+
+```bash
+go test -tags=integration ./...
+```
+
+The PostGIS and InfluxDB packages each start at most one container and share it
+across that package's tests. A failing package prints its dependency container
+logs before cleanup. The bufconn and `httptest` integrations stay in-process;
+DSS tests remain opt-in and use their existing external configuration.
+
+Externally managed services can replace either test-owned dependency. Set the
+PostGIS URL to bypass its container:
+
+```bash
+AERO_API_TEST_POSTGIS_URL='postgres://aero_arc_test:aero_arc_test@localhost:5432/aero_arc_test?sslmode=disable' \
+go test -tags=integration ./internal/store/durable/postgres
+```
+
+Set all three InfluxDB values together to bypass its container. The external
+database must already exist:
 
 ```bash
 AERO_API_TEST_INFLUXDB_HOST=http://localhost:8181 \

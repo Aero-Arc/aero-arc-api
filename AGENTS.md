@@ -39,10 +39,15 @@ TMPDIR=/tmp/aero-arc-api-tmp \
 go test ./...
 ```
 
-Integration tests use the `integration` build tag. PostGIS uses
-`AERO_API_TEST_POSTGIS_URL`. Live InfluxDB coverage additionally uses
+Integration tests use the `integration` build tag. With no test-service
+environment variables, package-scoped Testcontainers fixtures start the pinned
+PostGIS and InfluxDB images, allocate dynamic ports, provision databases, and
+clean up after `TestMain`; Docker must be available. Set
+`AERO_API_TEST_POSTGIS_URL` to use an externally managed PostGIS instance. Set
 `AERO_API_TEST_INFLUXDB_HOST`, `AERO_API_TEST_INFLUXDB_TOKEN`, and
-`AERO_API_TEST_INFLUXDB_DATABASE`; it skips when they are absent.
+`AERO_API_TEST_INFLUXDB_DATABASE` together to use an externally managed
+InfluxDB database. Do not make bufconn/httptest integrations depend on Docker,
+and keep DSS integration tests explicitly configured against an external DSS.
 
 Before handing off changes, run `gofmt`, `go test ./...`,
 `go test -tags=integration ./...`, `go vet ./...`, and `staticcheck ./...` when
