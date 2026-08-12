@@ -301,6 +301,73 @@ func TestFleetServiceBoundsConcurrentPlacementLookups(t *testing.T) {
 	}
 }
 
+func TestFleetServiceQueriesTelemetryAndRegistryConcurrently(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	now := time.Date(2026, 8, 11, 18, 0, 0, 0, time.UTC)
+	durable := durablememory.NewStore()
+	baseRegistry := newTestRegistry()
+	registryRelease := make(chan struct{})
+	close(registryRelease)
+	registry := &controlledPlacementRegistry{
+		testRegistry: baseRegistry,
+		started:      make(chan string, 1),
+		release:      registryRelease,
+	}
+	telemetryRelease := make(chan struct{})
+	telemetry := &blockingLatestTelemetryStore{
+		Store:   telemetrymemory.NewStore(),
+		started: make(chan struct{}, 1),
+		release: telemetryRelease,
+	}
+	must(t, durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1", AgentID: "agent-1"}))
+	must(t, baseRegistry.SetLiveAircraftState(ctx, domain.LiveAircraftState{
+		AgentID: "agent-1", RelayID: "relay-1", Connected: true, LastHeartbeatAt: now,
+	}))
+
+	type response struct {
+		dashboards []readmodel.AircraftDashboard
+		err        error
+	}
+	responseCh := make(chan response, 1)
+	go func() {
+		dashboards, err := NewFleetService(durable, telemetry, replaymemory.NewStore(), registry).
+			WithLiveStatePolicy(30*time.Second, 15*time.Second, func() time.Time { return now }).
+			ListAircraftDashboards(ctx)
+		responseCh <- response{dashboards: dashboards, err: err}
+	}()
+
+	select {
+	case <-telemetry.started:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("telemetry query did not start")
+	}
+	select {
+	case <-registry.started:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("registry placement lookup did not start while telemetry was blocked")
+	}
+	close(telemetryRelease)
+
+	select {
+	case got := <-responseCh:
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if len(got.dashboards) != 1 || got.dashboards[0].LiveState == nil {
+			t.Fatalf("dashboards = %#v", got.dashboards)
+		}
+		if state := got.dashboards[0].LiveState; !state.Connected || state.RelayID != "relay-1" || state.ConnectionStatus != domain.ConnectionStatusConnected {
+			t.Fatalf("connection = %#v, want connected through relay-1", state)
+		}
+		if got.dashboards[0].Telemetry.Status != domain.DataFreshnessMissing {
+			t.Fatalf("telemetry status = %q, want missing", got.dashboards[0].Telemetry.Status)
+		}
+	case <-ctx.Done():
+		t.Fatal("fleet lookup did not finish before its deadline")
+	}
+}
+
 func TestFleetServiceCancelsPlacementLookups(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	durable := durablememory.NewStore()
@@ -553,6 +620,22 @@ type controlledPlacementRegistry struct {
 	calls     int
 	active    int
 	maxActive int
+}
+
+type blockingLatestTelemetryStore struct {
+	*telemetrymemory.Store
+	started chan struct{}
+	release <-chan struct{}
+}
+
+func (s *blockingLatestTelemetryStore) GetLatestAircraftStates(ctx context.Context, aircraftIDs []string) (map[string]domain.AircraftTelemetryState, error) {
+	s.started <- struct{}{}
+	select {
+	case <-s.release:
+		return s.Store.GetLatestAircraftStates(ctx, aircraftIDs)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (r *controlledPlacementRegistry) GetAgentPlacement(ctx context.Context, request *registryv1.GetAgentPlacementRequest, options ...grpc.CallOption) (*registryv1.GetAgentPlacementResponse, error) {
