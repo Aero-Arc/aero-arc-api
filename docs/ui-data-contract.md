@@ -99,6 +99,79 @@ telemetry observation is fresh through 15 seconds. These server-side policies
 are configurable. The aggregate telemetry status describes its newest
 observation; render group status when showing a specific value.
 
+## Relay To InfluxDB Telemetry Contract
+
+The source of truth for writes is the `Aero-Arc/aero-arc-relay` repository:
+`internal/telemetrywriter/influx/point.go` owns the InfluxDB point layout,
+`internal/telemetrynormalize/normalizers.go` owns normalization, and
+`docs/telemetry-normalization-fields-v1.md` owns conversions and validity
+ranges. The API read side is implemented by
+`internal/store/telemetry/influxdb/store.go`. A change to any name or type in
+this section must update and test both repositories.
+
+Relay writes the InfluxDB measurement `aircraft_telemetry`. Each point is one
+normalized MAVLink message, not a complete aircraft snapshot. InfluxDB `time`
+is the normalized event time selected by Relay; API exposes it as that group's
+`recorded_at` and selects the newest row independently for each
+`aircraft_id`/`message_name` pair. Relay chooses a validated device UTC time
+first, then agent capture time, then relay receive time; `timestamp_source` is
+respectively `device_utc`, `agent_capture`, or `relay_receive`. A boot-relative
+device timestamp is never treated directly as Unix time.
+
+### Tags and common columns
+
+| Name | Influx kind/type | Required | Meaning |
+| --- | --- | --- | --- |
+| `agent_id` | tag, string | yes | Agent that produced the frame. |
+| `frame_id` | tag, string | yes | Stable idempotency key for one agent WAL frame; unchanged by retry or reconnect. |
+| `message_name` | tag, string | yes | Canonical normalized message group listed below. |
+| `schema_version` | tag, decimal string | yes | Normalized record schema; the current contract is `"1"`. |
+| `time` | InfluxDB timestamp | yes | Normalized event time used for latest-row ordering and exposed by API as `recorded_at`. |
+| `relay_id` | field, string | yes | Relay that normalized and wrote the frame. |
+| `aircraft_id` | field, string | required for aircraft API reads | Durable aircraft assignment. Authenticated but unmapped agent points may omit it and are intentionally invisible to aircraft queries. |
+| `session_id` | field, string | yes | Opaque Relay registration/connection lifecycle ID. It may change after registration or reconnect and is not an idempotency key. |
+| `operator_id`, `flight_id`, `intent_id` | field, string | no | Operation context active when the frame was normalized. |
+| `intent_version` | field, uint64 | no | Omitted when zero or when no intent context exists. |
+| `wal_sequence`, `message_id` | field, uint64 | yes | Durable agent sequence and MAVLink message ID. |
+| `dialect`, `timestamp_source` | field, string | yes | MAVLink dialect and the event-time selection basis. |
+| `relay_time_ns` | field, int64 | yes | Relay receive time in Unix nanoseconds; it is metadata, not InfluxDB `time`. |
+| `agent_capture_time_ns` | field, int64 | no | Agent capture time in Unix nanoseconds when usable. |
+| `device_time_value`, `device_time_unit`, `device_time_basis` | fields, uint64/string/string | no | Message-provided device time and its interpretation. |
+| `mavlink_system_id`, `mavlink_component_id` | field, uint64 | no | MAVLink source identifiers when supplied. |
+
+The API currently returns `frame_id`, `relay_id`, `session_id`, and
+`timestamp_source` on each observation. It uses `aircraft_id` to select rows;
+operation-context columns support legacy/replay models but are not exposed on
+the live observation JSON.
+
+### Message groups read by the API
+
+All fields below are InfluxDB fields. `float64`, `uint64`, and `int64` describe
+the normalized value type written by Relay. Except where marked required, a
+field is optional and omitted when the source value is absent, a MAVLink
+sentinel, out of range, or not representable.
+
+| `message_name` / API group | Required normalized fields | Optional normalized fields |
+| --- | --- | --- |
+| `global_position_int` / `position` | `latitude_deg` float64; `longitude_deg` float64 | `altitude_msl_m`, `relative_altitude_m`, `velocity_north_mps`, `velocity_east_mps`, `velocity_down_mps`, `groundspeed_mps`, `heading_deg` (float64) |
+| `battery_status` / `battery` | `battery_id` uint64 | `battery_function`, `battery_type`, `battery_charge_state`, `battery_mode` (string); `battery_temperature_c`, `battery_voltage_v`, `battery_current_a`, `battery_consumed_wh`, `battery_remaining_pct` (float64); `battery_consumed_mah`, `battery_time_remaining_s` (int64) |
+| `heartbeat` / `vehicle` | none | `vehicle_type`, `autopilot_type`, `base_mode`, `system_status` (string); `custom_mode`, `mavlink_version` (uint64) |
+| `sys_status` / `system` | none | `mainloop_load_pct`, `communication_drop_rate_pct` (float64); `communication_error_count`, `autopilot_error_count_1` through `_4` (uint64); `sensors_present`, `sensors_enabled`, `sensors_health` and their `_extended` forms (string) |
+| `vfr_hud` / `hud` | none | `airspeed_mps`, `groundspeed_mps`, `heading_deg`, `throttle_pct`, `altitude_msl_m`, `climb_rate_mps` (float64) |
+| `extended_sys_state` / `extended_state` | none | `vtol_state`, `landed_state` (string) |
+| `gps_raw_int` / `gps` | none | `gps_fix_type` (string); `gps_latitude_deg`, `gps_longitude_deg`, `gps_altitude_msl_m`, `gps_altitude_ellipsoid_m`, `gps_hdop`, `gps_vdop`, `gps_groundspeed_mps`, `gps_course_over_ground_deg`, `gps_horizontal_accuracy_m`, `gps_vertical_accuracy_m`, `gps_speed_accuracy_mps`, `gps_heading_accuracy_deg`, `gps_yaw_deg` (float64); `gps_satellites_visible` (uint64) |
+
+Relay also normalizes `system_time`, but `GetLatestAircraftStates` does not
+currently query or expose it. Adding a message group requires adding it to the
+API query allowlist, decoder, domain/JSON contract, and frontend model rather
+than relying on `SELECT *` alone.
+
+Required fields are validated as genuinely numeric: numeric zero is valid,
+while missing, nonnumeric, NaN, or infinite required values make only that
+observation malformed. Optional numeric fields are nullable in API JSON so an
+omitted column is never coerced to zero. A malformed row is isolated to its
+aircraft/message group; independently sampled valid groups remain available.
+
 ## Known Gaps
 
 - `AircraftDashboard.operating_profile` exists but is not currently populated
