@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -230,6 +231,123 @@ func TestFleetServiceBatchesRegistryAndComposesFreshness(t *testing.T) {
 	}
 }
 
+func TestFleetServiceBoundsConcurrentPlacementLookups(t *testing.T) {
+	ctx := context.Background()
+	durable := durablememory.NewStore()
+	baseRegistry := newTestRegistry()
+	release := make(chan struct{})
+	registry := &controlledPlacementRegistry{
+		testRegistry: baseRegistry,
+		started:      make(chan string, maxPlacementLookups+4),
+		release:      release,
+	}
+	for index := range maxPlacementLookups + 4 {
+		aircraftID := fmt.Sprintf("aircraft-%02d", index)
+		agentID := fmt.Sprintf("agent-%02d", index)
+		relayID := fmt.Sprintf("relay-%02d", index)
+		must(t, durable.CreateAircraft(ctx, domain.Aircraft{ID: aircraftID, AgentID: agentID}))
+		must(t, baseRegistry.SetLiveAircraftState(ctx, domain.LiveAircraftState{
+			AgentID: agentID, RelayID: relayID, Connected: true, LastHeartbeatAt: time.Now().UTC(),
+		}))
+	}
+
+	type response struct {
+		dashboards []readmodel.AircraftDashboard
+		err        error
+	}
+	responseCh := make(chan response, 1)
+	go func() {
+		dashboards, err := NewFleetService(durable, telemetrymemory.NewStore(), replaymemory.NewStore(), registry).
+			ListAircraftDashboards(ctx)
+		responseCh <- response{dashboards: dashboards, err: err}
+	}()
+
+	for range maxPlacementLookups {
+		select {
+		case <-registry.started:
+		case <-time.After(time.Second):
+			t.Fatal("placement lookups were serialized")
+		}
+	}
+	select {
+	case agentID := <-registry.started:
+		t.Fatalf("placement concurrency exceeded %d; started %q before a worker was released", maxPlacementLookups, agentID)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+
+	select {
+	case got := <-responseCh:
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if len(got.dashboards) != maxPlacementLookups+4 {
+			t.Fatalf("dashboards = %d, want %d", len(got.dashboards), maxPlacementLookups+4)
+		}
+		for _, dashboard := range got.dashboards {
+			wantRelayID := "relay-" + dashboard.Aircraft.ID[len("aircraft-"):]
+			if dashboard.LiveState == nil || dashboard.LiveState.RelayID != wantRelayID || !dashboard.LiveState.Connected {
+				t.Fatalf("live state for %q = %#v, want connected through %q", dashboard.Aircraft.ID, dashboard.LiveState, wantRelayID)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fleet lookup did not finish after placement workers were released")
+	}
+	if baseRegistry.listAgentCalls != 1 {
+		t.Fatalf("ListAgents calls = %d, want 1", baseRegistry.listAgentCalls)
+	}
+	if calls, _, maxActive := registry.counts(); calls != maxPlacementLookups+4 || maxActive != maxPlacementLookups {
+		t.Fatalf("placement calls = %d, max active = %d; want %d calls capped at %d", calls, maxActive, maxPlacementLookups+4, maxPlacementLookups)
+	}
+}
+
+func TestFleetServiceCancelsPlacementLookups(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	durable := durablememory.NewStore()
+	baseRegistry := newTestRegistry()
+	registry := &controlledPlacementRegistry{
+		testRegistry: baseRegistry,
+		started:      make(chan string, 2),
+		release:      make(chan struct{}),
+	}
+	for index := range 2 {
+		aircraftID := fmt.Sprintf("aircraft-%d", index)
+		agentID := fmt.Sprintf("agent-%d", index)
+		must(t, durable.CreateAircraft(ctx, domain.Aircraft{ID: aircraftID, AgentID: agentID}))
+		must(t, baseRegistry.SetLiveAircraftState(ctx, domain.LiveAircraftState{
+			AgentID: agentID, RelayID: "relay-1", Connected: true, LastHeartbeatAt: time.Now().UTC(),
+		}))
+	}
+
+	resultCh := make(chan []readmodel.AircraftLiveState, 1)
+	go func() {
+		resultCh <- NewFleetService(durable, telemetrymemory.NewStore(), replaymemory.NewStore(), registry).
+			composeLiveAircraft(ctx, []domain.Aircraft{{ID: "aircraft-0", AgentID: "agent-0"}, {ID: "aircraft-1", AgentID: "agent-1"}})
+	}()
+	for range 2 {
+		select {
+		case <-registry.started:
+		case <-time.After(time.Second):
+			t.Fatal("placement lookup did not start")
+		}
+	}
+	cancel()
+
+	select {
+	case states := <-resultCh:
+		for _, state := range states {
+			if state.Connection.ConnectionStatus != domain.ConnectionStatusUnavailable || state.Connection.Connected {
+				t.Fatalf("connection after cancellation = %#v, want unavailable", state.Connection)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled placement lookups did not return")
+	}
+	if _, active, _ := registry.counts(); active != 0 {
+		t.Fatalf("active placement calls = %d after cancellation, want 0", active)
+	}
+}
+
 func TestFleetServiceDoesNotUseAircraftIDAsAgentFallback(t *testing.T) {
 	ctx := context.Background()
 	durable := durablememory.NewStore()
@@ -424,6 +542,46 @@ func newTestRegistry() *testRegistry {
 type testRegistry struct {
 	*registry.MemoryClient
 	listAgentCalls int
+}
+
+type controlledPlacementRegistry struct {
+	*testRegistry
+	started chan string
+	release <-chan struct{}
+
+	mu        sync.Mutex
+	calls     int
+	active    int
+	maxActive int
+}
+
+func (r *controlledPlacementRegistry) GetAgentPlacement(ctx context.Context, request *registryv1.GetAgentPlacementRequest, options ...grpc.CallOption) (*registryv1.GetAgentPlacementResponse, error) {
+	r.mu.Lock()
+	r.calls++
+	r.active++
+	if r.active > r.maxActive {
+		r.maxActive = r.active
+	}
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		r.active--
+		r.mu.Unlock()
+	}()
+
+	r.started <- request.GetAgentId()
+	select {
+	case <-r.release:
+		return r.MemoryClient.GetAgentPlacement(ctx, request, options...)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (r *controlledPlacementRegistry) counts() (calls, active, maxActive int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls, r.active, r.maxActive
 }
 
 func (r *testRegistry) ListAgents(ctx context.Context, request *registryv1.ListAgentsRequest, options ...grpc.CallOption) (*registryv1.ListAgentsResponse, error) {

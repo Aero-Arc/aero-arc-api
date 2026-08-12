@@ -31,7 +31,18 @@ type FleetService struct {
 const (
 	defaultRegistryFreshness  = 30 * time.Second
 	defaultTelemetryFreshness = 15 * time.Second
+	maxPlacementLookups       = 8
 )
+
+type placementLookup struct {
+	resultIndex int
+	agentID     string
+}
+
+type placementLookupResult struct {
+	response *registryv1.GetAgentPlacementResponse
+	err      error
+}
 
 type ReplayResponse struct {
 	Flight            domain.FlightRecord       `json:"flight"`
@@ -464,6 +475,7 @@ func (s *FleetService) composeLiveAircraft(ctx context.Context, aircraft []domai
 			agents[agent.GetAgentId()] = agent
 		}
 	}
+	lookups := make([]placementLookup, 0, len(result))
 	for index := range result {
 		state := &result[index].Connection
 		if state.AgentID == "" {
@@ -482,16 +494,23 @@ func (s *FleetService) composeLiveAircraft(ctx context.Context, aircraft []domai
 		} else {
 			state.ConnectionStatus = domain.ConnectionStatusStale
 		}
-		placement, placementErr := s.registry.GetAgentPlacement(ctx, &registryv1.GetAgentPlacementRequest{AgentId: state.AgentID})
-		if placementErr != nil {
+		lookups = append(lookups, placementLookup{resultIndex: index, agentID: state.AgentID})
+	}
+
+	placementResults := s.lookupPlacements(ctx, lookups)
+	for lookupIndex, lookup := range lookups {
+		state := &result[lookup.resultIndex].Connection
+		placementResult := placementResults[lookupIndex]
+		if placementResult.err != nil {
 			state.Connected = false
-			if status.Code(placementErr) == codes.NotFound {
+			if status.Code(placementResult.err) == codes.NotFound {
 				state.ConnectionStatus = domain.ConnectionStatusOffline
 			} else {
 				state.ConnectionStatus = domain.ConnectionStatusUnavailable
 			}
 			continue
 		}
+		placement := placementResult.response
 		if placement.GetPlacement() == nil || placement.GetPlacement().GetRelayId() == "" {
 			state.Connected = false
 			state.ConnectionStatus = domain.ConnectionStatusOffline
@@ -501,6 +520,36 @@ func (s *FleetService) composeLiveAircraft(ctx context.Context, aircraft []domai
 		state.PlacementLastUpdatedAt = unixMillis(placement.GetPlacement().GetLastUpdatedUnixMs())
 	}
 	return result
+}
+
+func (s *FleetService) lookupPlacements(ctx context.Context, lookups []placementLookup) []placementLookupResult {
+	results := make([]placementLookupResult, len(lookups))
+	if len(lookups) == 0 {
+		return results
+	}
+
+	jobs := make(chan int, len(lookups))
+	for index := range lookups {
+		jobs <- index
+	}
+	close(jobs)
+
+	workerCount := min(len(lookups), maxPlacementLookups)
+	done := make(chan struct{}, workerCount)
+	for range workerCount {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for index := range jobs {
+				lookup := lookups[index]
+				response, err := s.registry.GetAgentPlacement(ctx, &registryv1.GetAgentPlacementRequest{AgentId: lookup.agentID})
+				results[index] = placementLookupResult{response: response, err: err}
+			}
+		}()
+	}
+	for range workerCount {
+		<-done
+	}
+	return results
 }
 
 func (s *FleetService) applyTelemetryFreshness(state *domain.AircraftTelemetryState) {
