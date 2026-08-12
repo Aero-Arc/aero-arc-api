@@ -20,7 +20,8 @@ const DefaultSampleLimit = 1000
 type Store interface {
 	// GetLatestAircraftStates returns independently sampled latest telemetry
 	// message groups. Every requested aircraft ID is present in the result,
-	// including aircraft with no observations.
+	// including aircraft with no observations. Malformed individual observations
+	// are omitted without discarding other groups; query failures are returned.
 	GetLatestAircraftStates(ctx context.Context, aircraftIDs []string) (map[string]domain.AircraftTelemetryState, error)
 	GetLatestSample(ctx context.Context, aircraftID string) (*domain.TelemetrySample, error)
 	// QueryAircraftSamples selects the latest limited window and returns it
