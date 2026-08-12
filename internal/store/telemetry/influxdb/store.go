@@ -121,7 +121,10 @@ func (s *Store) GetLatestAircraftStates(ctx context.Context, aircraftIDs []strin
 		}
 		value, err := item.decode(row)
 		if err != nil {
-			return nil, err
+			// A malformed observation must not discard independently sampled
+			// groups for this or any other aircraft. Treat only this group as
+			// absent; query failures are returned above before row decoding.
+			continue
 		}
 		item.assign(&state, value)
 		states[aircraftID] = state
