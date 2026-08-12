@@ -5,7 +5,6 @@ package influxdb
 import (
 	"context"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
@@ -13,14 +12,9 @@ import (
 )
 
 func TestLiveAircraftStateAgainstInfluxDB(t *testing.T) {
-	host := os.Getenv("AERO_API_TEST_INFLUXDB_HOST")
-	token := os.Getenv("AERO_API_TEST_INFLUXDB_TOKEN")
-	database := os.Getenv("AERO_API_TEST_INFLUXDB_DATABASE")
-	if host == "" || token == "" || database == "" {
-		t.Skip("AERO_API_TEST_INFLUXDB_HOST, _TOKEN, and _DATABASE are required")
-	}
-
-	client, err := influxdb3.New(influxdb3.ClientConfig{Host: host, Token: token, Database: database})
+	client, err := influxdb3.New(influxdb3.ClientConfig{
+		Host: integrationInfluxDB.host, Token: integrationInfluxDB.token, Database: integrationInfluxDB.database,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,14 +68,9 @@ func TestLiveAircraftStateAgainstInfluxDB(t *testing.T) {
 }
 
 func TestLatestAircraftStateLookbackAgainstInfluxDB(t *testing.T) {
-	host := os.Getenv("AERO_API_TEST_INFLUXDB_HOST")
-	token := os.Getenv("AERO_API_TEST_INFLUXDB_TOKEN")
-	database := os.Getenv("AERO_API_TEST_INFLUXDB_DATABASE")
-	if host == "" || token == "" || database == "" {
-		t.Skip("AERO_API_TEST_INFLUXDB_HOST, _TOKEN, and _DATABASE are required")
-	}
-
-	client, err := influxdb3.New(influxdb3.ClientConfig{Host: host, Token: token, Database: database})
+	client, err := influxdb3.New(influxdb3.ClientConfig{
+		Host: integrationInfluxDB.host, Token: integrationInfluxDB.token, Database: integrationInfluxDB.database,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
