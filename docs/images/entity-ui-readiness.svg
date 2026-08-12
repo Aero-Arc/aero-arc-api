@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="2700" viewBox="0 0 1600 2700" role="img" aria-labelledby="title desc">
+  <title id="title">Entity sources flow through API composition into UI models</title>
+  <desc id="desc">A layered relationship map. Four source layers—durable storage, telemetry, replay, and registry live state—provide domain entities to API composition. Each entity is annotated with its UI use, Flutter DTO readiness, and current mock status. Composite dashboard models then feed UI cards, metrics, and sections.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" class="arrowHead"/></marker>
+  </defs>
+  <style>
+    :root { color-scheme: light dark; }
+    .bg { fill: #f6f8fb; }
+    .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; }
+    .durablePanel { fill: #f8fafc; stroke: #9aa9bd; stroke-width: 2; }
+    .durableNode { fill: #ffffff; stroke: #b6c2d1; stroke-width: 2; }
+    .telemetryNode { fill: #eaf7f5; stroke: #48a99c; stroke-width: 2; }
+    .replayNode { fill: #fff4df; stroke: #d69a2d; stroke-width: 2; }
+    .registryNode { fill: #f1edff; stroke: #8067c7; stroke-width: 2; }
+    .apiNode { fill: #e9f2ff; stroke: #3878bd; stroke-width: 3; }
+    .uiNode { fill: #172f4f; stroke: #4f8ed2; stroke-width: 2; }
+    .accent { fill: #2b6fae; }
+    .title { fill: #15243a; font: 700 38px system-ui, sans-serif; }
+    .subtitle { fill: #607087; font: 18px system-ui, sans-serif; }
+    .layer { fill: #607087; font: 700 15px system-ui, sans-serif; letter-spacing: 1.7px; }
+    .sourceTitle { fill: #15243a; font: 700 25px system-ui, sans-serif; }
+    .sourceNote { fill: #607087; font: 16px system-ui, sans-serif; }
+    .entity { fill: #15243a; font: 700 18px ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .use { fill: #32445b; font: 15px system-ui, sans-serif; }
+    .status { fill: #52657d; font: 700 13px system-ui, sans-serif; letter-spacing: .2px; }
+    .statusNow { fill: #167565; }
+    .statusLater { fill: #a66a09; }
+    .apiTitle { fill: #174f83; font: 700 27px ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .apiText { fill: #294867; font: 17px system-ui, sans-serif; }
+    .uiTitle { fill: #ffffff; font: 700 27px system-ui, sans-serif; }
+    .uiText { fill: #d8e8fb; font: 17px system-ui, sans-serif; }
+    .connector { fill: none; stroke: #8697aa; stroke-width: 3; marker-end: url(#arrow); }
+    .branch { display: none; }
+    .tree { fill: none; stroke: #aab6c5; stroke-width: 2; }
+    .telemetryBranch { fill: none; stroke: #48a99c; stroke-width: 3; stroke-dasharray: 8 7; marker-end: url(#arrow); }
+    .arrowHead { fill: #65758a; }
+    .legendText { fill: #52657d; font: 14px system-ui, sans-serif; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1520; } .panel, .durablePanel { fill: #121d2a; stroke: #40516a; }
+      .durableNode { fill: #172331; stroke: #53637a; }
+      .telemetryNode { fill: #15322f; stroke: #52b9ab; } .replayNode { fill: #382a14; stroke: #d7a54b; }
+      .registryNode { fill: #292140; stroke: #927bd5; } .apiNode { fill: #172d46; stroke: #5797d7; }
+      .uiNode { fill: #203a5c; stroke: #6aa7e8; }
+      .title, .sourceTitle, .entity { fill: #f1f5f9; } .subtitle, .sourceNote, .layer { fill: #a9b7c8; }
+      .use { fill: #d2dbe6; } .status, .legendText { fill: #b7c3d2; }
+      .statusNow { fill: #65d1bd; } .statusLater { fill: #f1bd63; }
+      .apiTitle { fill: #91c7f8; } .apiText { fill: #d5e6f7; }
+      .connector { stroke: #7689a0; } .tree { stroke: #506177; } .arrowHead { fill: #8295aa; }
+    }
+  </style>
+
+  <rect class="bg" width="1600" height="2700" rx="24"/>
+  <rect class="accent" x="66" y="58" width="12" height="58" rx="6"/>
+  <text class="title" x="104" y="96">From system-of-record entities to UI-ready models</text>
+  <text class="subtitle" x="104" y="132">Source layers converge in API composition; annotations show each entity's intended UI use and present contract readiness.</text>
+
+  <text class="layer" x="66" y="190">1 · AUTHORITATIVE DOMAIN LAYER</text>
+  <rect class="durablePanel" x="66" y="214" width="1468" height="1352" rx="26"/>
+  <rect x="66" y="214" width="18" height="1352" rx="9" fill="#73849a"/>
+  <text class="sourceTitle" x="114" y="264">Durable store</text>
+  <text class="sourceNote" x="114" y="294">Auditable identity, lifecycle, operations, conformance, evidence, and personnel records</text>
+
+  <!-- A durable-store spine makes the domain relationships visible without implying entity ownership by the UI. -->
+  <path class="tree" d="M 812 396 V 1344"/>
+  <path class="tree" d="M 794 396 H 830 M 794 554 H 830 M 794 712 H 830 M 794 870 H 830 M 794 1028 H 830 M 794 1186 H 830 M 794 1344 H 830"/>
+
+  <g transform="translate(154 330)"><path class="branch" d="M -32 66 H 0"/><rect class="durableNode" width="640" height="132" rx="16"/><text class="entity" x="22" y="31">Aircraft</text><text class="use" x="22" y="61">Fleet identity, name, tail number, registration,</text><text class="use" x="22" y="83">model, and agent association</text><text class="status statusNow" x="22" y="112">FLUTTER DTO · Yes</text><text class="status statusNow" x="244" y="112">MOCKED · Yes</text></g>
+  <g transform="translate(830 330)"><path class="branch" d="M -708 66 H -676"/><rect class="durableNode" width="640" height="132" rx="16"/><text class="entity" x="22" y="31">Battery</text><text class="use" x="22" y="61">Active battery SOH, cycle count, and</text><text class="use" x="22" y="83">maintenance state</text><text class="status statusNow" x="22" y="112">FLUTTER DTO · Yes</text><text class="status statusNow" x="244" y="112">MOCKED · Yes</text></g>
+
+  <g transform="translate(154 488)"><path class="branch" d="M -32 66 H 0"/><rect class="durableNode" width="640" height="132" rx="16"/><text class="entity" x="22" y="31">BatteryInstallation</text><text class="use" x="22" y="61">Active pack association; currently resolved by API</text><text class="use" x="22" y="83">into active_battery</text><text class="status statusLater" x="22" y="112">FLUTTER DTO · Later</text><text class="status" x="244" y="112">MOCKED · No direct UI</text></g>
+  <g transform="translate(830 488)"><path class="branch" d="M -708 66 H -676"/><rect class="durableNode" width="640" height="132" rx="16"/><text class="entity" x="22" y="31">MaintenanceEvent</text><text class="use" x="22" y="68">Maintenance blockers and warnings</text><text class="status statusNow" x="22" y="112">FLUTTER DTO · Yes</text><text class="status statusLater" x="244" y="112">MOCKED · Partial</text></g>
+
+  <g transform="translate(154 646)"><path class="branch" d="M -32 66 H 0"/><rect class="durableNode" width="640" height="132" rx="16"/><text class="entity" x="22" y="31">AircraftOperatingProfile</text><text class="use" x="22" y="61">Operating constraints and aircraft</text><text class="use" x="22" y="83">capability summary</text><text class="status statusLater" x="22" y="112">FLUTTER DTO · Later</text><text class="status" x="244" y="112">MOCKED · No</text></g>
+  <g transform="translate(830 646)"><path class="branch" d="M -708 66 H -676"/><rect class="durableNode" width="640" height="132" rx="16"/><text class="entity" x="22" y="31">OperatingLimit</text><text class="use" x="22" y="68">Limit badges and constraint detail</text><text class="status statusLater" x="22" y="112">FLUTTER DTO · Later</text><text class="status" x="244" y="112">MOCKED · No</text></g>
+
+  <g transform="translate(154 804)"><path class="branch" d="M -32 66 H 0"/><rect class="durableNode" width="640" height="132" rx="16"/><text class="entity" x="22" y="31">OperationalIntent</text><text class="use" x="22" y="68">Planned/active operation state</text><text class="status statusLater" x="22" y="112">FLUTTER DTO · Later</text><text class="status" x="244" y="112">MOCKED · Mission-like labels only</text></g>
+  <g transform="translate(830 804)"><path class="branch" d="M -708 66 H -676"/><rect class="durableNode" width="640" height="132" rx="16"/><text class="entity" x="22" y="31">PreflightCheck</text><text class="use" x="22" y="68">Readiness and preflight status</text><text class="status statusLater" x="22" y="112">FLUTTER DTO · Later</text><text class="status" x="244" y="112">MOCKED · No</text></g>
+
+  <g transform="translate(154 962)"><path class="branch" d="M -32 66 H 0"/><rect class="durableNode" width="640" height="132" rx="16"/><text class="entity" x="22" y="31">FlightRecord</text><text class="use" x="22" y="68">Flight history and replay entry points</text><text class="status statusLater" x="22" y="112">FLUTTER DTO · Later</text><text class="status" x="244" y="112">MOCKED · No</text></g>
+  <g transform="translate(830 962)"><path class="branch" d="M -708 66 H -676"/><rect class="durableNode" width="640" height="132" rx="16"/><text class="entity" x="22" y="31">ConformanceEvent</text><text class="use" x="22" y="61">Events and deviation timeline</text><text class="use" x="22" y="83">Durable · telemetry-derived</text><text class="status statusLater" x="22" y="112">FLUTTER DTO · Later</text><text class="status" x="244" y="112">MOCKED · Generic events only</text></g>
+
+  <g transform="translate(154 1120)"><path class="branch" d="M -32 66 H 0"/><rect class="durableNode" width="640" height="132" rx="16"/><text class="entity" x="22" y="31">ConformanceSummary</text><text class="use" x="22" y="68">Compliance/conformance status</text><text class="status statusLater" x="22" y="112">FLUTTER DTO · Later</text><text class="status" x="244" y="112">MOCKED · No</text></g>
+  <g transform="translate(830 1120)"><path class="branch" d="M -708 66 H -676"/><rect class="durableNode" width="640" height="132" rx="16"/><text class="entity" x="22" y="31">EvidenceRecord</text><text class="use" x="22" y="68">Records/evidence exports</text><text class="status statusLater" x="22" y="112">FLUTTER DTO · Later</text><text class="status" x="244" y="112">MOCKED · No</text></g>
+
+  <g transform="translate(154 1278)"><path class="branch" d="M -32 66 H 0"/><rect class="durableNode" width="640" height="132" rx="16"/><text class="entity" x="22" y="31">ReportabilityReview</text><text class="use" x="22" y="68">Reportability status and review workflow</text><text class="status statusLater" x="22" y="112">FLUTTER DTO · Later</text><text class="status" x="244" y="112">MOCKED · No</text></g>
+  <g transform="translate(830 1278)"><path class="branch" d="M -708 66 H -676"/><rect class="durableNode" width="640" height="132" rx="16"/><text class="entity" x="22" y="31">OperationsPersonnel</text><text class="use" x="22" y="68">Assigned supervisor/coordinator display</text><text class="status statusLater" x="22" y="112">FLUTTER DTO · Later</text><text class="status" x="244" y="112">MOCKED · No</text></g>
+
+  <path class="telemetryBranch" d="M 300 1650 C 300 1598 1508 1598 1508 1510 V 1132 Q 1508 1094 1470 1094"/>
+  <circle cx="1456" cy="1094" r="6" fill="#48a99c"/>
+  <text class="legendText" x="1248" y="1514">telemetry-derived upstream</text>
+
+  <text class="layer" x="66" y="1624">2 · LIVE AND REPLAY SIGNAL LAYER</text>
+  <g transform="translate(66 1650)"><rect class="telemetryNode" width="468" height="246" rx="22"/><text class="sourceTitle" x="26" y="43">Telemetry</text><text class="entity" x="26" y="83">TelemetrySample</text><text class="use" x="26" y="118">Latest telemetry and replay samples</text><text class="status statusNow" x="26" y="158">FLUTTER DTO · Yes for aircraft slice</text><text class="status statusNow" x="26" y="187">MOCKED · Yes</text><text class="sourceNote" x="26" y="222">High-rate operational observations</text></g>
+  <g transform="translate(566 1650)"><rect class="replayNode" width="468" height="246" rx="22"/><text class="sourceTitle" x="26" y="43">Replay</text><text class="entity" x="26" y="83">ReplayManifest</text><text class="use" x="26" y="118">Replay asset/chunk lookup</text><text class="status statusLater" x="26" y="158">FLUTTER DTO · Later</text><text class="status" x="26" y="187">MOCKED · No</text><text class="sourceNote" x="26" y="222">Manifest-backed historical access</text></g>
+  <g transform="translate(1066 1650)"><rect class="registryNode" width="468" height="246" rx="22"/><text class="sourceTitle" x="26" y="43">Registry / live via API</text><text class="entity" x="26" y="83">LiveAircraftState</text><text class="use" x="26" y="116">Connected/offline state, agent ID, relay ID,</text><text class="use" x="26" y="139">and heartbeat</text><text class="status statusNow" x="26" y="177">FLUTTER DTO · Yes</text><text class="status statusNow" x="226" y="177">MOCKED · Yes</text><text class="sourceNote" x="26" y="222">Ephemeral ownership and presence</text></g>
+
+  <!-- All source layers converge on API composition. -->
+  <path class="connector" d="M 800 1566 H 1562 V 2022 H 910 V 2052"/>
+  <path class="connector" d="M 300 1896 V 1970 Q 300 2022 352 2022 H 690 V 2052"/>
+  <path class="connector" d="M 800 1896 V 2052"/>
+  <path class="connector" d="M 1300 1896 V 1970 Q 1300 2022 1248 2022 H 910 V 2052"/>
+  <text class="layer" x="66" y="2060">3 · API COMPOSITION LAYER</text>
+  <g transform="translate(318 2086)"><rect class="apiNode" width="964" height="300" rx="28"/><text class="sourceNote" x="482" y="42" text-anchor="middle">COMPOSITE API DTOs</text><text class="apiTitle" x="482" y="84" text-anchor="middle">Dashboard models</text><path d="M 80 112 H 884" stroke="#8eb9e4" stroke-width="2"/><text class="apiText" x="482" y="150" text-anchor="middle">Compose durable records with telemetry, replay, and registry/live state</text><text class="apiText" x="482" y="182" text-anchor="middle">into the contracts consumed by cards, metrics, and dashboard sections.</text><rect x="190" y="215" width="260" height="48" rx="24" fill="#cfe4fa"/><text class="status statusNow" x="320" y="245" text-anchor="middle">FLUTTER DTO · Yes as needed</text><rect x="514" y="215" width="260" height="48" rx="24" fill="#cfe4fa"/><text class="status statusNow" x="644" y="245" text-anchor="middle">MOCKED · Yes</text></g>
+
+  <path class="connector" d="M 800 2386 V 2462"/>
+  <text class="layer" x="66" y="2470">4 · UI DELIVERY LAYER</text>
+  <g transform="translate(318 2496)"><rect class="uiNode" width="964" height="150" rx="28"/><text class="uiTitle" x="482" y="60" text-anchor="middle">Aero Arc operations UI</text><text class="uiText" x="482" y="98" text-anchor="middle">Cards · metrics · dashboard sections</text><text class="uiText" x="482" y="126" text-anchor="middle">Ready contracts are consumed now; “Later” marks the planned vertical slices.</text></g>
+
+  <g transform="translate(66 2668)"><circle cx="8" cy="-5" r="7" fill="#167565"/><text class="legendText" x="24" y="0">Ready/current</text><circle cx="178" cy="-5" r="7" fill="#d69a2d"/><text class="legendText" x="194" y="0">Later/partial</text><path d="M 354 -5 H 400" class="connector"/><text class="legendText" x="420" y="0">Data composition flow</text></g>
+</svg>

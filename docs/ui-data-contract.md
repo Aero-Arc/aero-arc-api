@@ -20,41 +20,11 @@ API JSON uses snake_case. Flutter/Dart DTO fields may use camelCase, but their
 
 ## Dashboard To API Mapping
 
-| UI surface | API endpoint | Response model | Backend entities | Source-of-truth notes | Status |
-| --- | --- | --- | --- | --- | --- |
-| Overview | `GET /api/v1/overview` | `OverviewDashboard` | `AircraftDashboard`, `OperationalIntent`, `EvidenceRecord`, `ReportabilityReview`, `DashboardMetric` | Composite API response from durable records plus live aircraft dashboards | Existing API, UI not wired |
-| Operations | `GET /api/v1/operations` | `OperationsDashboard` | `OperationalIntent`, `ConformanceSummary`, `DashboardMetric` | Durable operational records and conformance summaries | Existing API, UI mostly absent |
-| Preflight | `GET /api/v1/preflight` | `PreflightDashboard` | `PreflightCheck`, `DashboardMetric` | Durable/auditable preflight records | Existing API, UI absent |
-| Conformance | `GET /api/v1/conformance` | `ConformanceDashboard` | `ConformanceSummary`, `ConformanceEvent`, `DashboardMetric` | Durable conformance records, often telemetry-derived upstream | Existing API, UI placeholder only |
-| Maintenance | `GET /api/v1/maintenance` | `MaintenanceDashboard` | `MaintenanceEvent`, `Battery`, `DashboardMetric` | Durable maintenance and battery lifecycle records | Existing API, UI partial |
-| Records | `GET /api/v1/records` | `RecordsDashboard` | `EvidenceRecord`, `ReportabilityReview`, `DashboardMetric` | Durable evidence and reportability workflow records | Existing API, UI absent |
-| Fleet aircraft list | `GET /api/v1/aircraft` | `{ "aircraft": AircraftDashboard[] }` | `Aircraft`, `Battery`, `MaintenanceEvent`, `TelemetrySample`, `LiveAircraftState`, `Readiness` | Durable aircraft composed with active battery, latest telemetry, and registry live state | First UI slice |
-| Aircraft detail | `GET /api/v1/aircraft/{aircraft_id}` | `AircraftDashboard` | `Aircraft`, `Battery`, `MaintenanceEvent`, `TelemetrySample`, `LiveAircraftState`, `Readiness` | Bare dashboard object for one aircraft | First UI slice |
-| Aircraft live state | `GET /api/v1/aircraft/{aircraft_id}/state` | `AircraftLiveState` | Registry agent/placement plus independent InfluxDB message groups | Focused live-state response; missing groups are omitted | Implemented |
-| Replay | `GET /api/v1/flights/{flight_id}/replay` | `ReplayResponse` | `FlightRecord`, `ReplayManifest`, `TelemetrySample`, `ConformanceEvent` | Durable flight, replay store manifest, telemetry samples | Existing API, UI absent |
+![Flow diagram mapping Aero Arc UI surfaces through API endpoints and response models to authoritative backend entities, with implementation maturity shown on a vertical rail.](images/ui-surface-api-map.svg)
 
 ## Entity To UI Mapping
 
-| API entity | Source class | UI use | Needs Flutter DTO | Currently mocked |
-| --- | --- | --- | --- | --- |
-| `Aircraft` | Durable | Fleet identity, name, tail number, registration, model, agent association | Yes | Yes |
-| `Battery` | Durable | Active battery SOH, cycle count, maintenance state | Yes | Yes |
-| `BatteryInstallation` | Durable | Active pack association; currently resolved by API into `active_battery` | Later | No direct UI |
-| `MaintenanceEvent` | Durable | Maintenance blockers and warnings | Yes | Partial |
-| `AircraftOperatingProfile` | Durable | Operating constraints and aircraft capability summary | Later | No |
-| `OperatingLimit` | Durable | Limit badges and constraint detail | Later | No |
-| `OperationalIntent` | Durable | Planned/active operation state | Later | Mission-like labels only |
-| `PreflightCheck` | Durable | Readiness and preflight status | Later | No |
-| `FlightRecord` | Durable | Flight history and replay entry points | Later | No |
-| `ConformanceEvent` | Durable, telemetry-derived | Events and deviation timeline | Later | Generic events only |
-| `ConformanceSummary` | Durable | Compliance/conformance status | Later | No |
-| `EvidenceRecord` | Durable | Records/evidence exports | Later | No |
-| `ReportabilityReview` | Durable | Reportability status and review workflow | Later | No |
-| `OperationsPersonnel` | Durable | Assigned supervisor/coordinator display | Later | No |
-| `TelemetrySample` | Telemetry | Latest telemetry and replay samples | Yes for aircraft slice | Yes |
-| `ReplayManifest` | Replay | Replay asset/chunk lookup | Later | No |
-| `LiveAircraftState` | Registry/live via API | Connected/offline state, agent ID, relay ID, heartbeat | Yes | Yes |
-| Dashboard models | Composite API DTOs | Cards, metrics, dashboard sections | Yes as needed | Yes |
+![Layered relationship map showing durable, telemetry, replay, and registry entities flowing through composite API DTOs into UI surfaces, with Flutter DTO and mock readiness.](images/entity-ui-readiness.svg)
 
 ## AircraftDashboard Vertical Slice
 
@@ -126,24 +96,7 @@ device timestamp is never treated directly as Unix time.
 
 ### Tags and common columns
 
-| Name | Influx kind/type | Required | Meaning |
-| --- | --- | --- | --- |
-| `agent_id` | tag, string | yes | Agent that produced the frame. |
-| `frame_id` | tag, string | yes | Stable idempotency key for one agent WAL frame; unchanged by retry or reconnect. |
-| `message_name` | tag, string | yes | Canonical normalized message group listed below. |
-| `schema_version` | tag, decimal string | yes | Normalized record schema; the current contract is `"1"`. |
-| `time` | InfluxDB timestamp | yes | Normalized event time used for latest-row ordering and exposed by API as `recorded_at`. |
-| `relay_id` | field, string | yes | Relay that normalized and wrote the frame. |
-| `aircraft_id` | field, string | required for aircraft API reads | Durable aircraft assignment. Authenticated but unmapped agent points may omit it and are intentionally invisible to aircraft queries. |
-| `session_id` | field, string | yes | Opaque Relay registration/connection lifecycle ID. It may change after registration or reconnect and is not an idempotency key. |
-| `operator_id`, `flight_id`, `intent_id` | field, string | no | Operation context active when the frame was normalized. |
-| `intent_version` | field, uint64 | no | Omitted when zero or when no intent context exists. |
-| `wal_sequence`, `message_id` | field, uint64 | yes | Durable agent sequence and MAVLink message ID. |
-| `dialect`, `timestamp_source` | field, string | yes | MAVLink dialect and the event-time selection basis. |
-| `relay_time_ns` | field, int64 | yes | Relay receive time in Unix nanoseconds; it is metadata, not InfluxDB `time`. |
-| `agent_capture_time_ns` | field, int64 | no | Agent capture time in Unix nanoseconds when usable. |
-| `device_time_value`, `device_time_unit`, `device_time_basis` | fields, uint64/string/string | no | Message-provided device time and its interpretation. |
-| `mavlink_system_id`, `mavlink_component_id` | field, uint64 | no | MAVLink source identifiers when supplied. |
+![Relay-to-InfluxDB-to-API pipeline showing required tags, event time, common fields, aircraft attribution, operation context, timing provenance, and optional MAVLink metadata.](images/influx-common-schema.svg)
 
 The API currently returns `frame_id`, `relay_id`, `session_id`, and
 `timestamp_source` on each observation. It uses `aircraft_id` to select rows;
@@ -157,15 +110,7 @@ the normalized value type written by Relay. Except where marked required, a
 field is optional and omitted when the source value is absent, a MAVLink
 sentinel, out of range, or not representable.
 
-| `message_name` / API group | Required normalized fields | Optional normalized fields |
-| --- | --- | --- |
-| `global_position_int` / `position` | `latitude_deg` float64; `longitude_deg` float64 | `altitude_msl_m`, `relative_altitude_m`, `velocity_north_mps`, `velocity_east_mps`, `velocity_down_mps`, `groundspeed_mps`, `heading_deg` (float64) |
-| `battery_status` / `battery` | `battery_id` uint64 | `battery_function`, `battery_type`, `battery_charge_state`, `battery_mode` (string); `battery_temperature_c`, `battery_voltage_v`, `battery_current_a`, `battery_consumed_wh`, `battery_remaining_pct` (float64); `battery_consumed_mah`, `battery_time_remaining_s` (int64) |
-| `heartbeat` / `vehicle` | none | `vehicle_type`, `autopilot_type`, `base_mode`, `system_status` (string); `custom_mode`, `mavlink_version` (uint64) |
-| `sys_status` / `system` | none | `mainloop_load_pct`, `communication_drop_rate_pct` (float64); `communication_error_count`, `autopilot_error_count_1` through `_4` (uint64); `sensors_present`, `sensors_enabled`, `sensors_health` and their `_extended` forms (string) |
-| `vfr_hud` / `hud` | none | `airspeed_mps`, `groundspeed_mps`, `heading_deg`, `throttle_pct`, `altitude_msl_m`, `climb_rate_mps` (float64) |
-| `extended_sys_state` / `extended_state` | none | `vtol_state`, `landed_state` (string) |
-| `gps_raw_int` / `gps` | none | `gps_fix_type` (string); `gps_latitude_deg`, `gps_longitude_deg`, `gps_altitude_msl_m`, `gps_altitude_ellipsoid_m`, `gps_hdop`, `gps_vdop`, `gps_groundspeed_mps`, `gps_course_over_ground_deg`, `gps_horizontal_accuracy_m`, `gps_vertical_accuracy_m`, `gps_speed_accuracy_mps`, `gps_heading_accuracy_deg`, `gps_yaw_deg` (float64); `gps_satellites_visible` (uint64) |
+![Fan-out diagram from aircraft_telemetry to seven independently sampled API message groups, showing required and optional normalized fields and their types.](images/telemetry-message-groups.svg)
 
 Relay also normalizes `system_time`, but `GetLatestAircraftStates` does not
 currently query or expose it. Adding a message group requires adding it to the
