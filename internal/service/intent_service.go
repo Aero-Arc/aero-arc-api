@@ -226,7 +226,8 @@ func (s *IntentService) CreateIntent(ctx context.Context, req CreateIntentReques
 	return intent, nil
 }
 
-// GetIntent returns the current operational intent together with its versioned volumes.
+// GetIntent returns the current durable operational-intent record. Volumes are
+// stored separately and are not included in this result.
 //
 // Parameters:
 //   - ctx: controls cancellation and deadlines for the operation.

@@ -25,7 +25,7 @@ func NewStore() *Store {
 // AddSample adds the supplied value to Store.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to AddSample.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - sample: is the domain.TelemetrySample value supplied to AddSample.
 //
 // Returns:
@@ -40,7 +40,7 @@ func (s *Store) AddSample(_ context.Context, sample domain.TelemetrySample) erro
 // GetLatestAircraftStates returns the latest independently sampled telemetry groups for each requested aircraft.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to GetLatestAircraftStates.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - aircraftIDs: identifies the target aircraft.
 //
 // Returns:
@@ -86,7 +86,7 @@ func (s *Store) GetLatestAircraftStates(_ context.Context, aircraftIDs []string)
 // GetLatestSample returns the newest legacy telemetry sample for one aircraft.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to GetLatestSample.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - aircraftID: identifies the target aircraft.
 //
 // Returns:
@@ -111,7 +111,7 @@ func (s *Store) GetLatestSample(_ context.Context, aircraftID string) (*domain.T
 // QueryAircraftSamples queries Store with the supplied statement and parameters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to QueryAircraftSamples.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - aircraftID: identifies the target aircraft.
 //   - limit: caps the number of records claimed or returned in one call.
 //
@@ -140,7 +140,7 @@ func (s *Store) QueryAircraftSamples(_ context.Context, aircraftID string, limit
 // QueryFlightSamples queries Store with the supplied statement and parameters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to QueryFlightSamples.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - flightID: identifies the target flight.
 //   - limit: caps the number of records claimed or returned in one call.
 //

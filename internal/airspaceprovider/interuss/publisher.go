@@ -32,15 +32,17 @@ func (p *Provider) ValidateOperationalIntent(request airspaceprovider.Publicatio
 	return err
 }
 
-// CreateOperationalIntent creates and stores the supplied Provider record.
+// CreateOperationalIntent validates the publication request, creates its
+// operational-intent reference in the external DSS, and returns the DSS receipt.
 //
 // Parameters:
 //   - ctx: controls cancellation and deadlines for the operation.
-//   - request: contains the validated request payload.
+//   - request: contains the intent, volumes, and USS publication metadata.
 //
 // Returns:
-//   - result: is the airspaceprovider.PublicationReceipt value produced by CreateOperationalIntent.
-//   - error: reports validation, dependency, cancellation, or persistence failures.
+//   - receipt: identifies the DSS-managed reference and its current version.
+//   - error: reports disabled publication, invalid UUID/volume data, transport
+//     failure, or a non-success DSS response.
 func (p *Provider) CreateOperationalIntent(ctx context.Context, request airspaceprovider.PublicationRequest) (airspaceprovider.PublicationReceipt, error) {
 	if p.dssClient == nil || p.ussBaseURL == "" {
 		return airspaceprovider.PublicationReceipt{}, fmt.Errorf("InterUSS publication is not configured")
