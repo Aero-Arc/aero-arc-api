@@ -59,6 +59,17 @@ func (w sampleWindow) policy() (sampleWindowPolicy, error) {
 	}
 }
 
+// New constructs influxdb from the supplied configuration and dependencies.
+//
+// Parameters:
+//   - host: locates the external dependency used by the operation.
+//   - token: provides authentication material for the dependency.
+//   - database: locates the external dependency used by the operation.
+//   - latestLookback: is the time.Duration value supplied to New.
+//
+// Returns:
+//   - result: is the *Store value produced by New.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func New(host, token, database string, latestLookback time.Duration) (*Store, error) {
 	if latestLookback <= 0 {
 		return nil, fmt.Errorf("latest telemetry lookback must be > 0")
@@ -78,8 +89,22 @@ func newWithRunnerPolicy(runner queryRunner, latestLookback time.Duration, now f
 	return &Store{runner: runner, latestLookback: latestLookback, now: now}
 }
 
+// Close releases resources owned by Store and completes any required shutdown work.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) Close() error { return s.runner.Close() }
 
+// GetLatestAircraftStates queries and decodes the newest bounded observation for
+// each supported telemetry group and requested aircraft.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - aircraftIDs: identifies the target aircraft.
+//
+// Returns:
+//   - result: is the map[string]domain.AircraftTelemetryState value produced by GetLatestAircraftStates.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) GetLatestAircraftStates(ctx context.Context, aircraftIDs []string) (map[string]domain.AircraftTelemetryState, error) {
 	states := make(map[string]domain.AircraftTelemetryState, len(aircraftIDs))
 	unique := make([]string, 0, len(aircraftIDs))
@@ -175,6 +200,15 @@ WHERE time >= $latest_after AND message_name IN (%s) AND aircraft_id IN (%s)
 	return rows, nil
 }
 
+// GetLatestSample returns the newest legacy position sample for one aircraft.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - aircraftID: identifies the target aircraft.
+//
+// Returns:
+//   - result: is the *domain.TelemetrySample value produced by GetLatestSample.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) GetLatestSample(ctx context.Context, aircraftID string) (*domain.TelemetrySample, error) {
 	samples, err := s.latestSamplesChronological(ctx, `aircraft_id = $aircraft_id`, map[string]any{"aircraft_id": aircraftID}, 1)
 	if err != nil || len(samples) == 0 {
@@ -183,10 +217,30 @@ func (s *Store) GetLatestSample(ctx context.Context, aircraftID string) (*domain
 	return &samples[0], nil
 }
 
+// QueryAircraftSamples queries Store with the supplied statement and parameters.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - aircraftID: identifies the target aircraft.
+//   - limit: caps the number of records claimed or returned in one call.
+//
+// Returns:
+//   - result: is the []domain.TelemetrySample value produced by QueryAircraftSamples.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) QueryAircraftSamples(ctx context.Context, aircraftID string, limit int) ([]domain.TelemetrySample, error) {
 	return s.latestSamplesChronological(ctx, `aircraft_id = $aircraft_id`, map[string]any{"aircraft_id": aircraftID}, limit)
 }
 
+// QueryFlightSamples queries Store with the supplied statement and parameters.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - flightID: identifies the target flight.
+//   - limit: caps the number of records claimed or returned in one call.
+//
+// Returns:
+//   - result: is the []domain.TelemetrySample value produced by QueryFlightSamples.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) QueryFlightSamples(ctx context.Context, flightID string, limit int) ([]domain.TelemetrySample, error) {
 	samples, err := s.earliestSamplesChronological(ctx, `flight_id = $flight_id`, map[string]any{"flight_id": flightID}, limit)
 	if err != nil && isMissingColumn(err, "flight_id") {
@@ -521,6 +575,16 @@ func stringValue(v any) string {
 
 type clientRunner struct{ client *influxdb3.Client }
 
+// Query queries clientRunner with the supplied statement and parameters.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - query: is the string value supplied to Query.
+//   - params: is the map[string]any value supplied to Query.
+//
+// Returns:
+//   - result: is the []map[string]any value produced by Query.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (r *clientRunner) Query(ctx context.Context, query string, params map[string]any) ([]map[string]any, error) {
 	iterator, err := r.client.QueryWithParameters(ctx, query, params)
 	if err != nil {
@@ -536,4 +600,8 @@ func (r *clientRunner) Query(ctx context.Context, query string, params map[strin
 	return rows, nil
 }
 
+// Close releases resources owned by clientRunner and completes any required shutdown work.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (r *clientRunner) Close() error { return r.client.Close() }

@@ -14,13 +14,33 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 )
 
+// PublicationEnabled reports whether the InterUSS provider is configured for DSS mutation.
+//
+// Returns:
+//   - bool: reports whether the requested condition was satisfied.
 func (p *Provider) PublicationEnabled() bool { return p.dssClient != nil && p.ussBaseURL != "" }
 
+// ValidateOperationalIntent validates Provider for required fields, supported values, and safety constraints.
+//
+// Parameters:
+//   - request: contains the validated request payload.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (p *Provider) ValidateOperationalIntent(request airspaceprovider.PublicationRequest) error {
 	_, err := p.publicationParameters(request)
 	return err
 }
 
+// CreateOperationalIntent creates and stores the supplied Provider record.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - request: contains the validated request payload.
+//
+// Returns:
+//   - result: is the airspaceprovider.PublicationReceipt value produced by CreateOperationalIntent.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (p *Provider) CreateOperationalIntent(ctx context.Context, request airspaceprovider.PublicationRequest) (airspaceprovider.PublicationReceipt, error) {
 	if p.dssClient == nil || p.ussBaseURL == "" {
 		return airspaceprovider.PublicationReceipt{}, fmt.Errorf("InterUSS publication is not configured")
@@ -43,6 +63,15 @@ func (p *Provider) CreateOperationalIntent(ctx context.Context, request airspace
 	return publicationReceipt(*response.JSON201)
 }
 
+// UpdateOperationalIntent updates the selected Provider state while enforcing its consistency checks.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - request: contains the validated request payload.
+//
+// Returns:
+//   - result: is the airspaceprovider.PublicationReceipt value produced by UpdateOperationalIntent.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (p *Provider) UpdateOperationalIntent(ctx context.Context, request airspaceprovider.PublicationRequest) (airspaceprovider.PublicationReceipt, error) {
 	if p.dssClient == nil || p.ussBaseURL == "" {
 		return airspaceprovider.PublicationReceipt{}, fmt.Errorf("InterUSS publication is not configured")
@@ -66,6 +95,16 @@ func (p *Provider) UpdateOperationalIntent(ctx context.Context, request airspace
 	return publicationReceipt(*response.JSON200)
 }
 
+// DeleteOperationalIntent deletes the selected Provider records.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//   - ovn: is the string value supplied to DeleteOperationalIntent.
+//
+// Returns:
+//   - result: is the airspaceprovider.PublicationReceipt value produced by DeleteOperationalIntent.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (p *Provider) DeleteOperationalIntent(ctx context.Context, intentID, ovn string) (airspaceprovider.PublicationReceipt, error) {
 	if p.dssClient == nil {
 		return airspaceprovider.PublicationReceipt{}, fmt.Errorf("InterUSS publication is not configured")
@@ -84,6 +123,15 @@ func (p *Provider) DeleteOperationalIntent(ctx context.Context, intentID, ovn st
 	return publicationReceipt(*response.JSON200)
 }
 
+// GetOperationalIntentReference fetches the DSS reference for one operational intent.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the airspaceprovider.PublicationReceipt value produced by GetOperationalIntentReference.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (p *Provider) GetOperationalIntentReference(ctx context.Context, intentID string) (airspaceprovider.PublicationReceipt, error) {
 	if p.dssClient == nil {
 		return airspaceprovider.PublicationReceipt{}, fmt.Errorf("InterUSS publication is not configured")
@@ -102,6 +150,15 @@ func (p *Provider) GetOperationalIntentReference(ctx context.Context, intentID s
 	return referenceReceipt(response.JSON200.OperationalIntentReference)
 }
 
+// FindSubscribers finds Provider records matching the supplied criteria.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - volumes: is the []domain.OperationalVolume value supplied to FindSubscribers.
+//
+// Returns:
+//   - result: is the []airspaceprovider.Subscriber value produced by FindSubscribers.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (p *Provider) FindSubscribers(ctx context.Context, volumes []domain.OperationalVolume) ([]airspaceprovider.Subscriber, error) {
 	if p.dssClient == nil {
 		return nil, fmt.Errorf("InterUSS publication is not configured")
@@ -289,6 +346,17 @@ func responseError(statusCode int, status string, body []byte) error {
 	return &dss.SCDResponseError{StatusCode: statusCode, Status: status, Body: body}
 }
 
+// BuildPeerNotification builds a Provider value from the supplied inputs.
+//
+// Parameters:
+//   - request: contains the validated request payload.
+//   - receipt: is the airspaceprovider.PublicationReceipt value supplied to BuildPeerNotification.
+//   - subscriber: is the airspaceprovider.Subscriber value supplied to BuildPeerNotification.
+//   - deleted: is the bool value supplied to BuildPeerNotification.
+//
+// Returns:
+//   - result: is the []byte value produced by BuildPeerNotification.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (p *Provider) BuildPeerNotification(request airspaceprovider.PublicationRequest, receipt airspaceprovider.PublicationReceipt, subscriber airspaceprovider.Subscriber, deleted bool) ([]byte, error) {
 	entityID, err := dss.SCDEntityID(request.Intent.ID)
 	if err != nil {
@@ -324,6 +392,15 @@ func (p *Provider) BuildPeerNotification(request airspaceprovider.PublicationReq
 	return json.Marshal(body)
 }
 
+// DeliverPeerNotification delivers due Provider work and records each delivery outcome.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - baseURL: is the string value supplied to DeliverPeerNotification.
+//   - payload: is the []byte value supplied to DeliverPeerNotification.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (p *Provider) DeliverPeerNotification(ctx context.Context, baseURL string, payload []byte) error {
 	if err := validatePeerURL(baseURL, p.allowInsecurePeerURLs); err != nil {
 		return err

@@ -33,6 +33,16 @@ type ussClaims struct {
 	jwt.RegisteredClaims
 }
 
+// NewUSSJWTAuthorizer constructs httpapi from the supplied configuration and dependencies.
+//
+// Parameters:
+//   - publicKeyFile: is the string value supplied to NewUSSJWTAuthorizer.
+//   - issuer: is the string value supplied to NewUSSJWTAuthorizer.
+//   - audience: is the string value supplied to NewUSSJWTAuthorizer.
+//
+// Returns:
+//   - result: is the *USSJWTAuthorizer value produced by NewUSSJWTAuthorizer.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func NewUSSJWTAuthorizer(publicKeyFile, issuer, audience string) (*USSJWTAuthorizer, error) {
 	raw, err := os.ReadFile(publicKeyFile)
 	if err != nil {
@@ -59,6 +69,16 @@ func NewUSSJWTAuthorizer(publicKeyFile, issuer, audience string) (*USSJWTAuthori
 	return &USSJWTAuthorizer{publicKey: publicKey, issuer: issuer, audience: audience}, nil
 }
 
+// Authorize verifies the request's bearer JWT and required USS scope before
+// allowing a protected interoperability route to execute.
+//
+// Parameters:
+//   - request: contains the validated request payload.
+//   - requiredScope: is the string value supplied to Authorize.
+//
+// Returns:
+//   - result: is the string value produced by Authorize.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (a *USSJWTAuthorizer) Authorize(request *http.Request, requiredScope string) (string, error) {
 	header := strings.TrimSpace(request.Header.Get("Authorization"))
 	if !strings.HasPrefix(header, "Bearer ") || strings.TrimSpace(strings.TrimPrefix(header, "Bearer ")) == "" {

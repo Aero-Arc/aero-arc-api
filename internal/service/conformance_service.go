@@ -27,10 +27,27 @@ type telemetryWriter interface {
 	AddSample(ctx context.Context, sample domain.TelemetrySample) error
 }
 
+// NewConformanceService constructs service from the supplied configuration and dependencies.
+//
+// Parameters:
+//   - durableStore: is the durable.Store value supplied to NewConformanceService.
+//   - telemetryStore: is the telemetry.Store value supplied to NewConformanceService.
+//
+// Returns:
+//   - result: is the *ConformanceService value produced by NewConformanceService.
 func NewConformanceService(durableStore durable.Store, telemetryStore telemetry.Store) *ConformanceService {
 	return NewConformanceServiceWithClock(durableStore, telemetryStore, nil)
 }
 
+// NewConformanceServiceWithClock constructs service from the supplied configuration and dependencies.
+//
+// Parameters:
+//   - durableStore: is the durable.Store value supplied to NewConformanceServiceWithClock.
+//   - telemetryStore: is the telemetry.Store value supplied to NewConformanceServiceWithClock.
+//   - now: supplies the event or wall-clock timestamp used by the operation.
+//
+// Returns:
+//   - result: is the *ConformanceService value produced by NewConformanceServiceWithClock.
 func NewConformanceServiceWithClock(durableStore durable.Store, telemetryStore telemetry.Store, now func() time.Time) *ConformanceService {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
@@ -38,6 +55,16 @@ func NewConformanceServiceWithClock(durableStore durable.Store, telemetryStore t
 	return &ConformanceService{durable: durableStore, telemetry: telemetryStore, now: now}
 }
 
+// EvaluateTelemetry evaluates one telemetry sample against the applicable
+// active intent and persists its conformance event and summary projection.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - sample: is the domain.TelemetrySample value supplied to EvaluateTelemetry.
+//
+// Returns:
+//   - result: is the ConformanceEvaluation value produced by EvaluateTelemetry.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *ConformanceService) EvaluateTelemetry(ctx context.Context, sample domain.TelemetrySample) (ConformanceEvaluation, error) {
 	if sample.RecordedAt.IsZero() {
 		sample.RecordedAt = s.now().UTC()
@@ -205,6 +232,15 @@ func (s *ConformanceService) alertCount(ctx context.Context, intent domain.Opera
 	return len(unique), nil
 }
 
+// GetIntentConformance returns the summary and events for the current version of one intent.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the ConformanceEvaluation value produced by GetIntentConformance.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *ConformanceService) GetIntentConformance(ctx context.Context, intentID string) (ConformanceEvaluation, error) {
 	intent, err := s.durable.GetOperationalIntent(ctx, intentID)
 	if err != nil {

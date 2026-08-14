@@ -30,6 +30,15 @@ type Store struct {
 
 var _ durable.OperationalStore = (*Store)(nil)
 
+// Open opens postgres and initializes the resources required for use.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - databaseURL: is the string value supplied to Open.
+//
+// Returns:
+//   - result: is the *Store value produced by Open.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func Open(ctx context.Context, databaseURL string) (*Store, error) {
 	if strings.TrimSpace(databaseURL) == "" {
 		return nil, fmt.Errorf("PostgreSQL database URL is required")
@@ -49,8 +58,17 @@ func Open(ctx context.Context, databaseURL string) (*Store, error) {
 	return &Store{Store: durablememory.NewStore(), pool: pool}, nil
 }
 
+// Close releases resources owned by Store and completes any required shutdown work.
 func (s *Store) Close() { s.pool.Close() }
 
+// CreateOperationalIntent creates and stores the supplied Store record.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intent: is the domain.OperationalIntent value supplied to CreateOperationalIntent.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) CreateOperationalIntent(ctx context.Context, intent domain.OperationalIntent) error {
 	intent.Revision = 0
 	raw, err := json.Marshal(intent)
@@ -72,6 +90,15 @@ func (s *Store) CreateOperationalIntent(ctx context.Context, intent domain.Opera
 	return fmt.Errorf("create operational intent: %w", err)
 }
 
+// UpdateOperationalIntent updates the selected Store state while enforcing its consistency checks.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intent: is the domain.OperationalIntent value supplied to UpdateOperationalIntent.
+//   - expectedRevision: is the int64 value supplied to UpdateOperationalIntent.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) UpdateOperationalIntent(ctx context.Context, intent domain.OperationalIntent, expectedRevision int64) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -156,6 +183,15 @@ func retirePriorAcceptedIntentsTx(ctx context.Context, tx pgx.Tx, terminal domai
 	return nil
 }
 
+// AcceptOperationalIntent accepts the selected Store state after validating its current revision.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intent: is the domain.OperationalIntent value supplied to AcceptOperationalIntent.
+//   - expectedRevision: is the int64 value supplied to AcceptOperationalIntent.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) AcceptOperationalIntent(ctx context.Context, intent domain.OperationalIntent, expectedRevision int64) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -213,14 +249,42 @@ func acceptOperationalIntentTx(ctx context.Context, tx pgx.Tx, intent domain.Ope
 	return nil
 }
 
+// GetOperationalIntent returns the current durable version of one operational intent.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - id: identifies the target record.
+//
+// Returns:
+//   - result: is the domain.OperationalIntent value produced by GetOperationalIntent.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) GetOperationalIntent(ctx context.Context, id string) (domain.OperationalIntent, error) {
 	return scanIntent(s.pool.QueryRow(ctx, `SELECT data, revision FROM operational_intents WHERE id = $1 ORDER BY version DESC, updated_at DESC LIMIT 1`, id))
 }
 
+// GetOperationalIntentVersion returns one immutable historical intent version.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - id: identifies the target record.
+//   - version: is the int value supplied to GetOperationalIntentVersion.
+//
+// Returns:
+//   - result: is the domain.OperationalIntent value produced by GetOperationalIntentVersion.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) GetOperationalIntentVersion(ctx context.Context, id string, version int) (domain.OperationalIntent, error) {
 	return scanIntent(s.pool.QueryRow(ctx, `SELECT data, revision FROM operational_intents WHERE id = $1 AND version = $2`, id, version))
 }
 
+// ListOperationalIntents returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - aircraftID: identifies the target aircraft.
+//
+// Returns:
+//   - result: is the []domain.OperationalIntent value produced by ListOperationalIntents.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListOperationalIntents(ctx context.Context, aircraftID string) ([]domain.OperationalIntent, error) {
 	rows, err := s.pool.Query(ctx, `
 			SELECT DISTINCT ON (id) data, revision
@@ -238,6 +302,15 @@ func (s *Store) ListOperationalIntents(ctx context.Context, aircraftID string) (
 	return intents, nil
 }
 
+// ListOperationalIntentVersions returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - id: identifies the target record.
+//
+// Returns:
+//   - result: is the []domain.OperationalIntent value produced by ListOperationalIntentVersions.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListOperationalIntentVersions(ctx context.Context, id string) ([]domain.OperationalIntent, error) {
 	rows, err := s.pool.Query(ctx, `SELECT data, revision FROM operational_intents WHERE id = $1 ORDER BY version, updated_at`, id)
 	if err != nil {
@@ -246,6 +319,14 @@ func (s *Store) ListOperationalIntentVersions(ctx context.Context, id string) ([
 	return readIntents(rows)
 }
 
+// RecordOperationalVolume durably records the supplied Store data.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - volume: is the domain.OperationalVolume value supplied to RecordOperationalVolume.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) RecordOperationalVolume(ctx context.Context, volume domain.OperationalVolume) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -264,6 +345,16 @@ func (s *Store) RecordOperationalVolume(ctx context.Context, volume domain.Opera
 	return nil
 }
 
+// ReplaceOperationalVolumes atomically replaces the selected Store records.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - id: identifies the target record.
+//   - version: is the int value supplied to ReplaceOperationalVolumes.
+//   - volumes: is the []domain.OperationalVolume value supplied to ReplaceOperationalVolumes.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ReplaceOperationalVolumes(ctx context.Context, id string, version int, volumes []domain.OperationalVolume) error {
 	if err := validateVolumeScope(id, version, volumes); err != nil {
 		return err
@@ -285,6 +376,17 @@ func (s *Store) ReplaceOperationalVolumes(ctx context.Context, id string, versio
 	return nil
 }
 
+// ReplaceOperationalIntent atomically replaces the selected Store records.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - expectedVersion: is the int value supplied to ReplaceOperationalIntent.
+//   - expectedRevision: is the int64 value supplied to ReplaceOperationalIntent.
+//   - intent: is the domain.OperationalIntent value supplied to ReplaceOperationalIntent.
+//   - volumes: is the []domain.OperationalVolume value supplied to ReplaceOperationalIntent.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ReplaceOperationalIntent(ctx context.Context, expectedVersion int, expectedRevision int64, intent domain.OperationalIntent, volumes []domain.OperationalVolume) error {
 	if intent.Version != expectedVersion && intent.Version != expectedVersion+1 {
 		return durable.ErrVersionConflict
@@ -330,6 +432,15 @@ func (s *Store) ReplaceOperationalIntent(ctx context.Context, expectedVersion in
 	return nil
 }
 
+// ListOperationalVolumes returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the []domain.OperationalVolume value produced by ListOperationalVolumes.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListOperationalVolumes(ctx context.Context, intentID string) ([]domain.OperationalVolume, error) {
 	rows, err := s.pool.Query(ctx, `SELECT data FROM operational_volumes WHERE $1 = '' OR intent_id = $1 ORDER BY sequence, starts_at`, intentID)
 	if err != nil {
@@ -354,6 +465,14 @@ func (s *Store) ListOperationalVolumes(ctx context.Context, intentID string) ([]
 	return volumes, nil
 }
 
+// RecordConflictFinding durably records the supplied Store data.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - finding: is the domain.ConflictFinding value supplied to RecordConflictFinding.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) RecordConflictFinding(ctx context.Context, finding domain.ConflictFinding) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -372,6 +491,16 @@ func (s *Store) RecordConflictFinding(ctx context.Context, finding domain.Confli
 	return nil
 }
 
+// ListConflictFindings returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//   - intentVersion: is the int value supplied to ListConflictFindings.
+//
+// Returns:
+//   - result: is the []domain.ConflictFinding value produced by ListConflictFindings.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListConflictFindings(ctx context.Context, intentID string, intentVersion int) ([]domain.ConflictFinding, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT data FROM conflict_findings
@@ -399,6 +528,17 @@ func (s *Store) ListConflictFindings(ctx context.Context, intentID string, inten
 	return findings, nil
 }
 
+// ReplaceConflictFindings atomically replaces the selected Store records.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//   - intentVersion: is the int value supplied to ReplaceConflictFindings.
+//   - ruleVersion: is the string value supplied to ReplaceConflictFindings.
+//   - findings: is the []domain.ConflictFinding value supplied to ReplaceConflictFindings.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ReplaceConflictFindings(ctx context.Context, intentID string, intentVersion int, ruleVersion string, findings []domain.ConflictFinding) error {
 	if err := validateFindingScope(intentID, intentVersion, ruleVersion, findings); err != nil {
 		return err

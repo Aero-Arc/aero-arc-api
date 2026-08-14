@@ -21,10 +21,30 @@ type Server struct {
 	ussAuthorizer  USSAuthorizer
 }
 
+// New constructs httpapi from the supplied configuration and dependencies.
+//
+// Parameters:
+//   - fleet: is the *service.FleetService value supplied to New.
+//   - requestTimeout: defines the time bound applied by the operation.
+//
+// Returns:
+//   - result: is the *Server value produced by New.
 func New(fleet *service.FleetService, requestTimeout time.Duration) *Server {
 	return &Server{fleet: fleet, requestTimeout: requestTimeout}
 }
 
+// NewWithWorkflows constructs httpapi from the supplied configuration and dependencies.
+//
+// Parameters:
+//   - fleet: is the *service.FleetService value supplied to NewWithWorkflows.
+//   - intents: is the *service.IntentService value supplied to NewWithWorkflows.
+//   - preflight: is the *service.PreflightService value supplied to NewWithWorkflows.
+//   - conformance: is the *service.ConformanceService value supplied to NewWithWorkflows.
+//   - requestTimeout: defines the time bound applied by the operation.
+//   - deconflictionServices: is the ...*deconfliction.DeconflictionService value supplied to NewWithWorkflows.
+//
+// Returns:
+//   - result: is the *Server value produced by NewWithWorkflows.
 func NewWithWorkflows(fleet *service.FleetService, intents *service.IntentService, preflight *service.PreflightService, conformance *service.ConformanceService, requestTimeout time.Duration, deconflictionServices ...*deconfliction.DeconflictionService) *Server {
 	server := &Server{
 		fleet:          fleet,
@@ -39,16 +59,34 @@ func NewWithWorkflows(fleet *service.FleetService, intents *service.IntentServic
 	return server
 }
 
+// WithDebug enables or disables debug-only HTTP behavior on the server.
+//
+// Parameters:
+//   - debug: is the bool value supplied to WithDebug.
+//
+// Returns:
+//   - result: is the *Server value produced by WithDebug.
 func (s *Server) WithDebug(debug bool) *Server {
 	s.debug = debug
 	return s
 }
 
+// WithUSSAuthorizer installs the authorization policy used by USS routes.
+//
+// Parameters:
+//   - authorizer: is the USSAuthorizer value supplied to WithUSSAuthorizer.
+//
+// Returns:
+//   - result: is the *Server value produced by WithUSSAuthorizer.
 func (s *Server) WithUSSAuthorizer(authorizer USSAuthorizer) *Server {
 	s.ussAuthorizer = authorizer
 	return s
 }
 
+// Handler returns the fully configured HTTP route handler.
+//
+// Returns:
+//   - result: is the http.Handler value produced by Handler.
 func (s *Server) Handler() http.Handler {
 	app := mach.New()
 	app.Use(mach.CORSWithConfig(mach.CORSConfig{
@@ -114,6 +152,10 @@ type statusRecorder struct {
 	status int
 }
 
+// WriteHeader records the first HTTP status code written by the wrapped response writer.
+//
+// Parameters:
+//   - status: is the int value supplied to WriteHeader.
 func (r *statusRecorder) WriteHeader(status int) {
 	r.status = status
 	r.ResponseWriter.WriteHeader(status)

@@ -52,6 +52,18 @@ type ReplayResponse struct {
 	ConformanceEvents []domain.ConformanceEvent `json:"conformance_events"`
 }
 
+// NewFleetService constructs the fleet read/write façade used by HTTP handlers.
+// Dashboard requests are composed from durable business records, time-series
+// telemetry, replay manifests, and ephemeral Registry placement.
+//
+// Parameters:
+//   - durableStore: owns aircraft, intent, maintenance, and compliance records.
+//   - telemetryStore: supplies current and historical aircraft observations.
+//   - replayStore: resolves durable replay manifests for completed flights.
+//   - registry: supplies current Agent placement and Relay liveness.
+//
+// Returns:
+//   - service: uses default Registry and telemetry freshness thresholds.
 func NewFleetService(durableStore durable.Store, telemetryStore telemetry.Store, replayStore replay.Store, registry registryv1.AeroRegistryClient) *FleetService {
 	return &FleetService{
 		durable:            durableStore,
@@ -64,6 +76,17 @@ func NewFleetService(durableStore durable.Store, telemetryStore telemetry.Store,
 	}
 }
 
+// WithLiveStatePolicy overrides live-state freshness thresholds and the clock
+// used to classify observations. Non-positive durations and a nil clock leave
+// the corresponding defaults unchanged.
+//
+// Parameters:
+//   - registryFreshness: bounds how old a Registry heartbeat may be.
+//   - telemetryFreshness: bounds how old each telemetry group may be.
+//   - now: supplies one clock source for deterministic freshness classification.
+//
+// Returns:
+//   - service: is the same receiver, allowing constructor-style chaining.
 func (s *FleetService) WithLiveStatePolicy(registryFreshness, telemetryFreshness time.Duration, now func() time.Time) *FleetService {
 	if registryFreshness > 0 {
 		s.registryFreshness = registryFreshness
@@ -77,18 +100,51 @@ func (s *FleetService) WithLiveStatePolicy(registryFreshness, telemetryFreshness
 	return s
 }
 
+// CreateAircraft delegates durable aircraft creation to the configured store.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - aircraft: is the domain.Aircraft value supplied to CreateAircraft.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *FleetService) CreateAircraft(ctx context.Context, aircraft domain.Aircraft) error {
 	return s.durable.CreateAircraft(ctx, aircraft)
 }
 
+// CreateBattery delegates durable battery creation to the configured store.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - battery: is the domain.Battery value supplied to CreateBattery.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *FleetService) CreateBattery(ctx context.Context, battery domain.Battery) error {
 	return s.durable.CreateBattery(ctx, battery)
 }
 
+// RecordMaintenanceEvent appends a durable aircraft maintenance record.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - event: is the domain.MaintenanceEvent value supplied to RecordMaintenanceEvent.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *FleetService) RecordMaintenanceEvent(ctx context.Context, event domain.MaintenanceEvent) error {
 	return s.durable.RecordMaintenanceEvent(ctx, event)
 }
 
+// GetOverviewDashboard composes fleet readiness, operational intents, evidence,
+// and reportability reviews into the Ops overview read model.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//
+// Returns:
+//   - dashboard: contains metrics and the underlying records used to derive them.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *FleetService) GetOverviewDashboard(ctx context.Context) (readmodel.OverviewDashboard, error) {
 	aircraft, err := s.ListAircraftDashboards(ctx)
 	if err != nil {
@@ -116,6 +172,15 @@ func (s *FleetService) GetOverviewDashboard(ctx context.Context) (readmodel.Over
 	}, nil
 }
 
+// GetOperationsDashboard composes operational intents, conformance summaries,
+// and per-aircraft live Registry/telemetry state for the Ops operations page.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//
+// Returns:
+//   - dashboard: contains operational metrics and independently sourced live state.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *FleetService) GetOperationsDashboard(ctx context.Context) (readmodel.OperationsDashboard, error) {
 	intents, err := s.durable.ListOperationalIntents(ctx, "")
 	if err != nil {
@@ -139,6 +204,14 @@ func (s *FleetService) GetOperationsDashboard(ctx context.Context) (readmodel.Op
 	}, nil
 }
 
+// GetPreflightDashboard composes recorded preflight checks and their aggregate metrics.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//
+// Returns:
+//   - result: is the readmodel.PreflightDashboard value produced by GetPreflightDashboard.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *FleetService) GetPreflightDashboard(ctx context.Context) (readmodel.PreflightDashboard, error) {
 	checks, err := s.durable.ListPreflightChecks(ctx, "")
 	if err != nil {
@@ -151,6 +224,15 @@ func (s *FleetService) GetPreflightDashboard(ctx context.Context) (readmodel.Pre
 	}, nil
 }
 
+// GetConformanceDashboard composes durable conformance summaries, incident
+// events, and aggregate conformance metrics.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//
+// Returns:
+//   - result: is the readmodel.ConformanceDashboard value produced by GetConformanceDashboard.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *FleetService) GetConformanceDashboard(ctx context.Context) (readmodel.ConformanceDashboard, error) {
 	summaries, err := s.durable.ListConformanceSummaries(ctx, "")
 	if err != nil {
@@ -168,6 +250,15 @@ func (s *FleetService) GetConformanceDashboard(ctx context.Context) (readmodel.C
 	}, nil
 }
 
+// GetMaintenanceDashboard composes maintenance history, battery inventory, and
+// their operational metrics.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//
+// Returns:
+//   - result: is the readmodel.MaintenanceDashboard value produced by GetMaintenanceDashboard.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *FleetService) GetMaintenanceDashboard(ctx context.Context) (readmodel.MaintenanceDashboard, error) {
 	events, err := s.durable.ListMaintenanceEvents(ctx, "")
 	if err != nil {
@@ -185,6 +276,14 @@ func (s *FleetService) GetMaintenanceDashboard(ctx context.Context) (readmodel.M
 	}, nil
 }
 
+// GetRecordsDashboard composes evidence and reportability-review records for Ops.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//
+// Returns:
+//   - result: is the readmodel.RecordsDashboard value produced by GetRecordsDashboard.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *FleetService) GetRecordsDashboard(ctx context.Context) (readmodel.RecordsDashboard, error) {
 	evidence, err := s.durable.ListEvidence(ctx, "")
 	if err != nil {
@@ -202,6 +301,16 @@ func (s *FleetService) GetRecordsDashboard(ctx context.Context) (readmodel.Recor
 	}, nil
 }
 
+// ListAircraftDashboards composes one dashboard record per durable aircraft.
+// Registry placement and telemetry are fetched in batches before durable
+// maintenance and battery details are joined per aircraft.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//
+// Returns:
+//   - result: is the []readmodel.AircraftDashboard value produced by ListAircraftDashboards.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *FleetService) ListAircraftDashboards(ctx context.Context) ([]readmodel.AircraftDashboard, error) {
 	aircraft, err := s.durable.ListAircraft(ctx)
 	if err != nil {
@@ -221,6 +330,16 @@ func (s *FleetService) ListAircraftDashboards(ctx context.Context) ([]readmodel.
 	return dashboards, nil
 }
 
+// GetAircraftDashboard composes durable, maintenance, Registry, and telemetry
+// state for one aircraft.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - aircraftID: identifies the target aircraft.
+//
+// Returns:
+//   - result: is the readmodel.AircraftDashboard value produced by GetAircraftDashboard.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *FleetService) GetAircraftDashboard(ctx context.Context, aircraftID string) (readmodel.AircraftDashboard, error) {
 	aircraft, err := s.durable.GetAircraft(ctx, aircraftID)
 	if err != nil {
@@ -230,6 +349,16 @@ func (s *FleetService) GetAircraftDashboard(ctx context.Context, aircraftID stri
 	return s.buildDashboard(ctx, aircraft, live)
 }
 
+// GetAircraftLiveState composes current connection and independently sampled
+// telemetry groups for one durable aircraft.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - aircraftID: identifies the target aircraft.
+//
+// Returns:
+//   - result: is the readmodel.AircraftLiveState value produced by GetAircraftLiveState.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *FleetService) GetAircraftLiveState(ctx context.Context, aircraftID string) (readmodel.AircraftLiveState, error) {
 	aircraft, err := s.durable.GetAircraft(ctx, aircraftID)
 	if err != nil {
@@ -238,6 +367,17 @@ func (s *FleetService) GetAircraftLiveState(ctx context.Context, aircraftID stri
 	return s.composeLiveAircraft(ctx, []domain.Aircraft{aircraft})[0], nil
 }
 
+// GetAircraftMapView composes the live map marker, bounded telemetry history,
+// active intent geometry, and matching conformance evidence for one aircraft.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - aircraftID: identifies the target aircraft.
+//   - limit: caps historical telemetry samples included in the map view.
+//
+// Returns:
+//   - result: is the readmodel.AircraftMapView value produced by GetAircraftMapView.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *FleetService) GetAircraftMapView(ctx context.Context, aircraftID string, limit int) (readmodel.AircraftMapView, error) {
 	aircraft, err := s.durable.GetAircraft(ctx, aircraftID)
 	if err != nil {
@@ -299,6 +439,16 @@ func (s *FleetService) GetAircraftMapView(ctx context.Context, aircraftID string
 	return view, nil
 }
 
+// ListFlightRecords verifies the aircraft exists, then returns its durable
+// flight records.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - aircraftID: identifies the target aircraft.
+//
+// Returns:
+//   - result: is the []domain.FlightRecord value produced by ListFlightRecords.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *FleetService) ListFlightRecords(ctx context.Context, aircraftID string) ([]domain.FlightRecord, error) {
 	if _, err := s.durable.GetAircraft(ctx, aircraftID); err != nil {
 		return nil, fmt.Errorf("get aircraft: %w", err)
@@ -310,6 +460,15 @@ func (s *FleetService) ListFlightRecords(ctx context.Context, aircraftID string)
 	return flights, nil
 }
 
+// GetFlightRecord returns one durable flight record by identity.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - flightID: identifies the target flight.
+//
+// Returns:
+//   - result: is the domain.FlightRecord value produced by GetFlightRecord.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *FleetService) GetFlightRecord(ctx context.Context, flightID string) (domain.FlightRecord, error) {
 	flight, err := s.durable.GetFlightRecord(ctx, flightID)
 	if err != nil {
@@ -318,6 +477,17 @@ func (s *FleetService) GetFlightRecord(ctx context.Context, flightID string) (do
 	return flight, nil
 }
 
+// GetFlightReplay composes a flight, its replay manifest, bounded telemetry,
+// and durable conformance events into one replay response.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - flightID: identifies the target flight.
+//   - limit: caps telemetry samples returned for the replay.
+//
+// Returns:
+//   - result: is the ReplayResponse value produced by GetFlightReplay.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *FleetService) GetFlightReplay(ctx context.Context, flightID string, limit int) (ReplayResponse, error) {
 	flight, err := s.durable.GetFlightRecord(ctx, flightID)
 	if err != nil {
@@ -668,6 +838,16 @@ func liveAircraftForID(states []readmodel.AircraftLiveState, aircraftID string) 
 		Telemetry:  domain.AircraftTelemetryState{Status: domain.DataFreshnessUnavailable}}
 }
 
+// CalculateReadiness derives the aircraft readiness state from unresolved
+// critical maintenance, battery health, and live-state availability.
+//
+// Parameters:
+//   - battery: is the installed battery, or nil when no installation is known.
+//   - maintenanceEvents: contains the aircraft's recorded maintenance history.
+//   - liveStateAvailable: reports whether current aircraft state can be observed.
+//
+// Returns:
+//   - readiness: contains the derived status and human-readable blocking reasons.
 func CalculateReadiness(battery *domain.Battery, maintenanceEvents []domain.MaintenanceEvent, liveStateAvailable bool) domain.Readiness {
 	reasons := make([]string, 0)
 	for _, event := range maintenanceEvents {

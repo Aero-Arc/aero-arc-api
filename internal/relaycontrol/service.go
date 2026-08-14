@@ -45,6 +45,17 @@ type cachedPlacement struct {
 	expiresAt        time.Time
 }
 
+// New constructs relaycontrol from the supplied configuration and dependencies.
+//
+// Parameters:
+//   - registry: is the registryClient value supplied to New.
+//   - transportCredentials: provides authentication material for the dependency.
+//   - timeout: defines the time bound applied by the operation.
+//   - placementTTL: is the time.Duration value supplied to New.
+//
+// Returns:
+//   - result: is the *Service value produced by New.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func New(registry registryClient, transportCredentials credentials.TransportCredentials, timeout, placementTTL time.Duration) (*Service, error) {
 	if transportCredentials == nil {
 		return nil, fmt.Errorf("relay transport credentials are required")
@@ -62,8 +73,21 @@ func newWithPool(registry registryClient, pool clientPool, timeout, ttl time.Dur
 	return &Service{registry: registry, pool: pool, timeout: timeout, placementTTL: ttl, now: time.Now, placements: map[string]cachedPlacement{}}
 }
 
+// Close releases resources owned by Service and completes any required shutdown work.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Service) Close() error { return s.pool.Close() }
 
+// SetOperationContext sets the selected Service state to the supplied value.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - req: contains the validated request payload.
+//
+// Returns:
+//   - result: is the string value produced by SetOperationContext.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Service) SetOperationContext(ctx context.Context, req SetRequest) (string, error) {
 	if req.AgentID == "" || req.FlightID == "" {
 		return "", fmt.Errorf("agent_id and flight_id are required")
@@ -83,6 +107,15 @@ func (s *Service) SetOperationContext(ctx context.Context, req SetRequest) (stri
 	return commandID, err
 }
 
+// ClearOperationContext clears the selected Service state without changing unrelated records.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - req: contains the validated request payload.
+//
+// Returns:
+//   - result: is the string value produced by ClearOperationContext.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Service) ClearOperationContext(ctx context.Context, req ClearRequest) (string, error) {
 	if req.AgentID == "" || req.FlightID == "" {
 		return "", fmt.Errorf("agent_id and flight_id are required")

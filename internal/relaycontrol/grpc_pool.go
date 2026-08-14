@@ -29,6 +29,17 @@ func newGRPCPool(transportCredentials credentials.TransportCredentials) *grpcPoo
 	}
 }
 
+// Client returns a cached Relay-control client for the target address, dialing
+// and caching a new TLS connection when necessary.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - relayID: identifies the target relay.
+//   - address: locates the external dependency used by the operation.
+//
+// Returns:
+//   - result: is the relayv1.RelayControlClient value produced by Client.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (p *grpcPool) Client(ctx context.Context, relayID, address string) (relayv1.RelayControlClient, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -47,6 +58,10 @@ func (p *grpcPool) Client(ctx context.Context, relayID, address string) (relayv1
 	return relayv1.NewRelayControlClient(conn), nil
 }
 
+// Invalidate invalidates the selected cached grpcPool resource so it is recreated on demand.
+//
+// Parameters:
+//   - relayID: identifies the target relay.
 func (p *grpcPool) Invalidate(relayID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -56,6 +71,10 @@ func (p *grpcPool) Invalidate(relayID string) {
 	}
 }
 
+// Close releases resources owned by grpcPool and completes any required shutdown work.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (p *grpcPool) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()

@@ -9,6 +9,16 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 )
 
+// PublishedOperationalIntent builds a DSS details payload from a stored
+// reference and its authorized operational volumes.
+//
+// Parameters:
+//   - referenceJSON: is the []byte value supplied to PublishedOperationalIntent.
+//   - volumes: is the []domain.OperationalVolume value supplied to PublishedOperationalIntent.
+//
+// Returns:
+//   - result: is the scdv1.OperationalIntent value produced by PublishedOperationalIntent.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func PublishedOperationalIntent(referenceJSON []byte, volumes []domain.OperationalVolume) (scdv1.OperationalIntent, error) {
 	var reference scdv1.OperationalIntentReference
 	if len(referenceJSON) == 0 {

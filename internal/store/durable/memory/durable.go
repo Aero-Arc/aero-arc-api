@@ -41,6 +41,10 @@ type Store struct {
 
 var _ durable.OperationalStore = (*Store)(nil)
 
+// NewStore constructs memory from the supplied configuration and dependencies.
+//
+// Returns:
+//   - result: is the *Store value produced by NewStore.
 func NewStore() *Store {
 	return &Store{
 		operators:                 make(map[string]domain.Operator),
@@ -61,6 +65,14 @@ func NewStore() *Store {
 	}
 }
 
+// UpsertOperator creates or replaces the supplied Store record by identity.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to UpsertOperator.
+//   - operator: is the domain.Operator value supplied to UpsertOperator.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) UpsertOperator(_ context.Context, operator domain.Operator) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -68,6 +80,15 @@ func (s *Store) UpsertOperator(_ context.Context, operator domain.Operator) erro
 	return nil
 }
 
+// GetOperator returns one operator by identity.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to GetOperator.
+//   - operatorID: identifies the target operator.
+//
+// Returns:
+//   - result: is the domain.Operator value produced by GetOperator.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) GetOperator(_ context.Context, operatorID string) (domain.Operator, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -78,6 +99,14 @@ func (s *Store) GetOperator(_ context.Context, operatorID string) (domain.Operat
 	return operator, nil
 }
 
+// ListOperators returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ListOperators.
+//
+// Returns:
+//   - result: is the []domain.Operator value produced by ListOperators.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListOperators(_ context.Context) ([]domain.Operator, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -89,6 +118,14 @@ func (s *Store) ListOperators(_ context.Context) ([]domain.Operator, error) {
 	return operators, nil
 }
 
+// CreateAircraft creates and stores the supplied Store record.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to CreateAircraft.
+//   - aircraft: is the domain.Aircraft value supplied to CreateAircraft.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) CreateAircraft(_ context.Context, aircraft domain.Aircraft) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -96,6 +133,15 @@ func (s *Store) CreateAircraft(_ context.Context, aircraft domain.Aircraft) erro
 	return nil
 }
 
+// GetAircraft returns one aircraft by identity.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to GetAircraft.
+//   - aircraftID: identifies the target aircraft.
+//
+// Returns:
+//   - result: is the domain.Aircraft value produced by GetAircraft.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) GetAircraft(_ context.Context, aircraftID string) (domain.Aircraft, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -106,6 +152,14 @@ func (s *Store) GetAircraft(_ context.Context, aircraftID string) (domain.Aircra
 	return aircraft, nil
 }
 
+// ListAircraft returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ListAircraft.
+//
+// Returns:
+//   - result: is the []domain.Aircraft value produced by ListAircraft.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListAircraft(_ context.Context) ([]domain.Aircraft, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -117,6 +171,14 @@ func (s *Store) ListAircraft(_ context.Context) ([]domain.Aircraft, error) {
 	return aircraft, nil
 }
 
+// CreateBattery creates and stores the supplied Store record.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to CreateBattery.
+//   - battery: is the domain.Battery value supplied to CreateBattery.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) CreateBattery(_ context.Context, battery domain.Battery) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -124,6 +186,15 @@ func (s *Store) CreateBattery(_ context.Context, battery domain.Battery) error {
 	return nil
 }
 
+// GetBattery returns one battery by identity.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to GetBattery.
+//   - batteryID: identifies the target battery.
+//
+// Returns:
+//   - result: is the domain.Battery value produced by GetBattery.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) GetBattery(_ context.Context, batteryID string) (domain.Battery, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -134,6 +205,14 @@ func (s *Store) GetBattery(_ context.Context, batteryID string) (domain.Battery,
 	return battery, nil
 }
 
+// ListBatteries returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ListBatteries.
+//
+// Returns:
+//   - result: is the []domain.Battery value produced by ListBatteries.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListBatteries(_ context.Context) ([]domain.Battery, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -145,6 +224,14 @@ func (s *Store) ListBatteries(_ context.Context) ([]domain.Battery, error) {
 	return batteries, nil
 }
 
+// RecordBatteryInstallation durably records the supplied Store data.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to RecordBatteryInstallation.
+//   - installation: is the domain.BatteryInstallation value supplied to RecordBatteryInstallation.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) RecordBatteryInstallation(_ context.Context, installation domain.BatteryInstallation) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -152,6 +239,15 @@ func (s *Store) RecordBatteryInstallation(_ context.Context, installation domain
 	return nil
 }
 
+// GetActiveBatteryInstallation returns the current battery installation for an aircraft.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to GetActiveBatteryInstallation.
+//   - aircraftID: identifies the target aircraft.
+//
+// Returns:
+//   - result: is the *domain.BatteryInstallation value produced by GetActiveBatteryInstallation.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) GetActiveBatteryInstallation(_ context.Context, aircraftID string) (*domain.BatteryInstallation, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -168,6 +264,14 @@ func (s *Store) GetActiveBatteryInstallation(_ context.Context, aircraftID strin
 	return active, nil
 }
 
+// UpsertAircraftOperatingProfile creates or replaces the supplied Store record by identity.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to UpsertAircraftOperatingProfile.
+//   - profile: is the domain.AircraftOperatingProfile value supplied to UpsertAircraftOperatingProfile.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) UpsertAircraftOperatingProfile(_ context.Context, profile domain.AircraftOperatingProfile) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -175,6 +279,15 @@ func (s *Store) UpsertAircraftOperatingProfile(_ context.Context, profile domain
 	return nil
 }
 
+// GetAircraftOperatingProfile returns the operating profile assigned to an aircraft.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to GetAircraftOperatingProfile.
+//   - aircraftID: identifies the target aircraft.
+//
+// Returns:
+//   - result: is the *domain.AircraftOperatingProfile value produced by GetAircraftOperatingProfile.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) GetAircraftOperatingProfile(_ context.Context, aircraftID string) (*domain.AircraftOperatingProfile, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -185,6 +298,15 @@ func (s *Store) GetAircraftOperatingProfile(_ context.Context, aircraftID string
 	return &profile, nil
 }
 
+// ListOperatingLimits returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ListOperatingLimits.
+//   - aircraftID: identifies the target aircraft.
+//
+// Returns:
+//   - result: is the []domain.OperatingLimit value produced by ListOperatingLimits.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListOperatingLimits(_ context.Context, aircraftID string) ([]domain.OperatingLimit, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -198,6 +320,14 @@ func (s *Store) ListOperatingLimits(_ context.Context, aircraftID string) ([]dom
 	return limits, nil
 }
 
+// UpsertOperatingLimit creates or replaces the supplied Store record by identity.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to UpsertOperatingLimit.
+//   - limit: caps the number of records claimed or returned in one call.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) UpsertOperatingLimit(_ context.Context, limit domain.OperatingLimit) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -205,6 +335,14 @@ func (s *Store) UpsertOperatingLimit(_ context.Context, limit domain.OperatingLi
 	return nil
 }
 
+// RecordMaintenanceEvent durably records the supplied Store data.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to RecordMaintenanceEvent.
+//   - event: is the domain.MaintenanceEvent value supplied to RecordMaintenanceEvent.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) RecordMaintenanceEvent(_ context.Context, event domain.MaintenanceEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -212,6 +350,15 @@ func (s *Store) RecordMaintenanceEvent(_ context.Context, event domain.Maintenan
 	return nil
 }
 
+// ListMaintenanceEvents returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ListMaintenanceEvents.
+//   - aircraftID: identifies the target aircraft.
+//
+// Returns:
+//   - result: is the []domain.MaintenanceEvent value produced by ListMaintenanceEvents.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListMaintenanceEvents(_ context.Context, aircraftID string) ([]domain.MaintenanceEvent, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -225,6 +372,14 @@ func (s *Store) ListMaintenanceEvents(_ context.Context, aircraftID string) ([]d
 	return events, nil
 }
 
+// CreateOperationalIntent creates and stores the supplied Store record.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to CreateOperationalIntent.
+//   - intent: is the domain.OperationalIntent value supplied to CreateOperationalIntent.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) CreateOperationalIntent(_ context.Context, intent domain.OperationalIntent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -237,6 +392,15 @@ func (s *Store) CreateOperationalIntent(_ context.Context, intent domain.Operati
 	return nil
 }
 
+// UpdateOperationalIntent updates the selected Store state while enforcing its consistency checks.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to UpdateOperationalIntent.
+//   - intent: is the domain.OperationalIntent value supplied to UpdateOperationalIntent.
+//   - expectedRevision: is the int64 value supplied to UpdateOperationalIntent.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) UpdateOperationalIntent(_ context.Context, intent domain.OperationalIntent, expectedRevision int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -269,6 +433,15 @@ func (s *Store) updateOperationalIntentLocked(intent domain.OperationalIntent, e
 	return nil
 }
 
+// AcceptOperationalIntent accepts the selected Store state after validating its current revision.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to AcceptOperationalIntent.
+//   - intent: is the domain.OperationalIntent value supplied to AcceptOperationalIntent.
+//   - expectedRevision: is the int64 value supplied to AcceptOperationalIntent.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) AcceptOperationalIntent(_ context.Context, intent domain.OperationalIntent, expectedRevision int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -298,6 +471,16 @@ func (s *Store) acceptOperationalIntentLocked(intent domain.OperationalIntent, e
 	return nil
 }
 
+// AcceptOperationalIntentAndRequestPublication accepts the selected Store state after validating its current revision.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to AcceptOperationalIntentAndRequestPublication.
+//   - intent: is the domain.OperationalIntent value supplied to AcceptOperationalIntentAndRequestPublication.
+//   - expectedRevision: is the int64 value supplied to AcceptOperationalIntentAndRequestPublication.
+//   - publication: is the domain.OperationalIntentPublication value supplied to AcceptOperationalIntentAndRequestPublication.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) AcceptOperationalIntentAndRequestPublication(_ context.Context, intent domain.OperationalIntent, expectedRevision int64, publication domain.OperationalIntentPublication) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -308,6 +491,16 @@ func (s *Store) AcceptOperationalIntentAndRequestPublication(_ context.Context, 
 	return nil
 }
 
+// UpdateOperationalIntentAndRequestPublication updates the selected Store state while enforcing its consistency checks.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to UpdateOperationalIntentAndRequestPublication.
+//   - intent: is the domain.OperationalIntent value supplied to UpdateOperationalIntentAndRequestPublication.
+//   - expectedRevision: is the int64 value supplied to UpdateOperationalIntentAndRequestPublication.
+//   - publication: is the domain.OperationalIntentPublication value supplied to UpdateOperationalIntentAndRequestPublication.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) UpdateOperationalIntentAndRequestPublication(_ context.Context, intent domain.OperationalIntent, expectedRevision int64, publication domain.OperationalIntentPublication) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -318,6 +511,14 @@ func (s *Store) UpdateOperationalIntentAndRequestPublication(_ context.Context, 
 	return nil
 }
 
+// RequestOperationalIntentPublication requests the selected Store operation and records it for processing.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to RequestOperationalIntentPublication.
+//   - publication: is the domain.OperationalIntentPublication value supplied to RequestOperationalIntentPublication.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) RequestOperationalIntentPublication(_ context.Context, publication domain.OperationalIntentPublication) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -328,6 +529,17 @@ func (s *Store) RequestOperationalIntentPublication(_ context.Context, publicati
 	return nil
 }
 
+// RequestOperationalIntentPublicationIfCurrent requests the selected Store operation and records it for processing.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to RequestOperationalIntentPublicationIfCurrent.
+//   - publication: is the domain.OperationalIntentPublication value supplied to RequestOperationalIntentPublicationIfCurrent.
+//   - expectedIntentVersion: is the int value supplied to RequestOperationalIntentPublicationIfCurrent.
+//   - expectedIntentRevision: is the int64 value supplied to RequestOperationalIntentPublicationIfCurrent.
+//   - expectedStatus: is the domain.IntentStatus value supplied to RequestOperationalIntentPublicationIfCurrent.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) RequestOperationalIntentPublicationIfCurrent(_ context.Context, publication domain.OperationalIntentPublication, expectedIntentVersion int, expectedIntentRevision int64, expectedStatus domain.IntentStatus) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -375,6 +587,15 @@ func (s *Store) requestPublicationLocked(request domain.OperationalIntentPublica
 	s.publications[request.IntentID] = clonePublication(request)
 }
 
+// GetOperationalIntentPublication returns the current DSS publication state for an intent.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to GetOperationalIntentPublication.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the domain.OperationalIntentPublication value produced by GetOperationalIntentPublication.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) GetOperationalIntentPublication(_ context.Context, intentID string) (domain.OperationalIntentPublication, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -385,6 +606,17 @@ func (s *Store) GetOperationalIntentPublication(_ context.Context, intentID stri
 	return clonePublication(publication), nil
 }
 
+// ClaimOperationalIntentPublication atomically leases eligible Store work to a worker.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ClaimOperationalIntentPublication.
+//   - intentID: identifies the target intent.
+//   - now: supplies the event or wall-clock timestamp used by the operation.
+//   - leaseUntil: is the time.Time value supplied to ClaimOperationalIntentPublication.
+//
+// Returns:
+//   - result: is the domain.OperationalIntentPublication value produced by ClaimOperationalIntentPublication.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ClaimOperationalIntentPublication(_ context.Context, intentID string, now, leaseUntil time.Time) (domain.OperationalIntentPublication, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -405,6 +637,17 @@ func (s *Store) ClaimOperationalIntentPublication(_ context.Context, intentID st
 	return clonePublication(publication), nil
 }
 
+// ClaimDueOperationalIntentPublications atomically leases eligible Store work to a worker.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ClaimDueOperationalIntentPublications.
+//   - now: supplies the event or wall-clock timestamp used by the operation.
+//   - leaseUntil: is the time.Time value supplied to ClaimDueOperationalIntentPublications.
+//   - limit: caps the number of records claimed or returned in one call.
+//
+// Returns:
+//   - result: is the []domain.OperationalIntentPublication value produced by ClaimDueOperationalIntentPublications.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ClaimDueOperationalIntentPublications(_ context.Context, now, leaseUntil time.Time, limit int) ([]domain.OperationalIntentPublication, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -442,6 +685,16 @@ func (s *Store) ClaimDueOperationalIntentPublications(_ context.Context, now, le
 	return claimed, nil
 }
 
+// RenewOperationalIntentPublicationLease extends the selected Store lease when the caller still owns its fence.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to RenewOperationalIntentPublicationLease.
+//   - intentID: identifies the target intent.
+//   - expectedRevision: is the int64 value supplied to RenewOperationalIntentPublicationLease.
+//   - leaseUntil: is the time.Time value supplied to RenewOperationalIntentPublicationLease.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) RenewOperationalIntentPublicationLease(_ context.Context, intentID string, expectedRevision int64, leaseUntil time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -457,6 +710,15 @@ func (s *Store) RenewOperationalIntentPublicationLease(_ context.Context, intent
 	return nil
 }
 
+// UpdateOperationalIntentPublication updates the selected Store state while enforcing its consistency checks.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to UpdateOperationalIntentPublication.
+//   - publication: is the domain.OperationalIntentPublication value supplied to UpdateOperationalIntentPublication.
+//   - expectedRevision: is the int64 value supplied to UpdateOperationalIntentPublication.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) UpdateOperationalIntentPublication(_ context.Context, publication domain.OperationalIntentPublication, expectedRevision int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -473,6 +735,16 @@ func (s *Store) UpdateOperationalIntentPublication(_ context.Context, publicatio
 	return nil
 }
 
+// ConfirmOperationalIntentPublication confirms the selected Store transition and records its durable outcome.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ConfirmOperationalIntentPublication.
+//   - publication: is the domain.OperationalIntentPublication value supplied to ConfirmOperationalIntentPublication.
+//   - expectedRevision: is the int64 value supplied to ConfirmOperationalIntentPublication.
+//   - notifications: is the []domain.PeerNotification value supplied to ConfirmOperationalIntentPublication.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ConfirmOperationalIntentPublication(_ context.Context, publication domain.OperationalIntentPublication, expectedRevision int64, notifications []domain.PeerNotification) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -502,6 +774,17 @@ func (s *Store) enqueuePeerNotificationsLocked(notifications []domain.PeerNotifi
 	}
 }
 
+// ClaimDuePeerNotifications atomically leases eligible Store work to a worker.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ClaimDuePeerNotifications.
+//   - now: supplies the event or wall-clock timestamp used by the operation.
+//   - leaseUntil: is the time.Time value supplied to ClaimDuePeerNotifications.
+//   - limit: caps the number of records claimed or returned in one call.
+//
+// Returns:
+//   - result: is the []domain.PeerNotification value produced by ClaimDuePeerNotifications.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ClaimDuePeerNotifications(_ context.Context, now, leaseUntil time.Time, limit int) ([]domain.PeerNotification, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -528,6 +811,15 @@ func (s *Store) ClaimDuePeerNotifications(_ context.Context, now, leaseUntil tim
 	return claimed, nil
 }
 
+// UpdatePeerNotification updates the selected Store state while enforcing its consistency checks.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to UpdatePeerNotification.
+//   - notification: is the domain.PeerNotification value supplied to UpdatePeerNotification.
+//   - expectedRevision: is the int64 value supplied to UpdatePeerNotification.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) UpdatePeerNotification(_ context.Context, notification domain.PeerNotification, expectedRevision int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -544,6 +836,14 @@ func (s *Store) UpdatePeerNotification(_ context.Context, notification domain.Pe
 	return nil
 }
 
+// RecordReceivedPeerNotification durably records the supplied Store data.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to RecordReceivedPeerNotification.
+//   - notification: is the domain.ReceivedPeerNotification value supplied to RecordReceivedPeerNotification.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) RecordReceivedPeerNotification(_ context.Context, notification domain.ReceivedPeerNotification) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -553,6 +853,15 @@ func (s *Store) RecordReceivedPeerNotification(_ context.Context, notification d
 	return nil
 }
 
+// ListReceivedPeerNotifications returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ListReceivedPeerNotifications.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the []domain.ReceivedPeerNotification value produced by ListReceivedPeerNotifications.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListReceivedPeerNotifications(_ context.Context, intentID string) ([]domain.ReceivedPeerNotification, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -573,6 +882,15 @@ func clonePublication(publication domain.OperationalIntentPublication) domain.Op
 	return publication
 }
 
+// GetOperationalIntent returns the current version of one operational intent.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to GetOperationalIntent.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the domain.OperationalIntent value produced by GetOperationalIntent.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) GetOperationalIntent(_ context.Context, intentID string) (domain.OperationalIntent, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -583,6 +901,16 @@ func (s *Store) GetOperationalIntent(_ context.Context, intentID string) (domain
 	return intent, nil
 }
 
+// GetOperationalIntentVersion returns one immutable historical intent version.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to GetOperationalIntentVersion.
+//   - intentID: identifies the target intent.
+//   - version: is the int value supplied to GetOperationalIntentVersion.
+//
+// Returns:
+//   - result: is the domain.OperationalIntent value produced by GetOperationalIntentVersion.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) GetOperationalIntentVersion(_ context.Context, intentID string, version int) (domain.OperationalIntent, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -593,6 +921,15 @@ func (s *Store) GetOperationalIntentVersion(_ context.Context, intentID string, 
 	return intent, nil
 }
 
+// ListOperationalIntents returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ListOperationalIntents.
+//   - aircraftID: identifies the target aircraft.
+//
+// Returns:
+//   - result: is the []domain.OperationalIntent value produced by ListOperationalIntents.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListOperationalIntents(_ context.Context, aircraftID string) ([]domain.OperationalIntent, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -613,6 +950,15 @@ func (s *Store) ListOperationalIntents(_ context.Context, aircraftID string) ([]
 	return intents, nil
 }
 
+// ListOperationalIntentVersions returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ListOperationalIntentVersions.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the []domain.OperationalIntent value produced by ListOperationalIntentVersions.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListOperationalIntentVersions(_ context.Context, intentID string) ([]domain.OperationalIntent, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -631,6 +977,14 @@ func (s *Store) ListOperationalIntentVersions(_ context.Context, intentID string
 	return intents, nil
 }
 
+// RecordOperationalVolume durably records the supplied Store data.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to RecordOperationalVolume.
+//   - volume: is the domain.OperationalVolume value supplied to RecordOperationalVolume.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) RecordOperationalVolume(_ context.Context, volume domain.OperationalVolume) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -638,6 +992,16 @@ func (s *Store) RecordOperationalVolume(_ context.Context, volume domain.Operati
 	return nil
 }
 
+// ReplaceOperationalVolumes atomically replaces the selected Store records.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ReplaceOperationalVolumes.
+//   - intentID: identifies the target intent.
+//   - intentVersion: is the int value supplied to ReplaceOperationalVolumes.
+//   - volumes: is the []domain.OperationalVolume value supplied to ReplaceOperationalVolumes.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ReplaceOperationalVolumes(_ context.Context, intentID string, intentVersion int, volumes []domain.OperationalVolume) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -657,6 +1021,17 @@ func (s *Store) ReplaceOperationalVolumes(_ context.Context, intentID string, in
 	return nil
 }
 
+// ReplaceOperationalIntent atomically replaces the selected Store records.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ReplaceOperationalIntent.
+//   - expectedVersion: is the int value supplied to ReplaceOperationalIntent.
+//   - expectedRevision: is the int64 value supplied to ReplaceOperationalIntent.
+//   - intent: is the domain.OperationalIntent value supplied to ReplaceOperationalIntent.
+//   - volumes: is the []domain.OperationalVolume value supplied to ReplaceOperationalIntent.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ReplaceOperationalIntent(
 	_ context.Context,
 	expectedVersion int,
@@ -701,6 +1076,15 @@ func (s *Store) ReplaceOperationalIntent(
 	return nil
 }
 
+// ListOperationalVolumes returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ListOperationalVolumes.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the []domain.OperationalVolume value produced by ListOperationalVolumes.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListOperationalVolumes(_ context.Context, intentID string) ([]domain.OperationalVolume, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -746,6 +1130,14 @@ func (s *Store) latestOperationalIntent(intentID string) (domain.OperationalInte
 	return latest, ok
 }
 
+// UpsertRegulatoryAuthorization creates or replaces the supplied Store record by identity.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to UpsertRegulatoryAuthorization.
+//   - authorization: is the domain.RegulatoryAuthorization value supplied to UpsertRegulatoryAuthorization.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) UpsertRegulatoryAuthorization(_ context.Context, authorization domain.RegulatoryAuthorization) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -753,6 +1145,15 @@ func (s *Store) UpsertRegulatoryAuthorization(_ context.Context, authorization d
 	return nil
 }
 
+// GetRegulatoryAuthorization returns one regulatory authorization by identity.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to GetRegulatoryAuthorization.
+//   - authorizationID: identifies the target authorization.
+//
+// Returns:
+//   - result: is the domain.RegulatoryAuthorization value produced by GetRegulatoryAuthorization.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) GetRegulatoryAuthorization(_ context.Context, authorizationID string) (domain.RegulatoryAuthorization, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -763,6 +1164,15 @@ func (s *Store) GetRegulatoryAuthorization(_ context.Context, authorizationID st
 	return authorization, nil
 }
 
+// ListRegulatoryAuthorizations returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ListRegulatoryAuthorizations.
+//   - operatorID: identifies the target operator.
+//
+// Returns:
+//   - result: is the []domain.RegulatoryAuthorization value produced by ListRegulatoryAuthorizations.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListRegulatoryAuthorizations(_ context.Context, operatorID string) ([]domain.RegulatoryAuthorization, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -778,6 +1188,14 @@ func (s *Store) ListRegulatoryAuthorizations(_ context.Context, operatorID strin
 	return authorizations, nil
 }
 
+// RecordPreflightCheck durably records the supplied Store data.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to RecordPreflightCheck.
+//   - check: is the domain.PreflightCheck value supplied to RecordPreflightCheck.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) RecordPreflightCheck(_ context.Context, check domain.PreflightCheck) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -791,6 +1209,15 @@ func (s *Store) RecordPreflightCheck(_ context.Context, check domain.PreflightCh
 	return nil
 }
 
+// ListPreflightChecks returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ListPreflightChecks.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the []domain.PreflightCheck value produced by ListPreflightChecks.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListPreflightChecks(_ context.Context, intentID string) ([]domain.PreflightCheck, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -804,6 +1231,14 @@ func (s *Store) ListPreflightChecks(_ context.Context, intentID string) ([]domai
 	return checks, nil
 }
 
+// CreateFlightRecord creates and stores the supplied Store record.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to CreateFlightRecord.
+//   - flight: is the domain.FlightRecord value supplied to CreateFlightRecord.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) CreateFlightRecord(_ context.Context, flight domain.FlightRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -811,6 +1246,15 @@ func (s *Store) CreateFlightRecord(_ context.Context, flight domain.FlightRecord
 	return nil
 }
 
+// GetFlightRecord returns one durable flight record by identity.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to GetFlightRecord.
+//   - flightID: identifies the target flight.
+//
+// Returns:
+//   - result: is the domain.FlightRecord value produced by GetFlightRecord.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) GetFlightRecord(_ context.Context, flightID string) (domain.FlightRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -821,6 +1265,15 @@ func (s *Store) GetFlightRecord(_ context.Context, flightID string) (domain.Flig
 	return flight, nil
 }
 
+// ListFlightRecords returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ListFlightRecords.
+//   - aircraftID: identifies the target aircraft.
+//
+// Returns:
+//   - result: is the []domain.FlightRecord value produced by ListFlightRecords.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListFlightRecords(_ context.Context, aircraftID string) ([]domain.FlightRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -834,6 +1287,14 @@ func (s *Store) ListFlightRecords(_ context.Context, aircraftID string) ([]domai
 	return flights, nil
 }
 
+// RecordConformanceEvent durably records the supplied Store data.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to RecordConformanceEvent.
+//   - event: is the domain.ConformanceEvent value supplied to RecordConformanceEvent.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) RecordConformanceEvent(_ context.Context, event domain.ConformanceEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -847,6 +1308,15 @@ func (s *Store) RecordConformanceEvent(_ context.Context, event domain.Conforman
 	return nil
 }
 
+// ListConformanceEvents returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ListConformanceEvents.
+//   - flightID: identifies the target flight.
+//
+// Returns:
+//   - result: is the []domain.ConformanceEvent value produced by ListConformanceEvents.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListConformanceEvents(_ context.Context, flightID string) ([]domain.ConformanceEvent, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -860,6 +1330,14 @@ func (s *Store) ListConformanceEvents(_ context.Context, flightID string) ([]dom
 	return events, nil
 }
 
+// UpsertConformanceSummary creates or replaces the supplied Store record by identity.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to UpsertConformanceSummary.
+//   - summary: is the domain.ConformanceSummary value supplied to UpsertConformanceSummary.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) UpsertConformanceSummary(_ context.Context, summary domain.ConformanceSummary) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -867,6 +1345,15 @@ func (s *Store) UpsertConformanceSummary(_ context.Context, summary domain.Confo
 	return nil
 }
 
+// GetConformanceSummary returns the current conformance projection for an intent.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to GetConformanceSummary.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the *domain.ConformanceSummary value produced by GetConformanceSummary.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) GetConformanceSummary(_ context.Context, intentID string) (*domain.ConformanceSummary, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -885,6 +1372,15 @@ func (s *Store) GetConformanceSummary(_ context.Context, intentID string) (*doma
 	return selected, nil
 }
 
+// ListConformanceSummaries returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ListConformanceSummaries.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the []domain.ConformanceSummary value produced by ListConformanceSummaries.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListConformanceSummaries(_ context.Context, intentID string) ([]domain.ConformanceSummary, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -898,6 +1394,14 @@ func (s *Store) ListConformanceSummaries(_ context.Context, intentID string) ([]
 	return summaries, nil
 }
 
+// RecordEvidence durably records the supplied Store data.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to RecordEvidence.
+//   - record: is the domain.EvidenceRecord value supplied to RecordEvidence.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) RecordEvidence(_ context.Context, record domain.EvidenceRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -905,6 +1409,15 @@ func (s *Store) RecordEvidence(_ context.Context, record domain.EvidenceRecord) 
 	return nil
 }
 
+// ListEvidence returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ListEvidence.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the []domain.EvidenceRecord value produced by ListEvidence.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListEvidence(_ context.Context, intentID string) ([]domain.EvidenceRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -918,6 +1431,14 @@ func (s *Store) ListEvidence(_ context.Context, intentID string) ([]domain.Evide
 	return records, nil
 }
 
+// RecordReportabilityReview durably records the supplied Store data.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to RecordReportabilityReview.
+//   - review: is the domain.ReportabilityReview value supplied to RecordReportabilityReview.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) RecordReportabilityReview(_ context.Context, review domain.ReportabilityReview) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -925,6 +1446,15 @@ func (s *Store) RecordReportabilityReview(_ context.Context, review domain.Repor
 	return nil
 }
 
+// ListReportabilityReviews returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ListReportabilityReviews.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the []domain.ReportabilityReview value produced by ListReportabilityReviews.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListReportabilityReviews(_ context.Context, intentID string) ([]domain.ReportabilityReview, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -938,6 +1468,14 @@ func (s *Store) ListReportabilityReviews(_ context.Context, intentID string) ([]
 	return reviews, nil
 }
 
+// RecordComplianceFinding durably records the supplied Store data.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to RecordComplianceFinding.
+//   - finding: is the domain.ComplianceFinding value supplied to RecordComplianceFinding.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) RecordComplianceFinding(_ context.Context, finding domain.ComplianceFinding) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -951,6 +1489,16 @@ func (s *Store) RecordComplianceFinding(_ context.Context, finding domain.Compli
 	return nil
 }
 
+// ListComplianceFindings returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ListComplianceFindings.
+//   - subjectType: is the string value supplied to ListComplianceFindings.
+//   - subjectID: identifies the target subject.
+//
+// Returns:
+//   - result: is the []domain.ComplianceFinding value produced by ListComplianceFindings.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListComplianceFindings(_ context.Context, subjectType string, subjectID string) ([]domain.ComplianceFinding, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -968,6 +1516,15 @@ func (s *Store) ListComplianceFindings(_ context.Context, subjectType string, su
 	return findings, nil
 }
 
+// ListComplianceFindingsForIntent returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ListComplianceFindingsForIntent.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the []domain.ComplianceFinding value produced by ListComplianceFindingsForIntent.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListComplianceFindingsForIntent(_ context.Context, intentID string) ([]domain.ComplianceFinding, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -981,6 +1538,14 @@ func (s *Store) ListComplianceFindingsForIntent(_ context.Context, intentID stri
 	return findings, nil
 }
 
+// RecordConflictFinding durably records the supplied Store data.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to RecordConflictFinding.
+//   - finding: is the domain.ConflictFinding value supplied to RecordConflictFinding.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) RecordConflictFinding(_ context.Context, finding domain.ConflictFinding) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -994,6 +1559,16 @@ func (s *Store) RecordConflictFinding(_ context.Context, finding domain.Conflict
 	return nil
 }
 
+// ListConflictFindings returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ListConflictFindings.
+//   - intentID: identifies the target intent.
+//   - intentVersion: is the int value supplied to ListConflictFindings.
+//
+// Returns:
+//   - result: is the []domain.ConflictFinding value produced by ListConflictFindings.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListConflictFindings(_ context.Context, intentID string, intentVersion int) ([]domain.ConflictFinding, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1016,6 +1591,17 @@ func (s *Store) ListConflictFindings(_ context.Context, intentID string, intentV
 	return findings, nil
 }
 
+// ReplaceConflictFindings atomically replaces the selected Store records.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ReplaceConflictFindings.
+//   - intentID: identifies the target intent.
+//   - intentVersion: is the int value supplied to ReplaceConflictFindings.
+//   - ruleVersion: is the string value supplied to ReplaceConflictFindings.
+//   - findings: is the []domain.ConflictFinding value supplied to ReplaceConflictFindings.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ReplaceConflictFindings(_ context.Context, intentID string, intentVersion int, ruleVersion string, findings []domain.ConflictFinding) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1035,6 +1621,14 @@ func (s *Store) ReplaceConflictFindings(_ context.Context, intentID string, inte
 	return nil
 }
 
+// UpsertOperationsPersonnel creates or replaces the supplied Store record by identity.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to UpsertOperationsPersonnel.
+//   - person: is the domain.OperationsPersonnel value supplied to UpsertOperationsPersonnel.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) UpsertOperationsPersonnel(_ context.Context, person domain.OperationsPersonnel) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1042,6 +1636,15 @@ func (s *Store) UpsertOperationsPersonnel(_ context.Context, person domain.Opera
 	return nil
 }
 
+// GetOperationsPersonnel returns one operations-personnel record by identity.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to GetOperationsPersonnel.
+//   - personID: identifies the target person.
+//
+// Returns:
+//   - result: is the domain.OperationsPersonnel value produced by GetOperationsPersonnel.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) GetOperationsPersonnel(_ context.Context, personID string) (domain.OperationsPersonnel, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1052,6 +1655,14 @@ func (s *Store) GetOperationsPersonnel(_ context.Context, personID string) (doma
 	return person, nil
 }
 
+// RecordPersonnelAssignment durably records the supplied Store data.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to RecordPersonnelAssignment.
+//   - assignment: is the domain.PersonnelAssignment value supplied to RecordPersonnelAssignment.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) RecordPersonnelAssignment(_ context.Context, assignment domain.PersonnelAssignment) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1059,6 +1670,15 @@ func (s *Store) RecordPersonnelAssignment(_ context.Context, assignment domain.P
 	return nil
 }
 
+// ListPersonnelAssignments returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to ListPersonnelAssignments.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the []domain.PersonnelAssignment value produced by ListPersonnelAssignments.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListPersonnelAssignments(_ context.Context, intentID string) ([]domain.PersonnelAssignment, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

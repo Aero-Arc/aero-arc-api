@@ -14,10 +14,22 @@ type Store struct {
 	samples []domain.TelemetrySample
 }
 
+// NewStore constructs memory from the supplied configuration and dependencies.
+//
+// Returns:
+//   - result: is the *Store value produced by NewStore.
 func NewStore() *Store {
 	return &Store{}
 }
 
+// AddSample adds the supplied value to Store.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to AddSample.
+//   - sample: is the domain.TelemetrySample value supplied to AddSample.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) AddSample(_ context.Context, sample domain.TelemetrySample) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -25,6 +37,15 @@ func (s *Store) AddSample(_ context.Context, sample domain.TelemetrySample) erro
 	return nil
 }
 
+// GetLatestAircraftStates returns the latest independently sampled telemetry groups for each requested aircraft.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to GetLatestAircraftStates.
+//   - aircraftIDs: identifies the target aircraft.
+//
+// Returns:
+//   - result: is the map[string]domain.AircraftTelemetryState value produced by GetLatestAircraftStates.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) GetLatestAircraftStates(_ context.Context, aircraftIDs []string) (map[string]domain.AircraftTelemetryState, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -62,6 +83,15 @@ func (s *Store) GetLatestAircraftStates(_ context.Context, aircraftIDs []string)
 	return states, nil
 }
 
+// GetLatestSample returns the newest legacy telemetry sample for one aircraft.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to GetLatestSample.
+//   - aircraftID: identifies the target aircraft.
+//
+// Returns:
+//   - result: is the *domain.TelemetrySample value produced by GetLatestSample.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) GetLatestSample(_ context.Context, aircraftID string) (*domain.TelemetrySample, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -78,6 +108,16 @@ func (s *Store) GetLatestSample(_ context.Context, aircraftID string) (*domain.T
 	return latest, nil
 }
 
+// QueryAircraftSamples queries Store with the supplied statement and parameters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to QueryAircraftSamples.
+//   - aircraftID: identifies the target aircraft.
+//   - limit: caps the number of records claimed or returned in one call.
+//
+// Returns:
+//   - result: is the []domain.TelemetrySample value produced by QueryAircraftSamples.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) QueryAircraftSamples(_ context.Context, aircraftID string, limit int) ([]domain.TelemetrySample, error) {
 	if limit <= 0 {
 		limit = telemetry.DefaultSampleLimit
@@ -97,6 +137,16 @@ func (s *Store) QueryAircraftSamples(_ context.Context, aircraftID string, limit
 	return samples, nil
 }
 
+// QueryFlightSamples queries Store with the supplied statement and parameters.
+//
+// Parameters:
+//   - value: is the context.Context value supplied to QueryFlightSamples.
+//   - flightID: identifies the target flight.
+//   - limit: caps the number of records claimed or returned in one call.
+//
+// Returns:
+//   - result: is the []domain.TelemetrySample value produced by QueryFlightSamples.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) QueryFlightSamples(_ context.Context, flightID string, limit int) ([]domain.TelemetrySample, error) {
 	if limit <= 0 {
 		limit = telemetry.DefaultSampleLimit
