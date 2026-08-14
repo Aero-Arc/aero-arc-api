@@ -23,7 +23,7 @@ func NewStore() *Store {
 // PutReplayManifest stores or replaces a replay manifest by flight identity.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to PutReplayManifest.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - manifest: is the domain.ReplayManifest value supplied to PutReplayManifest.
 //
 // Returns:
@@ -38,7 +38,7 @@ func (s *Store) PutReplayManifest(_ context.Context, manifest domain.ReplayManif
 // GetReplayManifest returns the replay manifest associated with one flight.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to GetReplayManifest.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - flightID: identifies the target flight.
 //
 // Returns:

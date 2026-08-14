@@ -20,10 +20,11 @@ type MemoryClient struct {
 	placements map[string]*registryv1.AgentPlacement
 }
 
-// NewMemoryClient constructs registry from the supplied configuration and dependencies.
+// NewMemoryClient constructs an empty, concurrency-safe Registry client for
+// development and service tests.
 //
 // Returns:
-//   - result: is the *MemoryClient value produced by NewMemoryClient.
+//   - client: stores cloned Relay, Agent, and placement records in process memory.
 func NewMemoryClient() *MemoryClient {
 	return &MemoryClient{
 		relays:     make(map[string]*registryv1.Relay),
@@ -37,7 +38,7 @@ var _ registryv1.AeroRegistryClient = (*MemoryClient)(nil)
 // SetLiveAircraftState sets the selected MemoryClient state to the supplied value.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to SetLiveAircraftState.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - state: is the domain.LiveAircraftState value supplied to SetLiveAircraftState.
 //
 // Returns:
@@ -74,16 +75,16 @@ func (c *MemoryClient) SetLiveAircraftState(_ context.Context, state domain.Live
 	return nil
 }
 
-// RegisterRelay registers the supplied MemoryClient identity or handler.
+// RegisterRelay validates and stores a cloned Relay record by identity.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to RegisterRelay.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - req: contains the validated request payload.
-//   - value: is the ...grpc.CallOption value supplied to RegisterRelay.
+//   - options: are accepted for gRPC client compatibility and are not used by the in-memory implementation.
 //
 // Returns:
 //   - result: is the *registryv1.RegisterRelayResponse value produced by RegisterRelay.
-//   - error: reports validation, dependency, cancellation, or persistence failures.
+//   - error: reports a missing Relay payload or identifier.
 func (c *MemoryClient) RegisterRelay(_ context.Context, req *registryv1.RegisterRelayRequest, _ ...grpc.CallOption) (*registryv1.RegisterRelayResponse, error) {
 	relay := req.GetRelay()
 	if relay == nil || relay.GetRelayId() == "" {
@@ -96,16 +97,16 @@ func (c *MemoryClient) RegisterRelay(_ context.Context, req *registryv1.Register
 	return &registryv1.RegisterRelayResponse{}, nil
 }
 
-// HeartbeatRelay renews liveness for the supplied MemoryClient identity without changing ownership.
+// HeartbeatRelay replaces the heartbeat timestamp of an existing in-memory Relay.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to HeartbeatRelay.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - req: contains the validated request payload.
-//   - value: is the ...grpc.CallOption value supplied to HeartbeatRelay.
+//   - options: are accepted for gRPC client compatibility and are not used by the in-memory implementation.
 //
 // Returns:
 //   - result: is the *registryv1.HeartbeatRelayResponse value produced by HeartbeatRelay.
-//   - error: reports validation, dependency, cancellation, or persistence failures.
+//   - error: reports an unknown Relay identifier.
 func (c *MemoryClient) HeartbeatRelay(_ context.Context, req *registryv1.HeartbeatRelayRequest, _ ...grpc.CallOption) (*registryv1.HeartbeatRelayResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -118,16 +119,16 @@ func (c *MemoryClient) HeartbeatRelay(_ context.Context, req *registryv1.Heartbe
 	return &registryv1.HeartbeatRelayResponse{}, nil
 }
 
-// ListRelays returns MemoryClient records matching the supplied scope and filters.
+// ListRelays returns cloned in-memory Relay records in stable identifier order.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListRelays.
-//   - value: is the *registryv1.ListRelaysRequest value supplied to ListRelays.
-//   - value: is the ...grpc.CallOption value supplied to ListRelays.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
+//   - request: carries no filters in the current Registry contract.
+//   - options: are accepted for gRPC client compatibility and are not used by the in-memory implementation.
 //
 // Returns:
-//   - result: is the *registryv1.ListRelaysResponse value produced by ListRelays.
-//   - error: reports validation, dependency, cancellation, or persistence failures.
+//   - response: contains the sorted Relay snapshot.
+//   - error: is always nil.
 func (c *MemoryClient) ListRelays(context.Context, *registryv1.ListRelaysRequest, ...grpc.CallOption) (*registryv1.ListRelaysResponse, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -146,16 +147,17 @@ func (c *MemoryClient) ListRelays(context.Context, *registryv1.ListRelaysRequest
 	return &registryv1.ListRelaysResponse{Relays: relays}, nil
 }
 
-// RegisterAgent registers the supplied MemoryClient identity or handler.
+// RegisterAgent validates and stores a cloned Agent and, when supplied, its
+// Relay placement.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to RegisterAgent.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - req: contains the validated request payload.
-//   - value: is the ...grpc.CallOption value supplied to RegisterAgent.
+//   - options: are accepted for gRPC client compatibility and are not used by the in-memory implementation.
 //
 // Returns:
 //   - result: is the *registryv1.RegisterAgentResponse value produced by RegisterAgent.
-//   - error: reports validation, dependency, cancellation, or persistence failures.
+//   - error: reports a missing Agent payload or identifier.
 func (c *MemoryClient) RegisterAgent(_ context.Context, req *registryv1.RegisterAgentRequest, _ ...grpc.CallOption) (*registryv1.RegisterAgentResponse, error) {
 	agent := req.GetAgent()
 	if agent == nil || agent.GetAgentId() == "" {
@@ -175,16 +177,16 @@ func (c *MemoryClient) RegisterAgent(_ context.Context, req *registryv1.Register
 	return &registryv1.RegisterAgentResponse{}, nil
 }
 
-// HeartbeatAgent renews liveness for the supplied MemoryClient identity without changing ownership.
+// HeartbeatAgent replaces the heartbeat timestamp of an existing in-memory Agent.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to HeartbeatAgent.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - req: contains the validated request payload.
-//   - value: is the ...grpc.CallOption value supplied to HeartbeatAgent.
+//   - options: are accepted for gRPC client compatibility and are not used by the in-memory implementation.
 //
 // Returns:
 //   - result: is the *registryv1.HeartbeatAgentResponse value produced by HeartbeatAgent.
-//   - error: reports validation, dependency, cancellation, or persistence failures.
+//   - error: reports an unknown Agent identifier.
 func (c *MemoryClient) HeartbeatAgent(_ context.Context, req *registryv1.HeartbeatAgentRequest, _ ...grpc.CallOption) (*registryv1.HeartbeatAgentResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -197,16 +199,16 @@ func (c *MemoryClient) HeartbeatAgent(_ context.Context, req *registryv1.Heartbe
 	return &registryv1.HeartbeatAgentResponse{}, nil
 }
 
-// ListAgents returns MemoryClient records matching the supplied scope and filters.
+// ListAgents returns cloned in-memory Agent records in stable identifier order.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListAgents.
-//   - value: is the *registryv1.ListAgentsRequest value supplied to ListAgents.
-//   - value: is the ...grpc.CallOption value supplied to ListAgents.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
+//   - request: carries no filters in the current Registry contract.
+//   - options: are accepted for gRPC client compatibility and are not used by the in-memory implementation.
 //
 // Returns:
-//   - result: is the *registryv1.ListAgentsResponse value produced by ListAgents.
-//   - error: reports validation, dependency, cancellation, or persistence failures.
+//   - response: contains the sorted Agent snapshot.
+//   - error: is always nil.
 func (c *MemoryClient) ListAgents(context.Context, *registryv1.ListAgentsRequest, ...grpc.CallOption) (*registryv1.ListAgentsResponse, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -228,13 +230,13 @@ func (c *MemoryClient) ListAgents(context.Context, *registryv1.ListAgentsRequest
 // GetAgentPlacement returns an Agent's current in-process Relay placement.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to GetAgentPlacement.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - req: contains the validated request payload.
-//   - value: is the ...grpc.CallOption value supplied to GetAgentPlacement.
+//   - options: are accepted for gRPC client compatibility and are not used by the in-memory implementation.
 //
 // Returns:
-//   - result: is the *registryv1.GetAgentPlacementResponse value produced by GetAgentPlacement.
-//   - error: reports validation, dependency, cancellation, or persistence failures.
+//   - response: contains a clone of the current placement.
+//   - error: reports an Agent without a stored placement.
 func (c *MemoryClient) GetAgentPlacement(_ context.Context, req *registryv1.GetAgentPlacementRequest, _ ...grpc.CallOption) (*registryv1.GetAgentPlacementResponse, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

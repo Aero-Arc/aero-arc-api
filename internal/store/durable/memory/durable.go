@@ -68,7 +68,7 @@ func NewStore() *Store {
 // UpsertOperator creates or replaces the supplied Store record by identity.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to UpsertOperator.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - operator: is the domain.Operator value supplied to UpsertOperator.
 //
 // Returns:
@@ -83,7 +83,7 @@ func (s *Store) UpsertOperator(_ context.Context, operator domain.Operator) erro
 // GetOperator returns one operator by identity.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to GetOperator.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - operatorID: identifies the target operator.
 //
 // Returns:
@@ -102,7 +102,7 @@ func (s *Store) GetOperator(_ context.Context, operatorID string) (domain.Operat
 // ListOperators returns Store records matching the supplied scope and filters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListOperators.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //
 // Returns:
 //   - result: is the []domain.Operator value produced by ListOperators.
@@ -121,7 +121,7 @@ func (s *Store) ListOperators(_ context.Context) ([]domain.Operator, error) {
 // CreateAircraft creates and stores the supplied Store record.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to CreateAircraft.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - aircraft: is the domain.Aircraft value supplied to CreateAircraft.
 //
 // Returns:
@@ -136,7 +136,7 @@ func (s *Store) CreateAircraft(_ context.Context, aircraft domain.Aircraft) erro
 // GetAircraft returns one aircraft by identity.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to GetAircraft.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - aircraftID: identifies the target aircraft.
 //
 // Returns:
@@ -155,7 +155,7 @@ func (s *Store) GetAircraft(_ context.Context, aircraftID string) (domain.Aircra
 // ListAircraft returns Store records matching the supplied scope and filters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListAircraft.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //
 // Returns:
 //   - result: is the []domain.Aircraft value produced by ListAircraft.
@@ -174,7 +174,7 @@ func (s *Store) ListAircraft(_ context.Context) ([]domain.Aircraft, error) {
 // CreateBattery creates and stores the supplied Store record.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to CreateBattery.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - battery: is the domain.Battery value supplied to CreateBattery.
 //
 // Returns:
@@ -189,7 +189,7 @@ func (s *Store) CreateBattery(_ context.Context, battery domain.Battery) error {
 // GetBattery returns one battery by identity.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to GetBattery.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - batteryID: identifies the target battery.
 //
 // Returns:
@@ -208,7 +208,7 @@ func (s *Store) GetBattery(_ context.Context, batteryID string) (domain.Battery,
 // ListBatteries returns Store records matching the supplied scope and filters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListBatteries.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //
 // Returns:
 //   - result: is the []domain.Battery value produced by ListBatteries.
@@ -227,7 +227,7 @@ func (s *Store) ListBatteries(_ context.Context) ([]domain.Battery, error) {
 // RecordBatteryInstallation durably records the supplied Store data.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to RecordBatteryInstallation.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - installation: is the domain.BatteryInstallation value supplied to RecordBatteryInstallation.
 //
 // Returns:
@@ -242,7 +242,7 @@ func (s *Store) RecordBatteryInstallation(_ context.Context, installation domain
 // GetActiveBatteryInstallation returns the current battery installation for an aircraft.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to GetActiveBatteryInstallation.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - aircraftID: identifies the target aircraft.
 //
 // Returns:
@@ -267,7 +267,7 @@ func (s *Store) GetActiveBatteryInstallation(_ context.Context, aircraftID strin
 // UpsertAircraftOperatingProfile creates or replaces the supplied Store record by identity.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to UpsertAircraftOperatingProfile.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - profile: is the domain.AircraftOperatingProfile value supplied to UpsertAircraftOperatingProfile.
 //
 // Returns:
@@ -282,7 +282,7 @@ func (s *Store) UpsertAircraftOperatingProfile(_ context.Context, profile domain
 // GetAircraftOperatingProfile returns the operating profile assigned to an aircraft.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to GetAircraftOperatingProfile.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - aircraftID: identifies the target aircraft.
 //
 // Returns:
@@ -301,7 +301,7 @@ func (s *Store) GetAircraftOperatingProfile(_ context.Context, aircraftID string
 // ListOperatingLimits returns Store records matching the supplied scope and filters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListOperatingLimits.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - aircraftID: identifies the target aircraft.
 //
 // Returns:
@@ -323,7 +323,7 @@ func (s *Store) ListOperatingLimits(_ context.Context, aircraftID string) ([]dom
 // UpsertOperatingLimit creates or replaces the supplied Store record by identity.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to UpsertOperatingLimit.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - limit: caps the number of records claimed or returned in one call.
 //
 // Returns:
@@ -338,7 +338,7 @@ func (s *Store) UpsertOperatingLimit(_ context.Context, limit domain.OperatingLi
 // RecordMaintenanceEvent durably records the supplied Store data.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to RecordMaintenanceEvent.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - event: is the domain.MaintenanceEvent value supplied to RecordMaintenanceEvent.
 //
 // Returns:
@@ -353,7 +353,7 @@ func (s *Store) RecordMaintenanceEvent(_ context.Context, event domain.Maintenan
 // ListMaintenanceEvents returns Store records matching the supplied scope and filters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListMaintenanceEvents.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - aircraftID: identifies the target aircraft.
 //
 // Returns:
@@ -375,7 +375,7 @@ func (s *Store) ListMaintenanceEvents(_ context.Context, aircraftID string) ([]d
 // CreateOperationalIntent creates and stores the supplied Store record.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to CreateOperationalIntent.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intent: is the domain.OperationalIntent value supplied to CreateOperationalIntent.
 //
 // Returns:
@@ -395,7 +395,7 @@ func (s *Store) CreateOperationalIntent(_ context.Context, intent domain.Operati
 // UpdateOperationalIntent updates the selected Store state while enforcing its consistency checks.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to UpdateOperationalIntent.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intent: is the domain.OperationalIntent value supplied to UpdateOperationalIntent.
 //   - expectedRevision: is the int64 value supplied to UpdateOperationalIntent.
 //
@@ -436,7 +436,7 @@ func (s *Store) updateOperationalIntentLocked(intent domain.OperationalIntent, e
 // AcceptOperationalIntent accepts the selected Store state after validating its current revision.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to AcceptOperationalIntent.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intent: is the domain.OperationalIntent value supplied to AcceptOperationalIntent.
 //   - expectedRevision: is the int64 value supplied to AcceptOperationalIntent.
 //
@@ -474,7 +474,7 @@ func (s *Store) acceptOperationalIntentLocked(intent domain.OperationalIntent, e
 // AcceptOperationalIntentAndRequestPublication accepts the selected Store state after validating its current revision.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to AcceptOperationalIntentAndRequestPublication.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intent: is the domain.OperationalIntent value supplied to AcceptOperationalIntentAndRequestPublication.
 //   - expectedRevision: is the int64 value supplied to AcceptOperationalIntentAndRequestPublication.
 //   - publication: is the domain.OperationalIntentPublication value supplied to AcceptOperationalIntentAndRequestPublication.
@@ -494,7 +494,7 @@ func (s *Store) AcceptOperationalIntentAndRequestPublication(_ context.Context, 
 // UpdateOperationalIntentAndRequestPublication updates the selected Store state while enforcing its consistency checks.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to UpdateOperationalIntentAndRequestPublication.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intent: is the domain.OperationalIntent value supplied to UpdateOperationalIntentAndRequestPublication.
 //   - expectedRevision: is the int64 value supplied to UpdateOperationalIntentAndRequestPublication.
 //   - publication: is the domain.OperationalIntentPublication value supplied to UpdateOperationalIntentAndRequestPublication.
@@ -514,7 +514,7 @@ func (s *Store) UpdateOperationalIntentAndRequestPublication(_ context.Context, 
 // RequestOperationalIntentPublication requests the selected Store operation and records it for processing.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to RequestOperationalIntentPublication.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - publication: is the domain.OperationalIntentPublication value supplied to RequestOperationalIntentPublication.
 //
 // Returns:
@@ -532,7 +532,7 @@ func (s *Store) RequestOperationalIntentPublication(_ context.Context, publicati
 // RequestOperationalIntentPublicationIfCurrent requests the selected Store operation and records it for processing.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to RequestOperationalIntentPublicationIfCurrent.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - publication: is the domain.OperationalIntentPublication value supplied to RequestOperationalIntentPublicationIfCurrent.
 //   - expectedIntentVersion: is the int value supplied to RequestOperationalIntentPublicationIfCurrent.
 //   - expectedIntentRevision: is the int64 value supplied to RequestOperationalIntentPublicationIfCurrent.
@@ -590,7 +590,7 @@ func (s *Store) requestPublicationLocked(request domain.OperationalIntentPublica
 // GetOperationalIntentPublication returns the current DSS publication state for an intent.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to GetOperationalIntentPublication.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intentID: identifies the target intent.
 //
 // Returns:
@@ -609,7 +609,7 @@ func (s *Store) GetOperationalIntentPublication(_ context.Context, intentID stri
 // ClaimOperationalIntentPublication atomically leases eligible Store work to a worker.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ClaimOperationalIntentPublication.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intentID: identifies the target intent.
 //   - now: supplies the event or wall-clock timestamp used by the operation.
 //   - leaseUntil: is the time.Time value supplied to ClaimOperationalIntentPublication.
@@ -640,7 +640,7 @@ func (s *Store) ClaimOperationalIntentPublication(_ context.Context, intentID st
 // ClaimDueOperationalIntentPublications atomically leases eligible Store work to a worker.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ClaimDueOperationalIntentPublications.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - now: supplies the event or wall-clock timestamp used by the operation.
 //   - leaseUntil: is the time.Time value supplied to ClaimDueOperationalIntentPublications.
 //   - limit: caps the number of records claimed or returned in one call.
@@ -688,7 +688,7 @@ func (s *Store) ClaimDueOperationalIntentPublications(_ context.Context, now, le
 // RenewOperationalIntentPublicationLease extends the selected Store lease when the caller still owns its fence.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to RenewOperationalIntentPublicationLease.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intentID: identifies the target intent.
 //   - expectedRevision: is the int64 value supplied to RenewOperationalIntentPublicationLease.
 //   - leaseUntil: is the time.Time value supplied to RenewOperationalIntentPublicationLease.
@@ -713,7 +713,7 @@ func (s *Store) RenewOperationalIntentPublicationLease(_ context.Context, intent
 // UpdateOperationalIntentPublication updates the selected Store state while enforcing its consistency checks.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to UpdateOperationalIntentPublication.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - publication: is the domain.OperationalIntentPublication value supplied to UpdateOperationalIntentPublication.
 //   - expectedRevision: is the int64 value supplied to UpdateOperationalIntentPublication.
 //
@@ -738,7 +738,7 @@ func (s *Store) UpdateOperationalIntentPublication(_ context.Context, publicatio
 // ConfirmOperationalIntentPublication confirms the selected Store transition and records its durable outcome.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ConfirmOperationalIntentPublication.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - publication: is the domain.OperationalIntentPublication value supplied to ConfirmOperationalIntentPublication.
 //   - expectedRevision: is the int64 value supplied to ConfirmOperationalIntentPublication.
 //   - notifications: is the []domain.PeerNotification value supplied to ConfirmOperationalIntentPublication.
@@ -777,7 +777,7 @@ func (s *Store) enqueuePeerNotificationsLocked(notifications []domain.PeerNotifi
 // ClaimDuePeerNotifications atomically leases eligible Store work to a worker.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ClaimDuePeerNotifications.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - now: supplies the event or wall-clock timestamp used by the operation.
 //   - leaseUntil: is the time.Time value supplied to ClaimDuePeerNotifications.
 //   - limit: caps the number of records claimed or returned in one call.
@@ -814,7 +814,7 @@ func (s *Store) ClaimDuePeerNotifications(_ context.Context, now, leaseUntil tim
 // UpdatePeerNotification updates the selected Store state while enforcing its consistency checks.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to UpdatePeerNotification.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - notification: is the domain.PeerNotification value supplied to UpdatePeerNotification.
 //   - expectedRevision: is the int64 value supplied to UpdatePeerNotification.
 //
@@ -839,7 +839,7 @@ func (s *Store) UpdatePeerNotification(_ context.Context, notification domain.Pe
 // RecordReceivedPeerNotification durably records the supplied Store data.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to RecordReceivedPeerNotification.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - notification: is the domain.ReceivedPeerNotification value supplied to RecordReceivedPeerNotification.
 //
 // Returns:
@@ -856,7 +856,7 @@ func (s *Store) RecordReceivedPeerNotification(_ context.Context, notification d
 // ListReceivedPeerNotifications returns Store records matching the supplied scope and filters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListReceivedPeerNotifications.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intentID: identifies the target intent.
 //
 // Returns:
@@ -885,7 +885,7 @@ func clonePublication(publication domain.OperationalIntentPublication) domain.Op
 // GetOperationalIntent returns the current version of one operational intent.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to GetOperationalIntent.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intentID: identifies the target intent.
 //
 // Returns:
@@ -904,7 +904,7 @@ func (s *Store) GetOperationalIntent(_ context.Context, intentID string) (domain
 // GetOperationalIntentVersion returns one immutable historical intent version.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to GetOperationalIntentVersion.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intentID: identifies the target intent.
 //   - version: is the int value supplied to GetOperationalIntentVersion.
 //
@@ -924,7 +924,7 @@ func (s *Store) GetOperationalIntentVersion(_ context.Context, intentID string, 
 // ListOperationalIntents returns Store records matching the supplied scope and filters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListOperationalIntents.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - aircraftID: identifies the target aircraft.
 //
 // Returns:
@@ -953,7 +953,7 @@ func (s *Store) ListOperationalIntents(_ context.Context, aircraftID string) ([]
 // ListOperationalIntentVersions returns Store records matching the supplied scope and filters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListOperationalIntentVersions.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intentID: identifies the target intent.
 //
 // Returns:
@@ -980,7 +980,7 @@ func (s *Store) ListOperationalIntentVersions(_ context.Context, intentID string
 // RecordOperationalVolume durably records the supplied Store data.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to RecordOperationalVolume.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - volume: is the domain.OperationalVolume value supplied to RecordOperationalVolume.
 //
 // Returns:
@@ -995,7 +995,7 @@ func (s *Store) RecordOperationalVolume(_ context.Context, volume domain.Operati
 // ReplaceOperationalVolumes atomically replaces the selected Store records.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ReplaceOperationalVolumes.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intentID: identifies the target intent.
 //   - intentVersion: is the int value supplied to ReplaceOperationalVolumes.
 //   - volumes: is the []domain.OperationalVolume value supplied to ReplaceOperationalVolumes.
@@ -1024,7 +1024,7 @@ func (s *Store) ReplaceOperationalVolumes(_ context.Context, intentID string, in
 // ReplaceOperationalIntent atomically replaces the selected Store records.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ReplaceOperationalIntent.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - expectedVersion: is the int value supplied to ReplaceOperationalIntent.
 //   - expectedRevision: is the int64 value supplied to ReplaceOperationalIntent.
 //   - intent: is the domain.OperationalIntent value supplied to ReplaceOperationalIntent.
@@ -1079,7 +1079,7 @@ func (s *Store) ReplaceOperationalIntent(
 // ListOperationalVolumes returns Store records matching the supplied scope and filters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListOperationalVolumes.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intentID: identifies the target intent.
 //
 // Returns:
@@ -1133,7 +1133,7 @@ func (s *Store) latestOperationalIntent(intentID string) (domain.OperationalInte
 // UpsertRegulatoryAuthorization creates or replaces the supplied Store record by identity.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to UpsertRegulatoryAuthorization.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - authorization: is the domain.RegulatoryAuthorization value supplied to UpsertRegulatoryAuthorization.
 //
 // Returns:
@@ -1148,7 +1148,7 @@ func (s *Store) UpsertRegulatoryAuthorization(_ context.Context, authorization d
 // GetRegulatoryAuthorization returns one regulatory authorization by identity.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to GetRegulatoryAuthorization.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - authorizationID: identifies the target authorization.
 //
 // Returns:
@@ -1167,7 +1167,7 @@ func (s *Store) GetRegulatoryAuthorization(_ context.Context, authorizationID st
 // ListRegulatoryAuthorizations returns Store records matching the supplied scope and filters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListRegulatoryAuthorizations.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - operatorID: identifies the target operator.
 //
 // Returns:
@@ -1191,7 +1191,7 @@ func (s *Store) ListRegulatoryAuthorizations(_ context.Context, operatorID strin
 // RecordPreflightCheck durably records the supplied Store data.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to RecordPreflightCheck.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - check: is the domain.PreflightCheck value supplied to RecordPreflightCheck.
 //
 // Returns:
@@ -1212,7 +1212,7 @@ func (s *Store) RecordPreflightCheck(_ context.Context, check domain.PreflightCh
 // ListPreflightChecks returns Store records matching the supplied scope and filters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListPreflightChecks.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intentID: identifies the target intent.
 //
 // Returns:
@@ -1234,7 +1234,7 @@ func (s *Store) ListPreflightChecks(_ context.Context, intentID string) ([]domai
 // CreateFlightRecord creates and stores the supplied Store record.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to CreateFlightRecord.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - flight: is the domain.FlightRecord value supplied to CreateFlightRecord.
 //
 // Returns:
@@ -1249,7 +1249,7 @@ func (s *Store) CreateFlightRecord(_ context.Context, flight domain.FlightRecord
 // GetFlightRecord returns one durable flight record by identity.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to GetFlightRecord.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - flightID: identifies the target flight.
 //
 // Returns:
@@ -1268,7 +1268,7 @@ func (s *Store) GetFlightRecord(_ context.Context, flightID string) (domain.Flig
 // ListFlightRecords returns Store records matching the supplied scope and filters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListFlightRecords.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - aircraftID: identifies the target aircraft.
 //
 // Returns:
@@ -1290,7 +1290,7 @@ func (s *Store) ListFlightRecords(_ context.Context, aircraftID string) ([]domai
 // RecordConformanceEvent durably records the supplied Store data.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to RecordConformanceEvent.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - event: is the domain.ConformanceEvent value supplied to RecordConformanceEvent.
 //
 // Returns:
@@ -1311,7 +1311,7 @@ func (s *Store) RecordConformanceEvent(_ context.Context, event domain.Conforman
 // ListConformanceEvents returns Store records matching the supplied scope and filters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListConformanceEvents.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - flightID: identifies the target flight.
 //
 // Returns:
@@ -1333,7 +1333,7 @@ func (s *Store) ListConformanceEvents(_ context.Context, flightID string) ([]dom
 // UpsertConformanceSummary creates or replaces the supplied Store record by identity.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to UpsertConformanceSummary.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - summary: is the domain.ConformanceSummary value supplied to UpsertConformanceSummary.
 //
 // Returns:
@@ -1348,7 +1348,7 @@ func (s *Store) UpsertConformanceSummary(_ context.Context, summary domain.Confo
 // GetConformanceSummary returns the current conformance projection for an intent.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to GetConformanceSummary.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intentID: identifies the target intent.
 //
 // Returns:
@@ -1375,7 +1375,7 @@ func (s *Store) GetConformanceSummary(_ context.Context, intentID string) (*doma
 // ListConformanceSummaries returns Store records matching the supplied scope and filters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListConformanceSummaries.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intentID: identifies the target intent.
 //
 // Returns:
@@ -1397,7 +1397,7 @@ func (s *Store) ListConformanceSummaries(_ context.Context, intentID string) ([]
 // RecordEvidence durably records the supplied Store data.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to RecordEvidence.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - record: is the domain.EvidenceRecord value supplied to RecordEvidence.
 //
 // Returns:
@@ -1412,7 +1412,7 @@ func (s *Store) RecordEvidence(_ context.Context, record domain.EvidenceRecord) 
 // ListEvidence returns Store records matching the supplied scope and filters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListEvidence.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intentID: identifies the target intent.
 //
 // Returns:
@@ -1434,7 +1434,7 @@ func (s *Store) ListEvidence(_ context.Context, intentID string) ([]domain.Evide
 // RecordReportabilityReview durably records the supplied Store data.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to RecordReportabilityReview.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - review: is the domain.ReportabilityReview value supplied to RecordReportabilityReview.
 //
 // Returns:
@@ -1449,7 +1449,7 @@ func (s *Store) RecordReportabilityReview(_ context.Context, review domain.Repor
 // ListReportabilityReviews returns Store records matching the supplied scope and filters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListReportabilityReviews.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intentID: identifies the target intent.
 //
 // Returns:
@@ -1471,7 +1471,7 @@ func (s *Store) ListReportabilityReviews(_ context.Context, intentID string) ([]
 // RecordComplianceFinding durably records the supplied Store data.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to RecordComplianceFinding.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - finding: is the domain.ComplianceFinding value supplied to RecordComplianceFinding.
 //
 // Returns:
@@ -1492,7 +1492,7 @@ func (s *Store) RecordComplianceFinding(_ context.Context, finding domain.Compli
 // ListComplianceFindings returns Store records matching the supplied scope and filters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListComplianceFindings.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - subjectType: is the string value supplied to ListComplianceFindings.
 //   - subjectID: identifies the target subject.
 //
@@ -1519,7 +1519,7 @@ func (s *Store) ListComplianceFindings(_ context.Context, subjectType string, su
 // ListComplianceFindingsForIntent returns Store records matching the supplied scope and filters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListComplianceFindingsForIntent.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intentID: identifies the target intent.
 //
 // Returns:
@@ -1541,7 +1541,7 @@ func (s *Store) ListComplianceFindingsForIntent(_ context.Context, intentID stri
 // RecordConflictFinding durably records the supplied Store data.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to RecordConflictFinding.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - finding: is the domain.ConflictFinding value supplied to RecordConflictFinding.
 //
 // Returns:
@@ -1562,7 +1562,7 @@ func (s *Store) RecordConflictFinding(_ context.Context, finding domain.Conflict
 // ListConflictFindings returns Store records matching the supplied scope and filters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListConflictFindings.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intentID: identifies the target intent.
 //   - intentVersion: is the int value supplied to ListConflictFindings.
 //
@@ -1594,7 +1594,7 @@ func (s *Store) ListConflictFindings(_ context.Context, intentID string, intentV
 // ReplaceConflictFindings atomically replaces the selected Store records.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ReplaceConflictFindings.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intentID: identifies the target intent.
 //   - intentVersion: is the int value supplied to ReplaceConflictFindings.
 //   - ruleVersion: is the string value supplied to ReplaceConflictFindings.
@@ -1624,7 +1624,7 @@ func (s *Store) ReplaceConflictFindings(_ context.Context, intentID string, inte
 // UpsertOperationsPersonnel creates or replaces the supplied Store record by identity.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to UpsertOperationsPersonnel.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - person: is the domain.OperationsPersonnel value supplied to UpsertOperationsPersonnel.
 //
 // Returns:
@@ -1639,7 +1639,7 @@ func (s *Store) UpsertOperationsPersonnel(_ context.Context, person domain.Opera
 // GetOperationsPersonnel returns one operations-personnel record by identity.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to GetOperationsPersonnel.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - personID: identifies the target person.
 //
 // Returns:
@@ -1658,7 +1658,7 @@ func (s *Store) GetOperationsPersonnel(_ context.Context, personID string) (doma
 // RecordPersonnelAssignment durably records the supplied Store data.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to RecordPersonnelAssignment.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - assignment: is the domain.PersonnelAssignment value supplied to RecordPersonnelAssignment.
 //
 // Returns:
@@ -1673,7 +1673,7 @@ func (s *Store) RecordPersonnelAssignment(_ context.Context, assignment domain.P
 // ListPersonnelAssignments returns Store records matching the supplied scope and filters.
 //
 // Parameters:
-//   - value: is the context.Context value supplied to ListPersonnelAssignments.
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
 //   - intentID: identifies the target intent.
 //
 // Returns:
