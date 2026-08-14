@@ -324,7 +324,7 @@ func (s *Store) ListOperatingLimits(_ context.Context, aircraftID string) ([]dom
 //
 // Parameters:
 //   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
-//   - limit: caps the number of records claimed or returned in one call.
+//   - limit: is the operating-limit record stored or replaced by its ID.
 //
 // Returns:
 //   - error: reports validation, dependency, cancellation, or persistence failures.
