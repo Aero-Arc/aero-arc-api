@@ -26,6 +26,15 @@ type DeconflictionService struct {
 	now              func() time.Time
 }
 
+// NewDeconflictionService constructs deconfliction from the supplied configuration and dependencies.
+//
+// Parameters:
+//   - store: is the durable.Store value supplied to NewDeconflictionService.
+//   - providers: identifies the target providers.
+//
+// Returns:
+//   - result: is the *DeconflictionService value produced by NewDeconflictionService.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func NewDeconflictionService(
 	store durable.Store,
 	providers ...airspaceprovider.Provider,
@@ -33,6 +42,16 @@ func NewDeconflictionService(
 	return newDeconflictionService(store, nil, publicationLease, providers...)
 }
 
+// NewDeconflictionServiceWithPublicationLease constructs deconfliction from the supplied configuration and dependencies.
+//
+// Parameters:
+//   - store: is the durable.Store value supplied to NewDeconflictionServiceWithPublicationLease.
+//   - lease: defines the time bound applied by the operation.
+//   - providers: identifies the target providers.
+//
+// Returns:
+//   - result: is the *DeconflictionService value produced by NewDeconflictionServiceWithPublicationLease.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func NewDeconflictionServiceWithPublicationLease(
 	store durable.Store,
 	lease time.Duration,
@@ -41,6 +60,16 @@ func NewDeconflictionServiceWithPublicationLease(
 	return newDeconflictionService(store, nil, lease, providers...)
 }
 
+// NewDeconflictionServiceWithClock constructs deconfliction from the supplied configuration and dependencies.
+//
+// Parameters:
+//   - store: is the durable.Store value supplied to NewDeconflictionServiceWithClock.
+//   - now: supplies the event or wall-clock timestamp used by the operation.
+//   - providers: identifies the target providers.
+//
+// Returns:
+//   - result: is the *DeconflictionService value produced by NewDeconflictionServiceWithClock.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func NewDeconflictionServiceWithClock(
 	store durable.Store,
 	now func() time.Time,
@@ -82,6 +111,16 @@ func newDeconflictionService(
 	return service, nil
 }
 
+// CheckIntent evaluates an intent version against local and peer operational
+// volumes, then durably replaces that version's conflict findings.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the domain.DeconflictionResult value produced by CheckIntent.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *DeconflictionService) CheckIntent(ctx context.Context, intentID string) (domain.DeconflictionResult, error) {
 	intent, volumes, err := s.loadIntent(ctx, intentID)
 	if err != nil {
@@ -202,6 +241,15 @@ func sourceKey(source airspaceprovider.Source) string {
 	}, "\x00")
 }
 
+// ListConflictFindings returns DeconflictionService records matching the supplied scope and filters.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the []domain.ConflictFinding value produced by ListConflictFindings.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *DeconflictionService) ListConflictFindings(ctx context.Context, intentID string) ([]domain.ConflictFinding, error) {
 	if strings.TrimSpace(intentID) == "" {
 		return nil, fmt.Errorf("validation failed: intent_id is required")

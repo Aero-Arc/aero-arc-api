@@ -23,10 +23,22 @@ const (
 	peerNotificationBatch = 20
 )
 
+// PublishingEnabled reports whether the configured airspace provider supports publication.
+//
+// Returns:
+//   - bool: reports whether the requested condition was satisfied.
 func (s *DeconflictionService) PublishingEnabled() bool {
 	return s.publisher != nil && s.publisher.PublicationEnabled()
 }
 
+// PublicationRequest returns the current durable publication request for an intent.
+//
+// Parameters:
+//   - intent: is the domain.OperationalIntent value supplied to PublicationRequest.
+//   - state: is the domain.OperationalIntentExternalState value supplied to PublicationRequest.
+//
+// Returns:
+//   - result: is the domain.OperationalIntentPublication value produced by PublicationRequest.
 func (s *DeconflictionService) PublicationRequest(intent domain.OperationalIntent, state domain.OperationalIntentExternalState) domain.OperationalIntentPublication {
 	now := s.now().UTC()
 	return domain.OperationalIntentPublication{
@@ -35,6 +47,15 @@ func (s *DeconflictionService) PublicationRequest(intent domain.OperationalInten
 	}
 }
 
+// ValidatePublication validates DeconflictionService for required fields, supported values, and safety constraints.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intent: is the domain.OperationalIntent value supplied to ValidatePublication.
+//   - state: is the domain.OperationalIntentExternalState value supplied to ValidatePublication.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *DeconflictionService) ValidatePublication(ctx context.Context, intent domain.OperationalIntent, state domain.OperationalIntentExternalState) error {
 	volumes, err := s.durable.ListOperationalVolumes(ctx, intent.ID)
 	if err != nil {
@@ -49,14 +70,42 @@ func (s *DeconflictionService) ValidatePublication(ctx context.Context, intent d
 	})
 }
 
+// GetPublication returns the durable DSS publication state for one intent.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the domain.OperationalIntentPublication value produced by GetPublication.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *DeconflictionService) GetPublication(ctx context.Context, intentID string) (domain.OperationalIntentPublication, error) {
 	return s.durable.GetOperationalIntentPublication(ctx, intentID)
 }
 
+// RecordReceivedPeerNotification durably records the supplied DeconflictionService data.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - notification: is the domain.ReceivedPeerNotification value supplied to RecordReceivedPeerNotification.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *DeconflictionService) RecordReceivedPeerNotification(ctx context.Context, notification domain.ReceivedPeerNotification) error {
 	return s.durable.RecordReceivedPeerNotification(ctx, notification)
 }
 
+// GetPublishedOperationalIntent fetches the authoritative published intent details from the provider.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//   - dssVersion: is the int value supplied to GetPublishedOperationalIntent.
+//
+// Returns:
+//   - result: is the domain.OperationalIntentPublication value produced by GetPublishedOperationalIntent.
+//   - result: is the []domain.OperationalVolume value produced by GetPublishedOperationalIntent.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *DeconflictionService) GetPublishedOperationalIntent(ctx context.Context, intentID string, dssVersion int) (domain.OperationalIntentPublication, []domain.OperationalVolume, error) {
 	publication, err := s.GetPublication(ctx, intentID)
 	if err != nil {
@@ -74,6 +123,14 @@ func (s *DeconflictionService) GetPublishedOperationalIntent(ctx context.Context
 	return publication, volumesForVersion(volumes, publication.PublishedIntentVersion), nil
 }
 
+// ReconcileIntent reconciles DeconflictionService state with its desired external state.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *DeconflictionService) ReconcileIntent(ctx context.Context, intentID string) error {
 	if !s.PublishingEnabled() {
 		return fmt.Errorf("DSS publication is not configured")
@@ -86,6 +143,10 @@ func (s *DeconflictionService) ReconcileIntent(ctx context.Context, intentID str
 	return s.reconcileClaimed(ctx, publication)
 }
 
+// RunPublicationWorker runs DeconflictionService until completion, cancellation, or a terminal error.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
 func (s *DeconflictionService) RunPublicationWorker(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -101,6 +162,13 @@ func (s *DeconflictionService) RunPublicationWorker(ctx context.Context) {
 	}
 }
 
+// ReconcileDue reconciles DeconflictionService state with its desired external state.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *DeconflictionService) ReconcileDue(ctx context.Context) error {
 	if !s.PublishingEnabled() {
 		return nil
@@ -330,6 +398,13 @@ func (s *DeconflictionService) buildPeerNotifications(request airspaceprovider.P
 	return notifications, nil
 }
 
+// DeliverDuePeerNotifications delivers due DeconflictionService work and records each delivery outcome.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *DeconflictionService) DeliverDuePeerNotifications(ctx context.Context) error {
 	if !s.PublishingEnabled() {
 		return nil

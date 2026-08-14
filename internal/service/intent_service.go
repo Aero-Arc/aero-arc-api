@@ -26,10 +26,18 @@ type ActiveIntentModificationError struct {
 	Version  int
 }
 
+// Error returns the active-intent modification failure message.
+//
+// Returns:
+//   - result: is the string value produced by Error.
 func (e ActiveIntentModificationError) Error() string {
 	return fmt.Sprintf("%s: active intent modification blocked", ErrInvalidTransition)
 }
 
+// Unwrap returns the underlying lifecycle error for errors.Is and errors.As.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (e ActiveIntentModificationError) Unwrap() error {
 	return ErrInvalidTransition
 }
@@ -119,10 +127,27 @@ type ModifyIntentResult struct {
 	SupersedesVersion  int                        `json:"supersedes_version,omitempty"`
 }
 
+// NewIntentService constructs service from the supplied configuration and dependencies.
+//
+// Parameters:
+//   - durableStore: is the durable.Store value supplied to NewIntentService.
+//   - deconfliction: is the DeconflictionCoordinator value supplied to NewIntentService.
+//
+// Returns:
+//   - result: is the *IntentService value produced by NewIntentService.
 func NewIntentService(durableStore durable.Store, deconfliction DeconflictionCoordinator) *IntentService {
 	return NewIntentServiceWithClock(durableStore, nil, deconfliction)
 }
 
+// NewIntentServiceWithClock constructs service from the supplied configuration and dependencies.
+//
+// Parameters:
+//   - durableStore: is the durable.Store value supplied to NewIntentServiceWithClock.
+//   - now: supplies the event or wall-clock timestamp used by the operation.
+//   - deconfliction: is the DeconflictionCoordinator value supplied to NewIntentServiceWithClock.
+//
+// Returns:
+//   - result: is the *IntentService value produced by NewIntentServiceWithClock.
 func NewIntentServiceWithClock(durableStore durable.Store, now func() time.Time, deconfliction DeconflictionCoordinator) *IntentService {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
@@ -134,6 +159,15 @@ func NewIntentServiceWithClock(durableStore durable.Store, now func() time.Time,
 	}
 }
 
+// CreateIntent creates and stores the supplied IntentService record.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - req: contains the validated request payload.
+//
+// Returns:
+//   - result: is the domain.OperationalIntent value produced by CreateIntent.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *IntentService) CreateIntent(ctx context.Context, req CreateIntentRequest) (domain.OperationalIntent, error) {
 	now := s.now().UTC()
 	id := strings.TrimSpace(req.ID)
@@ -192,6 +226,15 @@ func (s *IntentService) CreateIntent(ctx context.Context, req CreateIntentReques
 	return intent, nil
 }
 
+// GetIntent returns the current operational intent together with its versioned volumes.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the domain.OperationalIntent value produced by GetIntent.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *IntentService) GetIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error) {
 	intent, err := s.durable.GetOperationalIntent(ctx, intentID)
 	if err != nil {
@@ -200,6 +243,16 @@ func (s *IntentService) GetIntent(ctx context.Context, intentID string) (domain.
 	return intent, nil
 }
 
+// AddOperationalVolume adds the supplied value to IntentService.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//   - req: contains the validated request payload.
+//
+// Returns:
+//   - result: is the domain.OperationalVolume value produced by AddOperationalVolume.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *IntentService) AddOperationalVolume(ctx context.Context, intentID string, req AddOperationalVolumeRequest) (domain.OperationalVolume, error) {
 	intent, err := s.durable.GetOperationalIntent(ctx, intentID)
 	if err != nil {
@@ -244,6 +297,17 @@ func (s *IntentService) AddOperationalVolume(ctx context.Context, intentID strin
 	return volume, nil
 }
 
+// ModifyIntent creates a replacement version of a mutable operational intent
+// after validating its revision and supplied volumes.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//   - req: contains the validated request payload.
+//
+// Returns:
+//   - result: is the ModifyIntentResult value produced by ModifyIntent.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *IntentService) ModifyIntent(ctx context.Context, intentID string, req ModifyIntentRequest) (ModifyIntentResult, error) {
 	intent, err := s.durable.GetOperationalIntent(ctx, intentID)
 	if err != nil {
@@ -311,6 +375,16 @@ func (s *IntentService) ModifyIntent(ctx context.Context, intentID string, req M
 	return result, nil
 }
 
+// SubmitIntent runs deconfliction for the current version and advances an
+// eligible draft intent into its submitted lifecycle state.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the domain.OperationalIntent value produced by SubmitIntent.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *IntentService) SubmitIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error) {
 	return s.transitionIntent(ctx, intentID, domain.IntentStatusSubmitted, map[domain.IntentStatus]bool{
 		domain.IntentStatusDraft: true,
@@ -319,6 +393,15 @@ func (s *IntentService) SubmitIntent(ctx context.Context, intentID string) (doma
 	})
 }
 
+// AcceptIntent accepts the selected IntentService state after validating its current revision.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the domain.OperationalIntent value produced by AcceptIntent.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *IntentService) AcceptIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error) {
 	intent, err := s.durable.GetOperationalIntent(ctx, intentID)
 	if err != nil {
@@ -353,6 +436,16 @@ func (s *IntentService) AcceptIntent(ctx context.Context, intentID string) (doma
 	return intent, nil
 }
 
+// ActivateIntent advances an accepted intent to active and establishes its
+// operation context with the assigned Relay when required.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the domain.OperationalIntent value produced by ActivateIntent.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *IntentService) ActivateIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error) {
 	intent, err := s.durable.GetOperationalIntent(ctx, intentID)
 	if err != nil {
@@ -487,6 +580,15 @@ func canonicalDSSIntentID(id string) (string, error) {
 	return parsed.String(), nil
 }
 
+// CompleteIntent transitions an active intent to complete and clears its Relay context.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the domain.OperationalIntent value produced by CompleteIntent.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *IntentService) CompleteIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error) {
 	return s.transitionIntentWithPublication(ctx, intentID, domain.IntentStatusComplete, map[domain.IntentStatus]bool{
 		domain.IntentStatusActive: true,
@@ -495,6 +597,15 @@ func (s *IntentService) CompleteIntent(ctx context.Context, intentID string) (do
 	}, domain.OperationalIntentExternalStateWithdrawn)
 }
 
+// CancelIntent transitions an eligible intent to cancelled and clears its Relay context.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the domain.OperationalIntent value produced by CancelIntent.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *IntentService) CancelIntent(ctx context.Context, intentID string) (domain.OperationalIntent, error) {
 	return s.transitionIntentWithPublication(ctx, intentID, domain.IntentStatusCanceled, map[domain.IntentStatus]bool{
 		domain.IntentStatusDraft:     true,

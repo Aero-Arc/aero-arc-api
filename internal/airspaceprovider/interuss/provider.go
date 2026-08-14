@@ -169,10 +169,23 @@ func newPeerHTTPClient(timeout time.Duration, allowInsecurePeerURLs bool) *http.
 	}
 }
 
+// ID returns the stable identifier for the InterUSS airspace provider.
+//
+// Returns:
+//   - result: is the string value produced by ID.
 func (p *Provider) ID() string {
 	return providerID
 }
 
+// FindOperationalIntents finds Provider records matching the supplied criteria.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - query: is the airspaceprovider.Query value supplied to FindOperationalIntents.
+//
+// Returns:
+//   - result: is the []airspaceprovider.OperationalIntent value produced by FindOperationalIntents.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (p *Provider) FindOperationalIntents(ctx context.Context, query airspaceprovider.Query) ([]airspaceprovider.OperationalIntent, error) {
 	if p.reader == nil {
 		return nil, fmt.Errorf("InterUSS client is not configured")
@@ -236,6 +249,15 @@ type scdClient struct {
 	allowInsecurePeerURLs bool
 }
 
+// QueryOperationalIntentReferences queries scdClient with the supplied statement and parameters.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - area: is the scdv1.Volume4D value supplied to QueryOperationalIntentReferences.
+//
+// Returns:
+//   - result: is the []scdv1.OperationalIntentReference value produced by QueryOperationalIntentReferences.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (c *scdClient) QueryOperationalIntentReferences(ctx context.Context, area scdv1.Volume4D) ([]scdv1.OperationalIntentReference, error) {
 	response, err := c.dssClient.SCDv1.QueryOperationalIntentReferencesWithResponse(
 		ctx,
@@ -257,6 +279,15 @@ func (c *scdClient) QueryOperationalIntentReferences(ctx context.Context, area s
 	return response.JSON200.OperationalIntentReferences, nil
 }
 
+// GetOperationalIntent fetches one DSS operational-intent detail record by reference.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - reference: is the scdv1.OperationalIntentReference value supplied to GetOperationalIntent.
+//
+// Returns:
+//   - result: is the *scdv1.OperationalIntent value produced by GetOperationalIntent.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (c *scdClient) GetOperationalIntent(ctx context.Context, reference scdv1.OperationalIntentReference) (*scdv1.OperationalIntent, error) {
 	baseURL, err := reference.UssBaseUrl.AsUssBaseURL()
 	if err != nil {

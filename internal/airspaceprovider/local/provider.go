@@ -17,14 +17,34 @@ type Provider struct {
 	store durable.OperationalStore
 }
 
+// New constructs local from the supplied configuration and dependencies.
+//
+// Parameters:
+//   - store: is the durable.OperationalStore value supplied to New.
+//
+// Returns:
+//   - result: is the *Provider value produced by New.
 func New(store durable.OperationalStore) *Provider {
 	return &Provider{store: store}
 }
 
+// ID returns the stable identifier for the local airspace provider.
+//
+// Returns:
+//   - result: is the string value produced by ID.
 func (p *Provider) ID() string {
 	return airspaceprovider.ProviderLocal
 }
 
+// FindOperationalIntents finds Provider records matching the supplied criteria.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - query: is the airspaceprovider.Query value supplied to FindOperationalIntents.
+//
+// Returns:
+//   - result: is the []airspaceprovider.OperationalIntent value produced by FindOperationalIntents.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (p *Provider) FindOperationalIntents(
 	ctx context.Context,
 	query airspaceprovider.Query,

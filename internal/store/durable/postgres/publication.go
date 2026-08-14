@@ -12,6 +12,16 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// AcceptOperationalIntentAndRequestPublication accepts the selected Store state after validating its current revision.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intent: is the domain.OperationalIntent value supplied to AcceptOperationalIntentAndRequestPublication.
+//   - expectedRevision: is the int64 value supplied to AcceptOperationalIntentAndRequestPublication.
+//   - publication: is the domain.OperationalIntentPublication value supplied to AcceptOperationalIntentAndRequestPublication.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) AcceptOperationalIntentAndRequestPublication(ctx context.Context, intent domain.OperationalIntent, expectedRevision int64, publication domain.OperationalIntentPublication) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -33,6 +43,16 @@ func (s *Store) AcceptOperationalIntentAndRequestPublication(ctx context.Context
 	return nil
 }
 
+// UpdateOperationalIntentAndRequestPublication updates the selected Store state while enforcing its consistency checks.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intent: is the domain.OperationalIntent value supplied to UpdateOperationalIntentAndRequestPublication.
+//   - expectedRevision: is the int64 value supplied to UpdateOperationalIntentAndRequestPublication.
+//   - publication: is the domain.OperationalIntentPublication value supplied to UpdateOperationalIntentAndRequestPublication.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) UpdateOperationalIntentAndRequestPublication(ctx context.Context, intent domain.OperationalIntent, expectedRevision int64, publication domain.OperationalIntentPublication) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -54,6 +74,14 @@ func (s *Store) UpdateOperationalIntentAndRequestPublication(ctx context.Context
 	return nil
 }
 
+// RequestOperationalIntentPublication requests the selected Store operation and records it for processing.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - publication: is the domain.OperationalIntentPublication value supplied to RequestOperationalIntentPublication.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) RequestOperationalIntentPublication(ctx context.Context, publication domain.OperationalIntentPublication) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -72,6 +100,17 @@ func (s *Store) RequestOperationalIntentPublication(ctx context.Context, publica
 	return nil
 }
 
+// RequestOperationalIntentPublicationIfCurrent requests the selected Store operation and records it for processing.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - publication: is the domain.OperationalIntentPublication value supplied to RequestOperationalIntentPublicationIfCurrent.
+//   - expectedIntentVersion: is the int value supplied to RequestOperationalIntentPublicationIfCurrent.
+//   - expectedIntentRevision: is the int64 value supplied to RequestOperationalIntentPublicationIfCurrent.
+//   - expectedStatus: is the domain.IntentStatus value supplied to RequestOperationalIntentPublicationIfCurrent.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) RequestOperationalIntentPublicationIfCurrent(ctx context.Context, publication domain.OperationalIntentPublication, expectedIntentVersion int, expectedIntentRevision int64, expectedStatus domain.IntentStatus) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -143,10 +182,30 @@ func requestPublicationTx(ctx context.Context, tx pgx.Tx, request domain.Operati
 	return writePublication(ctx, tx, request)
 }
 
+// GetOperationalIntentPublication returns the durable DSS publication state for one intent.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the domain.OperationalIntentPublication value produced by GetOperationalIntentPublication.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) GetOperationalIntentPublication(ctx context.Context, intentID string) (domain.OperationalIntentPublication, error) {
 	return scanPublication(s.pool.QueryRow(ctx, `SELECT data, revision FROM operational_intent_publications WHERE intent_id = $1`, intentID))
 }
 
+// ClaimOperationalIntentPublication atomically leases eligible Store work to a worker.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//   - now: supplies the event or wall-clock timestamp used by the operation.
+//   - leaseUntil: is the time.Time value supplied to ClaimOperationalIntentPublication.
+//
+// Returns:
+//   - result: is the domain.OperationalIntentPublication value produced by ClaimOperationalIntentPublication.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ClaimOperationalIntentPublication(ctx context.Context, intentID string, now, leaseUntil time.Time) (domain.OperationalIntentPublication, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -170,6 +229,17 @@ func (s *Store) ClaimOperationalIntentPublication(ctx context.Context, intentID 
 	return publication, nil
 }
 
+// ClaimDueOperationalIntentPublications atomically leases eligible Store work to a worker.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - now: supplies the event or wall-clock timestamp used by the operation.
+//   - leaseUntil: is the time.Time value supplied to ClaimDueOperationalIntentPublications.
+//   - limit: caps the number of records claimed or returned in one call.
+//
+// Returns:
+//   - result: is the []domain.OperationalIntentPublication value produced by ClaimDueOperationalIntentPublications.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ClaimDueOperationalIntentPublications(ctx context.Context, now, leaseUntil time.Time, limit int) ([]domain.OperationalIntentPublication, error) {
 	if limit <= 0 {
 		return []domain.OperationalIntentPublication{}, nil
@@ -214,6 +284,16 @@ func claimPublication(publication *domain.OperationalIntentPublication, now, lea
 	publication.UpdatedAt = now
 }
 
+// RenewOperationalIntentPublicationLease extends the selected Store lease when the caller still owns its fence.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//   - expectedRevision: is the int64 value supplied to RenewOperationalIntentPublicationLease.
+//   - leaseUntil: is the time.Time value supplied to RenewOperationalIntentPublicationLease.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) RenewOperationalIntentPublicationLease(ctx context.Context, intentID string, expectedRevision int64, leaseUntil time.Time) error {
 	rawLease, err := json.Marshal(leaseUntil)
 	if err != nil {
@@ -233,6 +313,15 @@ func (s *Store) RenewOperationalIntentPublicationLease(ctx context.Context, inte
 	return nil
 }
 
+// UpdateOperationalIntentPublication updates the selected Store state while enforcing its consistency checks.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - publication: is the domain.OperationalIntentPublication value supplied to UpdateOperationalIntentPublication.
+//   - expectedRevision: is the int64 value supplied to UpdateOperationalIntentPublication.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) UpdateOperationalIntentPublication(ctx context.Context, publication domain.OperationalIntentPublication, expectedRevision int64) error {
 	return updateOperationalIntentPublication(ctx, s.pool, publication, expectedRevision)
 }
@@ -263,6 +352,16 @@ func updateOperationalIntentPublication(ctx context.Context, db querier, publica
 	return nil
 }
 
+// ConfirmOperationalIntentPublication confirms the selected Store transition and records its durable outcome.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - publication: is the domain.OperationalIntentPublication value supplied to ConfirmOperationalIntentPublication.
+//   - expectedRevision: is the int64 value supplied to ConfirmOperationalIntentPublication.
+//   - notifications: is the []domain.PeerNotification value supplied to ConfirmOperationalIntentPublication.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ConfirmOperationalIntentPublication(ctx context.Context, publication domain.OperationalIntentPublication, expectedRevision int64, notifications []domain.PeerNotification) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -299,6 +398,17 @@ func enqueuePeerNotifications(ctx context.Context, db querier, notifications []d
 	return nil
 }
 
+// ClaimDuePeerNotifications atomically leases eligible Store work to a worker.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - now: supplies the event or wall-clock timestamp used by the operation.
+//   - leaseUntil: is the time.Time value supplied to ClaimDuePeerNotifications.
+//   - limit: caps the number of records claimed or returned in one call.
+//
+// Returns:
+//   - result: is the []domain.PeerNotification value produced by ClaimDuePeerNotifications.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ClaimDuePeerNotifications(ctx context.Context, now, leaseUntil time.Time, limit int) ([]domain.PeerNotification, error) {
 	if limit <= 0 {
 		return []domain.PeerNotification{}, nil
@@ -335,6 +445,15 @@ func (s *Store) ClaimDuePeerNotifications(ctx context.Context, now, leaseUntil t
 	return notifications, nil
 }
 
+// UpdatePeerNotification updates the selected Store state while enforcing its consistency checks.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - notification: is the domain.PeerNotification value supplied to UpdatePeerNotification.
+//   - expectedRevision: is the int64 value supplied to UpdatePeerNotification.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) UpdatePeerNotification(ctx context.Context, notification domain.PeerNotification, expectedRevision int64) error {
 	notification.Revision = expectedRevision + 1
 	notification.LeaseUntil = nil
@@ -393,6 +512,14 @@ func readPeerNotifications(rows pgx.Rows) ([]domain.PeerNotification, error) {
 	return notifications, nil
 }
 
+// RecordReceivedPeerNotification durably records the supplied Store data.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - notification: is the domain.ReceivedPeerNotification value supplied to RecordReceivedPeerNotification.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) RecordReceivedPeerNotification(ctx context.Context, notification domain.ReceivedPeerNotification) error {
 	raw, err := json.Marshal(notification)
 	if err != nil {
@@ -408,6 +535,15 @@ func (s *Store) RecordReceivedPeerNotification(ctx context.Context, notification
 	return nil
 }
 
+// ListReceivedPeerNotifications returns Store records matching the supplied scope and filters.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the target intent.
+//
+// Returns:
+//   - result: is the []domain.ReceivedPeerNotification value produced by ListReceivedPeerNotifications.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) ListReceivedPeerNotifications(ctx context.Context, intentID string) ([]domain.ReceivedPeerNotification, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT data FROM received_peer_notifications

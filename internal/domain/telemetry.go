@@ -54,6 +54,11 @@ type LiveAircraftState struct {
 	PlacementLastUpdatedAt time.Time        `json:"placement_last_updated_at,omitempty"`
 }
 
+// MarshalJSON encodes the telemetry value using its stable JSON representation.
+//
+// Returns:
+//   - result: is the []byte value produced by MarshalJSON.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s LiveAircraftState) MarshalJSON() ([]byte, error) {
 	type wireState struct {
 		AircraftID             string           `json:"aircraft_id"`

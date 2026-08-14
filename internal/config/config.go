@@ -70,6 +70,10 @@ type Config struct {
 	Debug                    bool
 }
 
+// Defaults returns the API's baseline development configuration.
+//
+// Returns:
+//   - result: is the *Config value produced by Defaults.
 func Defaults() *Config {
 	return &Config{
 		Addr:                    defaultAddr,
@@ -92,6 +96,11 @@ func Defaults() *Config {
 	}
 }
 
+// Load resolves API configuration from environment variables and validates the result.
+//
+// Returns:
+//   - result: is the *Config value produced by Load.
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func Load() (*Config, error) {
 	cfg := Defaults()
 
@@ -146,6 +155,10 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
+// Validate validates Config for required fields, supported values, and safety constraints.
+//
+// Returns:
+//   - error: reports validation, dependency, cancellation, or persistence failures.
 func (cfg *Config) Validate() error {
 	if cfg.Addr == "" {
 		return fmt.Errorf("AERO_API_ADDR cannot be empty")

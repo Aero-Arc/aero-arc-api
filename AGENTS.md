@@ -52,3 +52,16 @@ and keep DSS integration tests explicitly configured against an external DSS.
 Before handing off changes, run `gofmt`, `go test ./...`,
 `go test -tags=integration ./...`, `go vet ./...`, and `staticcheck ./...` when
 the tool is installed.
+
+## Go documentation
+
+- Every exported handwritten Go function or method must have a lint-valid Go
+  doc comment beginning with its exact identifier.
+- Write for editor hover help: describe observable behavior, parameter meaning,
+  return values, and important validation, persistence, concurrency, or
+  dependency errors. Do not merely translate the signature into prose.
+- Use `Parameters:` and `Returns:` sections for service workflows, store
+  operations, RPC adapters, and other non-trivial APIs. Concise identifier-led
+  comments remain appropriate for simple accessors.
+- Generated protobuf and OpenAPI code retains generator-owned documentation and
+  must not be edited to satisfy this convention.
