@@ -18,7 +18,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-type failingRegistry struct{}
+type failingRegistry struct{ registryv1.AeroRegistryClient }
 
 func (failingRegistry) RegisterRelay(context.Context, *registryv1.RegisterRelayRequest, ...grpc.CallOption) (*registryv1.RegisterRelayResponse, error) {
 	return nil, errors.New("registry unavailable")

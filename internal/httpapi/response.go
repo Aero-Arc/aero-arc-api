@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -42,4 +43,21 @@ func writeServiceError(c *mach.Context, err error) {
 		"error":   "request failed",
 		"details": strings.TrimSpace(err.Error()),
 	})
+}
+
+func writeCommandError(c *mach.Context, err error) {
+	switch {
+	case errors.Is(err, durable.ErrNotFound):
+		writeJSON(c, http.StatusNotFound, map[string]string{"error": "AIRCRAFT_NOT_FOUND", "details": strings.TrimSpace(err.Error())})
+	case errors.Is(err, service.ErrAircraftNotConnected):
+		writeJSON(c, http.StatusConflict, map[string]string{"error": "AIRCRAFT_NOT_CONNECTED", "details": strings.TrimSpace(err.Error())})
+	case errors.Is(err, context.DeadlineExceeded):
+		writeJSON(c, http.StatusGatewayTimeout, map[string]string{"error": "COMMAND_TIMEOUT", "details": strings.TrimSpace(err.Error())})
+	case errors.Is(err, service.ErrValidation):
+		writeJSON(c, http.StatusBadRequest, map[string]string{"error": "INVALID_COMMAND", "details": strings.TrimSpace(err.Error())})
+	case errors.Is(err, service.ErrAircraftCommandDelivery):
+		writeJSON(c, http.StatusBadGateway, map[string]string{"error": "COMMAND_DELIVERY_FAILED", "details": strings.TrimSpace(err.Error())})
+	default:
+		writeJSON(c, http.StatusInternalServerError, map[string]string{"error": "COMMAND_FAILED", "details": strings.TrimSpace(err.Error())})
+	}
 }

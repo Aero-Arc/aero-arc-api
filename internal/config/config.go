@@ -31,6 +31,7 @@ const (
 	defaultTelemetryFreshness  = 15 * time.Second
 	defaultTelemetryLookback   = 5 * time.Minute
 	defaultRequestTimeout      = 3 * time.Second
+	defaultCommandTimeout      = 6 * time.Second
 	defaultDSSOAuthAudience    = "localhost"
 	defaultDSSOAuthIssuer      = "localhost"
 	defaultDSSOAuthSubject     = "aero-arc-api"
@@ -66,6 +67,10 @@ type Config struct {
 	TelemetryFreshness       time.Duration
 	TelemetryLatestLookback  time.Duration
 	RequestTimeout           time.Duration
+	CommandTimeout           time.Duration
+	RelayCAFile              string
+	RelayServerName          string
+	RelayInsecureSkipVerify  bool
 	Seed                     string
 	Debug                    bool
 }
@@ -88,6 +93,7 @@ func Defaults() *Config {
 		TelemetryFreshness:      defaultTelemetryFreshness,
 		TelemetryLatestLookback: defaultTelemetryLookback,
 		RequestTimeout:          defaultRequestTimeout,
+		CommandTimeout:          defaultCommandTimeout,
 		DSSOAuthAudience:        defaultDSSOAuthAudience,
 		DSSOAuthIssuer:          defaultDSSOAuthIssuer,
 		DSSOAuthSubject:         defaultDSSOAuthSubject,
@@ -125,11 +131,16 @@ func Load() (*Config, error) {
 	applyStringEnv("AERO_API_REPLAY_STORE", &cfg.ReplayStore)
 	applyStringEnv("AERO_API_REGISTRY_MODE", &cfg.RegistryMode)
 	applyStringEnv("AERO_API_REGISTRY_ADDR", &cfg.RegistryAddress)
+	applyStringEnv("AERO_API_RELAY_CA_FILE", &cfg.RelayCAFile)
+	applyStringEnv("AERO_API_RELAY_SERVER_NAME", &cfg.RelayServerName)
 	applyStringEnv("AERO_API_SEED", &cfg.Seed)
 	if err := applyBoolEnv("AERO_API_DEBUG", &cfg.Debug); err != nil {
 		return nil, err
 	}
 	if err := applyBoolEnv("AERO_API_DSS_ALLOW_INSECURE_PEER_URLS", &cfg.DSSAllowInsecurePeerURLs); err != nil {
+		return nil, err
+	}
+	if err := applyBoolEnv("AERO_API_RELAY_INSECURE_SKIP_VERIFY", &cfg.RelayInsecureSkipVerify); err != nil {
 		return nil, err
 	}
 	if err := applyDurationEnv("AERO_API_REGISTRY_DIAL_TIMEOUT", &cfg.RegistryDialTimeout); err != nil {
@@ -145,6 +156,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if err := applyDurationEnv("AERO_API_REQUEST_TIMEOUT", &cfg.RequestTimeout); err != nil {
+		return nil, err
+	}
+	if err := applyDurationEnv("AERO_API_COMMAND_TIMEOUT", &cfg.CommandTimeout); err != nil {
 		return nil, err
 	}
 
@@ -253,6 +267,9 @@ func (cfg *Config) Validate() error {
 	}
 	if cfg.RequestTimeout <= 0 {
 		return fmt.Errorf("AERO_API_REQUEST_TIMEOUT must be > 0")
+	}
+	if cfg.CommandTimeout <= 0 {
+		return fmt.Errorf("AERO_API_COMMAND_TIMEOUT must be > 0")
 	}
 	for name, value := range map[string]string{
 		"AERO_API_DATABASE_URL":        cfg.DatabaseURL,
