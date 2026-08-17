@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"net"
@@ -17,6 +19,7 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/config"
 	"github.com/Aero-Arc/aero-arc-api/internal/httpapi"
 	"github.com/Aero-Arc/aero-arc-api/internal/registry"
+	"github.com/Aero-Arc/aero-arc-api/internal/relaycontrol"
 	"github.com/Aero-Arc/aero-arc-api/internal/seed"
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
 	"github.com/Aero-Arc/aero-arc-api/internal/service/deconfliction"
@@ -29,6 +32,7 @@ import (
 	telemetryinfluxdb "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/influxdb"
 	telemetrymemory "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/memory"
 	"github.com/urfave/cli/v3"
+	"google.golang.org/grpc/credentials"
 )
 
 func main() {
@@ -122,6 +126,10 @@ func newCommand() *cli.Command {
 						Usage:   "per-request timeout",
 						Sources: cli.EnvVars("AERO_API_REQUEST_TIMEOUT"),
 					},
+					&cli.DurationFlag{Name: "command-timeout", Value: defaults.CommandTimeout, Usage: "end-to-end aircraft command timeout", Sources: cli.EnvVars("AERO_API_COMMAND_TIMEOUT")},
+					&cli.StringFlag{Name: "relay-ca-file", Usage: "CA certificate used to verify Relay control endpoints", Sources: cli.EnvVars("AERO_API_RELAY_CA_FILE")},
+					&cli.StringFlag{Name: "relay-server-name", Usage: "TLS server name expected from Relay control endpoints", Sources: cli.EnvVars("AERO_API_RELAY_SERVER_NAME")},
+					&cli.BoolFlag{Name: "relay-insecure-skip-verify", Usage: "disable Relay TLS verification for local SITL only", Sources: cli.EnvVars("AERO_API_RELAY_INSECURE_SKIP_VERIFY")},
 					&cli.StringFlag{
 						Name:    "seed",
 						Value:   defaults.Seed,
@@ -164,6 +172,10 @@ func newCommand() *cli.Command {
 						TelemetryFreshness:       cmd.Duration("telemetry-freshness"),
 						TelemetryLatestLookback:  cmd.Duration("telemetry-latest-lookback"),
 						RequestTimeout:           cmd.Duration("request-timeout"),
+						CommandTimeout:           cmd.Duration("command-timeout"),
+						RelayCAFile:              cmd.String("relay-ca-file"),
+						RelayServerName:          cmd.String("relay-server-name"),
+						RelayInsecureSkipVerify:  cmd.Bool("relay-insecure-skip-verify"),
 						Seed:                     cmd.String("seed"),
 						Debug:                    cmd.Bool("debug"),
 					}
@@ -242,8 +254,24 @@ func run(ctx context.Context, cfg *config.Config) error {
 	intentService := service.NewIntentService(durableStore, deconflictionService)
 	preflightService := service.NewPreflightService(durableStore)
 	conformanceService := service.NewConformanceService(durableStore, telemetryStore)
+	relayCredentials, err := relayTransportCredentials(cfg)
+	if err != nil {
+		return err
+	}
+	relayControl, err := relaycontrol.New(registryClient, relayCredentials, cfg.CommandTimeout, cfg.RegistryFreshness)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := relayControl.Close(); err != nil {
+			slog.Warn("failed to close Relay control connections", slog.String("error", err.Error()))
+		}
+	}()
+	commandService := service.NewAircraftCommandService(durableStore, relayControl)
 
-	apiServer := httpapi.NewWithWorkflows(fleetService, intentService, preflightService, conformanceService, cfg.RequestTimeout, deconflictionService).WithDebug(cfg.Debug)
+	apiServer := httpapi.NewWithWorkflows(fleetService, intentService, preflightService, conformanceService, cfg.RequestTimeout, deconflictionService).
+		WithAircraftCommands(commandService, cfg.CommandTimeout).
+		WithDebug(cfg.Debug)
 	if deconflictionService.PublishingEnabled() {
 		authorizer, err := httpapi.NewUSSJWTAuthorizer(cfg.USSJWTPublicKeyFile, cfg.USSJWTIssuer, cfg.USSJWTAudience)
 		if err != nil {
@@ -302,6 +330,32 @@ func run(ctx context.Context, cfg *config.Config) error {
 
 	slog.Info("aero-arc-api shutdown complete")
 	return nil
+}
+
+func relayTransportCredentials(cfg *config.Config) (credentials.TransportCredentials, error) {
+	tlsConfig := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		ServerName:         cfg.RelayServerName,
+		InsecureSkipVerify: cfg.RelayInsecureSkipVerify, // #nosec G402 -- explicit local-SITL escape hatch.
+	}
+	if cfg.RelayCAFile != "" {
+		pem, err := os.ReadFile(cfg.RelayCAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read Relay CA file: %w", err)
+		}
+		roots, err := x509.SystemCertPool()
+		if err != nil {
+			return nil, fmt.Errorf("load system certificate pool: %w", err)
+		}
+		if roots == nil {
+			roots = x509.NewCertPool()
+		}
+		if !roots.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("relay CA file contains no certificates")
+		}
+		tlsConfig.RootCAs = roots
+	}
+	return credentials.NewTLS(tlsConfig), nil
 }
 
 func newDurableStore(ctx context.Context, cfg *config.Config) (durable.Store, error) {

@@ -132,6 +132,29 @@ func (s *Server) handleGetAircraftLiveState(c *mach.Context) {
 	writeJSON(c, http.StatusOK, state)
 }
 
+func (s *Server) handleArmAircraft(c *mach.Context) {
+	s.handleAircraftCommand(c, domain.AircraftCommandTypeArm)
+}
+
+func (s *Server) handleDisarmAircraft(c *mach.Context) {
+	s.handleAircraftCommand(c, domain.AircraftCommandTypeDisarm)
+}
+
+func (s *Server) handleAircraftCommand(c *mach.Context, commandType domain.AircraftCommandType) {
+	timeout := s.commandTimeout
+	if timeout <= 0 {
+		timeout = s.requestTimeout
+	}
+	ctx, cancel := context.WithTimeout(c.Context(), timeout)
+	defer cancel()
+	result, err := s.commands.SendAircraftCommand(ctx, c.Param("aircraft_id"), commandType)
+	if err != nil {
+		writeCommandError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, result)
+}
+
 func (s *Server) handleGetAircraftMap(c *mach.Context) {
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
