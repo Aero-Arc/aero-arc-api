@@ -4,13 +4,16 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	agentv1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/agent/v1"
 	registryv1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/registry/v1"
 	relayv1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/relay/v1"
@@ -21,6 +24,10 @@ import (
 
 const defaultTimeout = 5 * time.Second
 
+// ErrAgentNotConnected reports that Registry or Relay has no active session
+// for the Agent selected by the API's durable aircraft mapping.
+var ErrAgentNotConnected = errors.New("agent is not connected")
+
 type SetRequest struct {
 	AgentID       string
 	FlightID      string
@@ -30,6 +37,16 @@ type SetRequest struct {
 }
 
 type ClearRequest struct{ AgentID, FlightID, CommandID string }
+
+// AircraftCommandRequest carries the resolved Agent route and the immediate
+// aircraft command that must be delivered without retries or persistence.
+type AircraftCommandRequest struct {
+	AgentID    string
+	AircraftID string
+	Type       domain.AircraftCommandType
+	CommandID  string
+	IssuedAt   time.Time
+}
 
 type Service struct {
 	registry              registryClient
@@ -135,6 +152,92 @@ func (s *Service) ClearOperationContext(ctx context.Context, req ClearRequest) (
 	return commandID, err
 }
 
+// SendAircraftCommand resolves the Agent's current Relay placement, delivers
+// one ARM or DISARM command exactly once, and returns the Agent's correlated
+// autopilot-level result. It deliberately bypasses the placement cache and
+// does not retry an ambiguous Relay failure because physical commands are not
+// idempotent at this boundary.
+//
+// Parameters:
+//   - ctx: bounds Registry lookup, Relay delivery, and result propagation.
+//   - req: identifies the Agent, aircraft, command type, and optional command ID.
+//
+// Returns:
+//   - result: contains accepted, rejected, timeout, or delivery-failed status.
+//   - error: reports validation, offline placement, Relay transport, correlation,
+//     or unsupported-result failures.
+func (s *Service) SendAircraftCommand(ctx context.Context, req AircraftCommandRequest) (domain.AircraftCommandResult, error) {
+	if strings.TrimSpace(req.AgentID) == "" || strings.TrimSpace(req.AircraftID) == "" {
+		return domain.AircraftCommandResult{}, fmt.Errorf("agent_id and aircraft_id are required")
+	}
+	var commandType agentv1.AircraftCommandType
+	switch req.Type {
+	case domain.AircraftCommandTypeArm:
+		commandType = agentv1.AircraftCommandType_AIRCRAFT_COMMAND_TYPE_ARM
+	case domain.AircraftCommandTypeDisarm:
+		commandType = agentv1.AircraftCommandType_AIRCRAFT_COMMAND_TYPE_DISARM
+	default:
+		return domain.AircraftCommandResult{}, fmt.Errorf("unsupported aircraft command type %q", req.Type)
+	}
+	commandID, err := ensureCommandID(req.CommandID)
+	if err != nil {
+		return domain.AircraftCommandResult{}, err
+	}
+	issuedAt := req.IssuedAt
+	if issuedAt.IsZero() {
+		issuedAt = s.now().UTC()
+	}
+	command := &agentv1.AircraftCommand{
+		CommandId: commandID, AircraftId: req.AircraftID,
+		Type: commandType, IssuedAtUnixMs: issuedAt.UnixMilli(),
+	}
+
+	placement, err := s.resolve(ctx, req.AgentID, true)
+	if err != nil {
+		return domain.AircraftCommandResult{}, err
+	}
+	client, err := s.pool.Client(ctx, placement.relayID, placement.address)
+	if err != nil {
+		return domain.AircraftCommandResult{}, fmt.Errorf("connect relay %s: %w", placement.relayID, err)
+	}
+	slog.LogAttrs(ctx, slog.LevelInfo, "command_routed",
+		slog.String("command_id", commandID),
+		slog.String("aircraft_id", req.AircraftID),
+		slog.String("agent_id", req.AgentID),
+		slog.String("relay_id", placement.relayID),
+		slog.String("command_type", string(req.Type)),
+	)
+	callCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	response, err := client.SendAircraftCommand(callCtx, &relayv1.SendAircraftCommandRequest{
+		AgentId: req.AgentID, Command: command,
+	})
+	cancel()
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return domain.AircraftCommandResult{}, fmt.Errorf("%w: %v", ErrAgentNotConnected, err)
+		}
+		return domain.AircraftCommandResult{}, fmt.Errorf("deliver aircraft command: %w", err)
+	}
+	result := response.GetResult()
+	if result == nil || result.GetCommandId() != commandID || result.GetAircraftId() != req.AircraftID {
+		return domain.AircraftCommandResult{}, fmt.Errorf("relay returned a missing or mismatched aircraft command result")
+	}
+	mapped := domain.AircraftCommandResult{CommandID: commandID, AircraftID: req.AircraftID, Message: result.GetMessage()}
+	switch result.GetStatus() {
+	case agentv1.AircraftCommandResult_STATUS_ACCEPTED:
+		mapped.Status = domain.AircraftCommandStatusAccepted
+	case agentv1.AircraftCommandResult_STATUS_REJECTED:
+		mapped.Status = domain.AircraftCommandStatusRejected
+	case agentv1.AircraftCommandResult_STATUS_TIMEOUT:
+		mapped.Status = domain.AircraftCommandStatusTimeout
+	case agentv1.AircraftCommandResult_STATUS_DELIVERY_FAILED:
+		mapped.Status = domain.AircraftCommandStatusDeliveryFailed
+	default:
+		return domain.AircraftCommandResult{}, fmt.Errorf("agent returned unsupported command status %s", result.GetStatus())
+	}
+	return mapped, nil
+}
+
 func (s *Service) call(ctx context.Context, agentID string, invoke func(context.Context, relayv1.RelayControlClient) error) error {
 	for attempt := 0; attempt < 2; attempt++ {
 		placement, err := s.resolve(ctx, agentID, attempt > 0)
@@ -170,11 +273,14 @@ func (s *Service) resolve(ctx context.Context, agentID string, refresh bool) (ca
 	defer cancel()
 	response, err := s.registry.GetAgentPlacement(lookupCtx, &registryv1.GetAgentPlacementRequest{AgentId: agentID})
 	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return cachedPlacement{}, fmt.Errorf("%w: agent %s has no relay placement", ErrAgentNotConnected, agentID)
+		}
 		return cachedPlacement{}, fmt.Errorf("resolve agent placement: %w", err)
 	}
 	placement := response.GetPlacement()
 	if placement == nil || placement.GetRelayId() == "" {
-		return cachedPlacement{}, fmt.Errorf("agent %s has no relay placement", agentID)
+		return cachedPlacement{}, fmt.Errorf("%w: agent %s has no relay placement", ErrAgentNotConnected, agentID)
 	}
 	relays, err := s.registry.ListRelays(lookupCtx, &registryv1.ListRelaysRequest{})
 	if err != nil {

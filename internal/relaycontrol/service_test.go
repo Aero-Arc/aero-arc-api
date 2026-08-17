@@ -3,9 +3,11 @@ package relaycontrol
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	agentv1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/agent/v1"
 	registryv1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/registry/v1"
 	relayv1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/relay/v1"
@@ -44,10 +46,12 @@ func (f *fakePool) Invalidate(id string) { f.invalidated = append(f.invalidated,
 func (f *fakePool) Close() error         { return nil }
 
 type fakeRelayClient struct {
-	setRequests   []*relayv1.SetOperationContextRequest
-	clearRequests []*relayv1.ClearOperationContextRequest
-	setErrors     []error
-	block         bool
+	setRequests     []*relayv1.SetOperationContextRequest
+	clearRequests   []*relayv1.ClearOperationContextRequest
+	commandRequests []*relayv1.SendAircraftCommandRequest
+	setErrors       []error
+	commandErrors   []error
+	block           bool
 }
 
 func TestNewRequiresRelayTransportCredentials(t *testing.T) {
@@ -87,6 +91,21 @@ func (f *fakeRelayClient) SetOperationContext(ctx context.Context, r *relayv1.Se
 func (f *fakeRelayClient) ClearOperationContext(_ context.Context, r *relayv1.ClearOperationContextRequest, _ ...grpc.CallOption) (*relayv1.ClearOperationContextResponse, error) {
 	f.clearRequests = append(f.clearRequests, r)
 	return &relayv1.ClearOperationContextResponse{Result: &agentv1.OperationContextCommandAck{CommandId: r.Command.GetCommandId(), Status: agentv1.OperationContextCommandAck_STATUS_ALREADY_APPLIED}}, nil
+}
+
+func (f *fakeRelayClient) SendAircraftCommand(_ context.Context, r *relayv1.SendAircraftCommandRequest, _ ...grpc.CallOption) (*relayv1.SendAircraftCommandResponse, error) {
+	f.commandRequests = append(f.commandRequests, r)
+	if len(f.commandErrors) > 0 {
+		err := f.commandErrors[0]
+		f.commandErrors = f.commandErrors[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &relayv1.SendAircraftCommandResponse{Result: &agentv1.AircraftCommandResult{
+		CommandId: r.GetCommand().GetCommandId(), AircraftId: r.GetCommand().GetAircraftId(),
+		Status: agentv1.AircraftCommandResult_STATUS_ACCEPTED,
+	}}, nil
 }
 
 func TestSetOperationContextCachesPlacementAndPreservesCommandID(t *testing.T) {
@@ -153,5 +172,43 @@ func TestTimeout(t *testing.T) {
 	_, err := service.SetOperationContext(context.Background(), SetRequest{AgentID: "agent-1", FlightID: "flight-1", CommandID: "command"})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestSendAircraftCommandRoutesFreshAndMapsAcceptedResult(t *testing.T) {
+	registry := &fakeRegistry{relayIDs: []string{"relay-1"}}
+	client := &fakeRelayClient{}
+	service := newWithPool(registry, &fakePool{clients: map[string]*fakeRelayClient{"relay-1": client}}, time.Second, time.Minute)
+	result, err := service.SendAircraftCommand(context.Background(), AircraftCommandRequest{
+		AgentID: "agent-1", AircraftID: "aircraft-1", Type: domain.AircraftCommandTypeArm,
+		CommandID: "command-1", IssuedAt: time.Unix(100, 0),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != domain.AircraftCommandStatusAccepted || result.CommandID != "command-1" {
+		t.Fatalf("result = %+v", result)
+	}
+	request := client.commandRequests[0]
+	if request.GetAgentId() != "agent-1" || request.GetCommand().GetAircraftId() != "aircraft-1" || request.GetCommand().GetIssuedAtUnixMs() != time.Unix(100, 0).UnixMilli() {
+		t.Fatalf("request = %+v", request)
+	}
+}
+
+func TestSendAircraftCommandDoesNotRetryAmbiguousRelayFailure(t *testing.T) {
+	registry := &fakeRegistry{relayIDs: []string{"relay-1", "relay-2"}}
+	first := &fakeRelayClient{commandErrors: []error{status.Error(codes.Unavailable, "response lost")}}
+	second := &fakeRelayClient{}
+	service := newWithPool(registry, &fakePool{clients: map[string]*fakeRelayClient{
+		"relay-1": first, "relay-2": second,
+	}}, time.Second, time.Minute)
+	_, err := service.SendAircraftCommand(context.Background(), AircraftCommandRequest{
+		AgentID: "agent-1", AircraftID: "aircraft-1", Type: domain.AircraftCommandTypeArm, CommandID: "command-1",
+	})
+	if status.Code(errors.Unwrap(err)) != codes.Unavailable && !strings.Contains(err.Error(), "response lost") {
+		t.Fatalf("error = %v", err)
+	}
+	if registry.calls != 1 || len(first.commandRequests) != 1 || len(second.commandRequests) != 0 {
+		t.Fatalf("registry calls = %d, first requests = %d, second requests = %d", registry.calls, len(first.commandRequests), len(second.commandRequests))
 	}
 }

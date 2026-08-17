@@ -1,10 +1,12 @@
 package httpapi
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
 	"github.com/Aero-Arc/aero-arc-api/internal/service/deconfliction"
 	"github.com/mrshabel/mach"
@@ -19,6 +21,12 @@ type Server struct {
 	requestTimeout time.Duration
 	debug          bool
 	ussAuthorizer  USSAuthorizer
+	commands       aircraftCommander
+	commandTimeout time.Duration
+}
+
+type aircraftCommander interface {
+	SendAircraftCommand(context.Context, string, domain.AircraftCommandType) (domain.AircraftCommandResult, error)
 }
 
 // New constructs httpapi from the supplied configuration and dependencies.
@@ -71,6 +79,25 @@ func (s *Server) WithDebug(debug bool) *Server {
 	return s
 }
 
+// WithAircraftCommands enables the immediate ARM/DISARM HTTP routes using the
+// supplied aircraft-identity command workflow.
+//
+// Parameters:
+//   - commands: resolves aircraft identity and executes commands through Registry and Relay.
+//   - timeout: optionally overrides the HTTP lifetime for command completion; the
+//     first positive value is used and otherwise the ordinary request timeout applies.
+//
+// Returns:
+//   - server: is the same receiver with command routes enabled.
+func (s *Server) WithAircraftCommands(commands aircraftCommander, timeout ...time.Duration) *Server {
+	s.commands = commands
+	s.commandTimeout = s.requestTimeout
+	if len(timeout) > 0 && timeout[0] > 0 {
+		s.commandTimeout = timeout[0]
+	}
+	return s
+}
+
 // WithUSSAuthorizer installs the authorization policy used by USS routes.
 //
 // Parameters:
@@ -119,6 +146,10 @@ func (s *Server) Handler() http.Handler {
 	api.GET("/aircraft/{aircraft_id}/state", s.handleGetAircraftLiveState)
 	api.GET("/aircraft/{aircraft_id}/map", s.handleGetAircraftMap)
 	api.GET("/aircraft/{aircraft_id}/flights", s.handleListAircraftFlights)
+	if s.commands != nil {
+		api.POST("/aircraft/{aircraft_id}/commands/arm", s.handleArmAircraft)
+		api.POST("/aircraft/{aircraft_id}/commands/disarm", s.handleDisarmAircraft)
+	}
 	api.GET("/flights/{flight_id}", s.handleGetFlight)
 	api.GET("/flights/{flight_id}/replay", s.handleGetFlightReplay)
 

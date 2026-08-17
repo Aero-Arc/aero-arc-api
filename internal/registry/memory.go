@@ -250,6 +250,24 @@ func (c *MemoryClient) GetAgentPlacement(_ context.Context, req *registryv1.GetA
 	}, nil
 }
 
+// PublishConformanceSummary reports that the in-process Registry client does
+// not implement the separately owned conformance control-plane store.
+func (c *MemoryClient) PublishConformanceSummary(context.Context, *registryv1.PublishConformanceSummaryRequest, ...grpc.CallOption) (*registryv1.PublishConformanceSummaryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "memory registry does not store conformance summaries")
+}
+
+// GetConformanceSummary reports that the in-process Registry client does not
+// implement the separately owned conformance control-plane store.
+func (c *MemoryClient) GetConformanceSummary(context.Context, *registryv1.GetConformanceSummaryRequest, ...grpc.CallOption) (*registryv1.GetConformanceSummaryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "memory registry does not store conformance summaries")
+}
+
+// BatchGetConformanceSummaries reports that the in-process Registry client does
+// not implement the separately owned conformance control-plane store.
+func (c *MemoryClient) BatchGetConformanceSummaries(context.Context, *registryv1.BatchGetConformanceSummariesRequest, ...grpc.CallOption) (*registryv1.BatchGetConformanceSummariesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "memory registry does not store conformance summaries")
+}
+
 func cloneRelay(relay *registryv1.Relay) *registryv1.Relay {
 	return &registryv1.Relay{
 		RelayId:             relay.GetRelayId(),
