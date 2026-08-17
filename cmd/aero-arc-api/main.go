@@ -351,7 +351,7 @@ func relayTransportCredentials(cfg *config.Config) (credentials.TransportCredent
 			roots = x509.NewCertPool()
 		}
 		if !roots.AppendCertsFromPEM(pem) {
-			return nil, fmt.Errorf("Relay CA file contains no certificates")
+			return nil, fmt.Errorf("relay CA file contains no certificates")
 		}
 		tlsConfig.RootCAs = roots
 	}
