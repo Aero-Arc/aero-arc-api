@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
+	preflightsvc "github.com/Aero-Arc/aero-arc-api/internal/service/preflight"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 	telemetrymemory "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/memory"
@@ -512,7 +513,7 @@ func TestIntentLifecycleHappyPath(t *testing.T) {
 	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
 
 	intents := NewIntentServiceWithClock(store, fixedClock(now), nil)
-	preflight := NewPreflightServiceWithClock(store, fixedClock(now))
+	preflight := preflightsvc.NewPreflightServiceWithClock(store, fixedClock(now))
 
 	intent, err := intents.CreateIntent(ctx, workflowIntentRequest(now))
 	if err != nil {
@@ -731,7 +732,7 @@ func TestModifySubmittedIntentRequiresFreshPreflightForReplacementVolumes(t *tes
 	now := fixedWorkflowTime()
 	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
 	intent := seedSubmittedIntentWithVolume(t, ctx, store, now)
-	if evaluation, err := NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID); err != nil {
+	if evaluation, err := preflightsvc.NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID); err != nil {
 		t.Fatalf("EvaluateIntent returned error: %v", err)
 	} else if evaluation.Blocked {
 		t.Fatalf("preflight blocked unexpectedly: %#v", evaluation.Findings)
@@ -766,7 +767,7 @@ func TestModifySubmittedIntentRequiresFreshPreflightForReplacementVolumes(t *tes
 		t.Fatalf("ActivateIntent stale preflight error = %v, want ErrActivationBlocked", err)
 	}
 
-	if evaluation, err := NewPreflightServiceWithClock(store, fixedClock(modifyAt.Add(time.Minute))).EvaluateIntent(ctx, intent.ID); err != nil {
+	if evaluation, err := preflightsvc.NewPreflightServiceWithClock(store, fixedClock(modifyAt.Add(time.Minute))).EvaluateIntent(ctx, intent.ID); err != nil {
 		t.Fatalf("EvaluateIntent after modify returned error: %v", err)
 	} else if evaluation.Blocked {
 		t.Fatalf("preflight after modify blocked unexpectedly: %#v", evaluation.Findings)
@@ -943,7 +944,7 @@ func TestPreflightBlockedWhenBatterySOHMissing(t *testing.T) {
 	seedWorkflowAircraft(t, ctx, store, now, nil)
 	intent := seedSubmittedIntentWithVolume(t, ctx, store, now)
 
-	evaluation, err := NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID)
+	evaluation, err := preflightsvc.NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID)
 	if err != nil {
 		t.Fatalf("EvaluateIntent returned error: %v", err)
 	}
@@ -961,7 +962,7 @@ func TestPreflightClearOverwritesStaleBlockingFinding(t *testing.T) {
 	now := fixedWorkflowTime()
 	seedWorkflowAircraft(t, ctx, store, now, nil)
 	intent := seedSubmittedIntentWithVolume(t, ctx, store, now)
-	preflight := NewPreflightServiceWithClock(store, fixedClock(now))
+	preflight := preflightsvc.NewPreflightServiceWithClock(store, fixedClock(now))
 
 	evaluation, err := preflight.EvaluateIntent(ctx, intent.ID)
 	if err != nil {
@@ -1019,7 +1020,7 @@ func TestPreflightBlockedWhenCriticalMaintenanceOpen(t *testing.T) {
 	}))
 	intent := seedSubmittedIntentWithVolume(t, ctx, store, now)
 
-	evaluation, err := NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID)
+	evaluation, err := preflightsvc.NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID)
 	if err != nil {
 		t.Fatalf("EvaluateIntent returned error: %v", err)
 	}
@@ -1048,7 +1049,7 @@ func TestPreflightBlockedWhenOperationalVolumeMissingInlineGeoJSON(t *testing.T)
 		VolumeType:   domain.OperationalVolumeLoiter,
 	})
 
-	evaluation, err := NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID)
+	evaluation, err := preflightsvc.NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID)
 	if err != nil {
 		t.Fatalf("EvaluateIntent returned error: %v", err)
 	}
@@ -1112,7 +1113,7 @@ func TestPreflightIgnoresOperationalVolumesFromOldIntentVersion(t *testing.T) {
 		UpdatedAt:     now,
 	}))
 
-	evaluation, err := NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, "intent-versioned-preflight")
+	evaluation, err := preflightsvc.NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, "intent-versioned-preflight")
 	if err != nil {
 		t.Fatalf("EvaluateIntent returned error: %v", err)
 	}
@@ -1672,7 +1673,7 @@ func TestActivationReadinessIgnoresPreflightAndFindingsFromOldIntentVersion(t *t
 		Message:         "old version block",
 		EvaluatedAt:     now,
 	}))
-	evaluation, err := NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, "intent-versioned-activation")
+	evaluation, err := preflightsvc.NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, "intent-versioned-activation")
 	if err != nil {
 		t.Fatalf("EvaluateIntent returned error: %v", err)
 	}
@@ -1757,7 +1758,7 @@ func seedActiveIntentWithVolume(t *testing.T, ctx context.Context, store durable
 func seedActiveIntentWithVolumeRequest(t *testing.T, ctx context.Context, store durable.Store, now time.Time, volumeReq AddOperationalVolumeRequest) domain.OperationalIntent {
 	t.Helper()
 	intent := seedSubmittedIntentWithVolumeRequest(t, ctx, store, now, volumeReq)
-	if evaluation, err := NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID); err != nil {
+	if evaluation, err := preflightsvc.NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID); err != nil {
 		t.Fatalf("EvaluateIntent returned error: %v", err)
 	} else if evaluation.Blocked {
 		t.Fatalf("preflight blocked unexpectedly: %#v", evaluation.Findings)
@@ -1808,7 +1809,7 @@ func createActiveIntentWithVolume(t *testing.T, ctx context.Context, store durab
 	if intent, err = intents.SubmitIntent(ctx, intent.ID); err != nil {
 		t.Fatalf("SubmitIntent returned error: %v", err)
 	}
-	if evaluation, err := NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID); err != nil {
+	if evaluation, err := preflightsvc.NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID); err != nil {
 		t.Fatalf("EvaluateIntent returned error: %v", err)
 	} else if evaluation.Blocked {
 		t.Fatalf("preflight blocked unexpectedly: %#v", evaluation.Findings)
