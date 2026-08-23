@@ -1,4 +1,4 @@
-package service
+package preflight
 
 import (
 	"context"
@@ -255,4 +255,14 @@ func (b *preflightBuilder) check(category domain.PreflightCheckCategory, key, so
 		Message:         summary,
 		EvaluatedAt:     b.now,
 	})
+}
+
+func volumesForVersion(volumes []domain.OperationalVolume, version int) []domain.OperationalVolume {
+	filtered := make([]domain.OperationalVolume, 0, len(volumes))
+	for _, volume := range volumes {
+		if volume.IntentVersion == version {
+			filtered = append(filtered, volume)
+		}
+	}
+	return filtered
 }

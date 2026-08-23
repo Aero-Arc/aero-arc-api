@@ -20,6 +20,7 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/seed"
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
 	"github.com/Aero-Arc/aero-arc-api/internal/service/deconfliction"
+	"github.com/Aero-Arc/aero-arc-api/internal/service/preflight"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 	durablepostgres "github.com/Aero-Arc/aero-arc-api/internal/store/durable/postgres"
@@ -240,7 +241,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	defer stopWorker()
 	intentService := service.NewIntentService(durableStore, deconflictionService)
-	preflightService := service.NewPreflightService(durableStore)
+	preflightService := preflight.NewPreflightService(durableStore)
 	conformanceService := service.NewConformanceService(durableStore, telemetryStore)
 
 	apiServer := httpapi.NewWithWorkflows(fleetService, intentService, preflightService, conformanceService, cfg.RequestTimeout, deconflictionService).WithDebug(cfg.Debug)

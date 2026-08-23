@@ -7,13 +7,14 @@ import (
 
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
 	"github.com/Aero-Arc/aero-arc-api/internal/service/deconfliction"
+	"github.com/Aero-Arc/aero-arc-api/internal/service/preflight"
 	"github.com/mrshabel/mach"
 )
 
 type Server struct {
 	fleet          *service.FleetService
 	intents        *service.IntentService
-	preflight      *service.PreflightService
+	preflight      *preflight.PreflightService
 	conformance    *service.ConformanceService
 	deconfliction  *deconfliction.DeconflictionService
 	requestTimeout time.Duration
@@ -38,18 +39,18 @@ func New(fleet *service.FleetService, requestTimeout time.Duration) *Server {
 // Parameters:
 //   - fleet: is the *service.FleetService value supplied to NewWithWorkflows.
 //   - intents: is the *service.IntentService value supplied to NewWithWorkflows.
-//   - preflight: is the *service.PreflightService value supplied to NewWithWorkflows.
+//   - preflightSvc: is the *preflight.PreflightService value supplied to NewWithWorkflows.
 //   - conformance: is the *service.ConformanceService value supplied to NewWithWorkflows.
 //   - requestTimeout: defines the time bound applied by the operation.
 //   - deconflictionServices: is the ...*deconfliction.DeconflictionService value supplied to NewWithWorkflows.
 //
 // Returns:
 //   - result: is the *Server value produced by NewWithWorkflows.
-func NewWithWorkflows(fleet *service.FleetService, intents *service.IntentService, preflight *service.PreflightService, conformance *service.ConformanceService, requestTimeout time.Duration, deconflictionServices ...*deconfliction.DeconflictionService) *Server {
+func NewWithWorkflows(fleet *service.FleetService, intents *service.IntentService, preflightSvc *preflight.PreflightService, conformance *service.ConformanceService, requestTimeout time.Duration, deconflictionServices ...*deconfliction.DeconflictionService) *Server {
 	server := &Server{
 		fleet:          fleet,
 		intents:        intents,
-		preflight:      preflight,
+		preflight:      preflightSvc,
 		conformance:    conformance,
 		requestTimeout: requestTimeout,
 	}

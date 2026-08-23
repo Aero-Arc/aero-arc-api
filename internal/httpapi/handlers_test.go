@@ -13,6 +13,7 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/readmodel"
 	"github.com/Aero-Arc/aero-arc-api/internal/registry"
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
+	"github.com/Aero-Arc/aero-arc-api/internal/service/preflight"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 	replaymemory "github.com/Aero-Arc/aero-arc-api/internal/store/replay/memory"
 	telemetrymemory "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/memory"
@@ -298,7 +299,7 @@ func TestHandleActivateOperationalIntentRunsPreflight(t *testing.T) {
 	server := NewWithWorkflows(
 		fleet,
 		intents,
-		service.NewPreflightService(durable),
+		preflight.NewPreflightService(durable),
 		service.NewConformanceService(durable, telemetry),
 		time.Second,
 	)
@@ -334,7 +335,7 @@ func TestOperationalIntentTerminalTransitionRoutes(t *testing.T) {
 	server := NewWithWorkflows(
 		nil,
 		service.NewIntentServiceWithClock(store, func() time.Time { return now }, nil),
-		service.NewPreflightServiceWithClock(store, func() time.Time { return now }),
+		preflight.NewPreflightServiceWithClock(store, func() time.Time { return now }),
 		service.NewConformanceServiceWithClock(store, telemetrymemory.NewStore(), func() time.Time { return now }),
 		time.Second,
 	)
@@ -403,7 +404,7 @@ func TestHandleAddOperationalVolumeRejectsSubmittedIntent(t *testing.T) {
 	server := NewWithWorkflows(
 		fleet,
 		intents,
-		service.NewPreflightService(durable),
+		preflight.NewPreflightService(durable),
 		service.NewConformanceService(durable, telemetry),
 		time.Second,
 	)
@@ -460,7 +461,7 @@ func TestHandleModifyOperationalIntentBlocksActiveIntent(t *testing.T) {
 	server := NewWithWorkflows(
 		fleet,
 		service.NewIntentService(durable, nil),
-		service.NewPreflightService(durable),
+		preflight.NewPreflightService(durable),
 		service.NewConformanceService(durable, telemetry),
 		time.Second,
 	)
@@ -524,7 +525,7 @@ func TestHandleAddOperationalVolumeRejectsMissingAltitudeFields(t *testing.T) {
 	server := NewWithWorkflows(
 		fleet,
 		intents,
-		service.NewPreflightService(durable),
+		preflight.NewPreflightService(durable),
 		service.NewConformanceService(durable, telemetry),
 		time.Second,
 		newTestDeconflictionService(t, durable),
@@ -554,7 +555,7 @@ func TestHandleCheckOperationalIntentDeconfliction(t *testing.T) {
 	server := NewWithWorkflows(
 		fleet,
 		service.NewIntentService(durable, deconflictionService),
-		service.NewPreflightService(durable),
+		preflight.NewPreflightService(durable),
 		service.NewConformanceService(durable, telemetry),
 		time.Second,
 		deconflictionService,
@@ -611,7 +612,7 @@ func TestHandleActivateOperationalIntentBlocksOnDeconflictionPotentialConflict(t
 	server := NewWithWorkflows(
 		fleet,
 		service.NewIntentService(durable, deconflictionService),
-		service.NewPreflightService(durable),
+		preflight.NewPreflightService(durable),
 		service.NewConformanceService(durable, telemetry),
 		time.Second,
 		deconflictionService,
@@ -646,7 +647,7 @@ func TestHandleActivateOperationalIntentInvalidTransitionDoesNotRunDeconfliction
 	server := NewWithWorkflows(
 		fleet,
 		service.NewIntentService(durable, nil),
-		service.NewPreflightService(durable),
+		preflight.NewPreflightService(durable),
 		service.NewConformanceService(durable, telemetry),
 		time.Second,
 		newTestDeconflictionService(t, durable),
@@ -780,7 +781,7 @@ func TestHandleActivateOperationalIntentDoesNotTrustOldVersionClearFinding(t *te
 	server := NewWithWorkflows(
 		fleet,
 		service.NewIntentService(durable, deconflictionService),
-		service.NewPreflightService(durable),
+		preflight.NewPreflightService(durable),
 		service.NewConformanceService(durable, telemetry),
 		time.Second,
 		deconflictionService,
