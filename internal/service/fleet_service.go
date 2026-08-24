@@ -535,8 +535,8 @@ func registryConformanceSummary(summary *conformancev1.ConformanceSummary, reque
 		FlightID:             summary.GetFlightId(),
 		AircraftID:           summary.GetAircraftId(),
 		Status:               legacyConformanceStatus(condition),
-		AlertCount:           len(violations),
-		ReportabilityStatus:  domain.ReportabilityStatusReview,
+		AlertCount:           activeViolationCount(violations),
+		ReportabilityStatus:  domain.ReportabilityStatusNo,
 		UpdatedAt:            updatedAt,
 		AssignmentID:         assignmentID,
 		AssignmentGeneration: summary.GetAssignmentGeneration(),
@@ -549,6 +549,16 @@ func registryConformanceSummary(summary *conformancev1.ConformanceSummary, reque
 		FrameID:              summary.GetFrameId(),
 		Violations:           violations,
 	}, true
+}
+
+func activeViolationCount(violations []domain.ConformanceViolationSummary) int {
+	count := 0
+	for _, violation := range violations {
+		if violation.Phase != "" && violation.Phase != "clear" {
+			count++
+		}
+	}
+	return count
 }
 
 func mergeLiveConformance(durableSummary, live domain.ConformanceSummary) domain.ConformanceSummary {
@@ -1336,6 +1346,8 @@ func preflightMetrics(checks []domain.PreflightCheck) []readmodel.DashboardMetri
 func conformanceMetrics(summaries []domain.ConformanceSummary, events []domain.ConformanceEvent) []readmodel.DashboardMetric {
 	conforming := 0
 	reportable := 0
+	activeFindings := 0
+	hasLiveProjection := false
 	totalScore := 0.0
 	scores := 0
 	for _, summary := range summaries {
@@ -1349,17 +1361,29 @@ func conformanceMetrics(summaries []domain.ConformanceSummary, events []domain.C
 			totalScore += *summary.Score
 			scores++
 		}
+		if summary.AssignmentID != "" {
+			hasLiveProjection = true
+			activeFindings += activeViolationCount(summary.Violations)
+		}
 	}
 
-	avgScore := 0.0
+	targetValue := "Not scored"
+	targetDetail := "Live condition is reported separately"
 	if scores > 0 {
-		avgScore = totalScore / float64(scores)
+		targetValue = fmt.Sprintf("%.1f%%", totalScore/float64(scores)*100)
+		targetDetail = "Average of durable scored evaluations"
+	}
+	alertLabel := "Open alerts"
+	alertValue := len(events)
+	if hasLiveProjection {
+		alertLabel = "Active findings"
+		alertValue = activeFindings
 	}
 
 	return []readmodel.DashboardMetric{
-		{Label: "Target conformance", Value: fmt.Sprintf("%.1f%%", avgScore*100)},
+		{Label: "Target conformance", Value: targetValue, Detail: targetDetail},
 		{Label: "Conforming", Value: fmt.Sprintf("%d", conforming), Status: string(domain.ConformanceStatusConforming)},
-		{Label: "Open alerts", Value: fmt.Sprintf("%d", len(events))},
+		{Label: alertLabel, Value: fmt.Sprintf("%d", alertValue)},
 		{Label: "Reportable", Value: fmt.Sprintf("%d", reportable), Status: string(domain.ReportabilityStatusReportable)},
 	}
 }
