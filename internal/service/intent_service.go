@@ -516,16 +516,21 @@ func (s *IntentService) ActivateIntent(ctx context.Context, intentID string) (do
 	intent.Status = domain.IntentStatusActive
 	intent.ActivatedAt = &now
 	intent.UpdatedAt = now
-	if err := s.durable.UpdateOperationalIntent(ctx, intent, expectedRevision); err != nil {
-		if errors.Is(err, durable.ErrVersionConflict) && s.deconfliction != nil && s.deconfliction.PublishingEnabled() {
+	if err := s.durable.ActivateOperationalIntent(ctx, intent, expectedRevision); err != nil {
+		activationErr := fmt.Errorf("update operational intent: %w", err)
+		if errors.Is(err, durable.ErrActiveIntent) {
+			activationErr = fmt.Errorf("%w: aircraft %s already has an active operational intent", ErrActivationBlocked, intent.AircraftID)
+		}
+		if (errors.Is(err, durable.ErrVersionConflict) || errors.Is(err, durable.ErrActiveIntent)) &&
+			s.deconfliction != nil && s.deconfliction.PublishingEnabled() {
 			if compensationErr := s.compensatePublishedActivation(ctx, intent.ID); compensationErr != nil {
 				return domain.OperationalIntent{}, errors.Join(
-					fmt.Errorf("update operational intent: %w", err),
+					activationErr,
 					fmt.Errorf("compensate DSS activation: %w", compensationErr),
 				)
 			}
 		}
-		return domain.OperationalIntent{}, fmt.Errorf("update operational intent: %w", err)
+		return domain.OperationalIntent{}, activationErr
 	}
 	intent.Revision = expectedRevision + 1
 	return intent, nil

@@ -110,6 +110,15 @@ type durableWorkflowCoordinator struct {
 	beforeConfirm func(context.Context, domain.OperationalIntentPublication) error
 }
 
+type activationRejectingStore struct {
+	durable.Store
+	err error
+}
+
+func (s *activationRejectingStore) ActivateOperationalIntent(context.Context, domain.OperationalIntent, int64) error {
+	return s.err
+}
+
 func (c *durableWorkflowCoordinator) CheckIntent(context.Context, string) (domain.DeconflictionResult, error) {
 	return domain.DeconflictionResult{Posture: domain.DeconflictionPostureClear}, nil
 }
@@ -395,6 +404,49 @@ func TestActivateIntentRestoresAcceptedPublicationAfterReconcileFailure(t *testi
 		t.Fatal(err)
 	}
 	coordinator.reconcileErr = context.DeadlineExceeded
+	if _, err := intents.ActivateIntent(ctx, intent.ID); !errors.Is(err, ErrActivationBlocked) {
+		t.Fatalf("ActivateIntent error = %v, want activation blocked", err)
+	}
+	current, err := store.GetOperationalIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication, err := store.GetOperationalIntentPublication(ctx, intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != domain.IntentStatusAccepted ||
+		publication.DesiredState != domain.OperationalIntentExternalStateAccepted ||
+		publication.ConfirmedState != domain.OperationalIntentExternalStateAccepted {
+		t.Fatalf("current=%+v publication=%+v", current, publication)
+	}
+}
+
+func TestActivateIntentCompensatesDSSAfterAircraftActivationRace(t *testing.T) {
+	ctx := context.Background()
+	now := fixedWorkflowTime()
+	store := durablememory.NewStore()
+	coordinator := &durableWorkflowCoordinator{store: store, now: now}
+	intents := NewIntentServiceWithClock(
+		&activationRejectingStore{Store: store, err: durable.ErrActiveIntent},
+		fixedClock(now),
+		coordinator,
+	)
+	intent := seedSubmittedIntentWithVolume(t, ctx, store, now)
+	var err error
+	if intent, err = intents.AcceptIntent(ctx, intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.ReconcileIntent(ctx, intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordPreflightCheck(ctx, domain.PreflightCheck{
+		ID: "preflight", IntentID: intent.ID, IntentVersion: intent.Version,
+		Status: domain.PreflightStatusClear, CapturedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	if _, err := intents.ActivateIntent(ctx, intent.ID); !errors.Is(err, ErrActivationBlocked) {
 		t.Fatalf("ActivateIntent error = %v, want activation blocked", err)
 	}
@@ -1191,7 +1243,10 @@ func TestConformanceTelemetryHonorsSampleIntentID(t *testing.T) {
 	telemetry := telemetrymemory.NewStore()
 	now := fixedWorkflowTime()
 	seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
-	createActiveIntentWithVolume(t, ctx, store, now, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "volume-a", squareGeoJSON(), now)
+	prior := createActiveIntentWithVolume(t, ctx, store, now, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "volume-a", squareGeoJSON(), now)
+	if _, err := NewIntentServiceWithClock(store, fixedClock(now), nil).CompleteIntent(ctx, prior.ID); err != nil {
+		t.Fatalf("CompleteIntent returned error: %v", err)
+	}
 	createActiveIntentWithVolume(t, ctx, store, now, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "volume-b", eastSquareGeoJSON(), now.Add(10*time.Minute))
 
 	evaluation, err := NewConformanceServiceWithClock(store, telemetry, fixedClock(now)).EvaluateTelemetry(ctx, domain.TelemetrySample{

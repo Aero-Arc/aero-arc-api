@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -63,6 +64,65 @@ func TestOperationalIntentCreateAndUpdateConcurrency(t *testing.T) {
 	second.UpdatedAt = now.Add(2 * time.Second)
 	if err := store.UpdateOperationalIntent(ctx, second, 0); !errors.Is(err, durable.ErrVersionConflict) {
 		t.Fatalf("stale update error = %v, want ErrVersionConflict", err)
+	}
+}
+
+func TestConcurrentAircraftActivationsAllowExactlyOneIntent(t *testing.T) {
+	ctx := context.Background()
+	store := NewStore()
+	now := time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)
+	intents := []domain.OperationalIntent{
+		{ID: "intent-a", Version: 1, AircraftID: "aircraft-1", Status: domain.IntentStatusAccepted, UpdatedAt: now},
+		{ID: "intent-b", Version: 1, AircraftID: "aircraft-1", Status: domain.IntentStatusAccepted, UpdatedAt: now},
+	}
+	for _, intent := range intents {
+		if err := store.CreateOperationalIntent(ctx, intent); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, len(intents))
+	var ready sync.WaitGroup
+	ready.Add(len(intents))
+	for _, accepted := range intents {
+		active := accepted
+		active.Status = domain.IntentStatusActive
+		go func() {
+			ready.Done()
+			<-start
+			errs <- store.ActivateOperationalIntent(ctx, active, active.Revision)
+		}()
+	}
+	ready.Wait()
+	close(start)
+
+	var activated, rejected int
+	for range intents {
+		switch err := <-errs; {
+		case err == nil:
+			activated++
+		case errors.Is(err, durable.ErrActiveIntent):
+			rejected++
+		default:
+			t.Fatalf("activation error = %v", err)
+		}
+	}
+	if activated != 1 || rejected != 1 {
+		t.Fatalf("activated = %d, rejected = %d", activated, rejected)
+	}
+	stored, err := store.ListOperationalIntents(ctx, "aircraft-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeCount := 0
+	for _, intent := range stored {
+		if intent.Status == domain.IntentStatusActive {
+			activeCount++
+		}
+	}
+	if activeCount != 1 {
+		t.Fatalf("active intents = %d, want 1; intents=%#v", activeCount, stored)
 	}
 }
 
