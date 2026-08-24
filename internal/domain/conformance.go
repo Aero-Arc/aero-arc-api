@@ -25,15 +25,36 @@ type ConformanceEvent struct {
 }
 
 type ConformanceSummary struct {
-	ID                  string              `json:"id"`
-	OperatorID          string              `json:"operator_id,omitempty"`
-	IntentID            string              `json:"intent_id"`
-	IntentVersion       int                 `json:"intent_version,omitempty"`
-	FlightID            string              `json:"flight_id,omitempty"`
-	AircraftID          string              `json:"aircraft_id"`
-	Status              ConformanceStatus   `json:"status"`
-	Score               *float64            `json:"score,omitempty"`
-	AlertCount          int                 `json:"alert_count"`
-	ReportabilityStatus ReportabilityStatus `json:"reportability_status"`
-	UpdatedAt           time.Time           `json:"updated_at"`
+	ID                   string                        `json:"id"`
+	OperatorID           string                        `json:"operator_id,omitempty"`
+	IntentID             string                        `json:"intent_id"`
+	IntentVersion        int                           `json:"intent_version,omitempty"`
+	FlightID             string                        `json:"flight_id,omitempty"`
+	AircraftID           string                        `json:"aircraft_id"`
+	Status               ConformanceStatus             `json:"status"`
+	Score                *float64                      `json:"score,omitempty"`
+	AlertCount           int                           `json:"alert_count"`
+	ReportabilityStatus  ReportabilityStatus           `json:"reportability_status"`
+	UpdatedAt            time.Time                     `json:"updated_at"`
+	AssignmentID         string                        `json:"assignment_id,omitempty"`
+	AssignmentGeneration uint64                        `json:"assignment_generation,omitempty"`
+	EvaluationRevision   uint64                        `json:"evaluation_revision,omitempty"`
+	EvaluationID         string                        `json:"evaluation_id,omitempty"`
+	Condition            string                        `json:"condition,omitempty"`
+	MonitoringStatus     string                        `json:"monitoring_status,omitempty"`
+	RecordingStatus      string                        `json:"recording_status,omitempty"`
+	ObservedAt           *time.Time                    `json:"observed_at,omitempty"`
+	FrameID              string                        `json:"frame_id,omitempty"`
+	Violations           []ConformanceViolationSummary `json:"violations,omitempty"`
+}
+
+// ConformanceViolationSummary describes one live Registry violation without
+// replacing the durable incident history represented by ConformanceEvent.
+type ConformanceViolationSummary struct {
+	ViolationType   string     `json:"violation_type"`
+	Phase           string     `json:"phase"`
+	OpeningFrameID  string     `json:"opening_frame_id,omitempty"`
+	OpenedAt        *time.Time `json:"opened_at,omitempty"`
+	LastObservedAt  *time.Time `json:"last_observed_at,omitempty"`
+	WorstDeviationM float64    `json:"worst_deviation_m"`
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/replay"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/telemetry"
+	conformancev1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/conformance/v1"
 	registryv1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/registry/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -33,6 +34,7 @@ const (
 	defaultRegistryFreshness  = 30 * time.Second
 	defaultTelemetryFreshness = 15 * time.Second
 	maxPlacementLookups       = 8
+	maxConformanceBatch       = 250
 )
 
 type placementLookup struct {
@@ -50,6 +52,22 @@ type ReplayResponse struct {
 	ReplayManifest    *domain.ReplayManifest    `json:"replay_manifest,omitempty"`
 	Samples           []domain.TelemetrySample  `json:"samples"`
 	ConformanceEvents []domain.ConformanceEvent `json:"conformance_events"`
+}
+
+type InstallBatteryRequest struct {
+	ID          string    `json:"id"`
+	OperatorID  string    `json:"operator_id,omitempty"`
+	BatteryID   string    `json:"battery_id"`
+	InstalledAt time.Time `json:"installed_at,omitempty"`
+}
+
+type CreateFlightRequest struct {
+	ID           string `json:"id"`
+	OperatorID   string `json:"operator_id,omitempty"`
+	Origin       string `json:"origin,omitempty"`
+	Destination  string `json:"destination,omitempty"`
+	MissionType  string `json:"mission_type,omitempty"`
+	TelemetryURI string `json:"telemetry_uri,omitempty"`
 }
 
 // NewFleetService constructs the fleet read/write façade used by HTTP handlers.
@@ -124,6 +142,159 @@ func (s *FleetService) CreateBattery(ctx context.Context, battery domain.Battery
 	return s.durable.CreateBattery(ctx, battery)
 }
 
+// InstallBattery creates the active battery installation for one aircraft
+// after verifying both resources and their operator ownership agree.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - aircraftID: identifies the aircraft receiving the battery.
+//   - req: identifies the installation and battery; a zero time uses the service clock.
+//
+// Returns:
+//   - installation: is the newly recorded active installation.
+//   - error: reports validation, missing resources, ownership mismatch, or an existing active installation.
+func (s *FleetService) InstallBattery(ctx context.Context, aircraftID string, req InstallBatteryRequest) (domain.BatteryInstallation, error) {
+	aircraftID = strings.TrimSpace(aircraftID)
+	req.ID = strings.TrimSpace(req.ID)
+	req.BatteryID = strings.TrimSpace(req.BatteryID)
+	if aircraftID == "" || req.ID == "" || req.BatteryID == "" {
+		return domain.BatteryInstallation{}, fmt.Errorf("%w: aircraft_id, id, and battery_id are required", ErrValidation)
+	}
+	aircraft, err := s.durable.GetAircraft(ctx, aircraftID)
+	if err != nil {
+		return domain.BatteryInstallation{}, fmt.Errorf("get aircraft: %w", err)
+	}
+	battery, err := s.durable.GetBattery(ctx, req.BatteryID)
+	if err != nil {
+		return domain.BatteryInstallation{}, fmt.Errorf("get battery: %w", err)
+	}
+	operatorID, err := consistentOperatorID(req.OperatorID, aircraft.OperatorID, battery.OperatorID)
+	if err != nil {
+		return domain.BatteryInstallation{}, err
+	}
+	if active, err := s.durable.GetActiveBatteryInstallation(ctx, aircraftID); err != nil {
+		return domain.BatteryInstallation{}, fmt.Errorf("get active battery installation: %w", err)
+	} else if active != nil {
+		return domain.BatteryInstallation{}, fmt.Errorf("%w: aircraft %s already has active installation %s", durable.ErrVersionConflict, aircraftID, active.ID)
+	}
+	installedAt := req.InstalledAt.UTC()
+	if installedAt.IsZero() {
+		installedAt = s.now().UTC()
+	}
+	installation := domain.BatteryInstallation{
+		ID: req.ID, OperatorID: operatorID, AircraftID: aircraftID,
+		BatteryID: req.BatteryID, InstalledAt: installedAt,
+	}
+	if err := s.durable.RecordBatteryInstallation(ctx, installation); err != nil {
+		return domain.BatteryInstallation{}, fmt.Errorf("record battery installation: %w", err)
+	}
+	return installation, nil
+}
+
+// CreatePlannedFlight reserves a flight identity for the current accepted or
+// active intent and derives its aircraft, operator, and intent-version linkage.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - intentID: identifies the current operational intent.
+//   - req: supplies the flight identity and optional descriptive metadata.
+//
+// Returns:
+//   - flight: is the newly persisted planned flight.
+//   - error: reports validation, missing resources, ownership mismatch, lifecycle conflict, or duplicate identity.
+func (s *FleetService) CreatePlannedFlight(ctx context.Context, intentID string, req CreateFlightRequest) (domain.FlightRecord, error) {
+	intentID = strings.TrimSpace(intentID)
+	req.ID = strings.TrimSpace(req.ID)
+	if intentID == "" || req.ID == "" {
+		return domain.FlightRecord{}, fmt.Errorf("%w: intent_id and id are required", ErrValidation)
+	}
+	intent, err := s.durable.GetOperationalIntent(ctx, intentID)
+	if err != nil {
+		return domain.FlightRecord{}, fmt.Errorf("get operational intent: %w", err)
+	}
+	if intent.Status != domain.IntentStatusAccepted && intent.Status != domain.IntentStatusActive {
+		return domain.FlightRecord{}, fmt.Errorf("%w: cannot create flight for intent in %s status", ErrInvalidTransition, intent.Status)
+	}
+	aircraft, err := s.durable.GetAircraft(ctx, intent.AircraftID)
+	if err != nil {
+		return domain.FlightRecord{}, fmt.Errorf("get aircraft: %w", err)
+	}
+	operatorID, err := consistentOperatorID(req.OperatorID, intent.OperatorID, aircraft.OperatorID)
+	if err != nil {
+		return domain.FlightRecord{}, err
+	}
+	flight := domain.FlightRecord{
+		ID: req.ID, OperatorID: operatorID, AircraftID: intent.AircraftID,
+		IntentID: intent.ID, IntentVersion: intent.Version, Status: domain.FlightStatusPlanned,
+		Origin: req.Origin, Destination: req.Destination, MissionType: req.MissionType, TelemetryURI: req.TelemetryURI,
+	}
+	if err := s.durable.CreateFlightRecord(ctx, flight); err != nil {
+		return domain.FlightRecord{}, fmt.Errorf("create flight record: %w", err)
+	}
+	return flight, nil
+}
+
+// StartFlight atomically advances a planned flight to active once its exact
+// linked intent version is active. Retrying an already-active flight is safe.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the operation.
+//   - flightID: identifies the planned flight.
+//
+// Returns:
+//   - flight: is the active flight with its server-owned start timestamp.
+//   - error: reports missing records, stale intent linkage, lifecycle conflict, or persistence failure.
+func (s *FleetService) StartFlight(ctx context.Context, flightID string) (domain.FlightRecord, error) {
+	flightID = strings.TrimSpace(flightID)
+	if flightID == "" {
+		return domain.FlightRecord{}, fmt.Errorf("%w: flight_id is required", ErrValidation)
+	}
+	flight, err := s.durable.GetFlightRecord(ctx, flightID)
+	if err != nil {
+		return domain.FlightRecord{}, fmt.Errorf("get flight record: %w", err)
+	}
+	if flight.Status == domain.FlightStatusActive {
+		return flight, nil
+	}
+	if flight.Status != domain.FlightStatusPlanned {
+		return domain.FlightRecord{}, fmt.Errorf("%w: cannot start flight in %s status", ErrInvalidTransition, flight.Status)
+	}
+	intent, err := s.durable.GetOperationalIntent(ctx, flight.IntentID)
+	if err != nil {
+		return domain.FlightRecord{}, fmt.Errorf("get operational intent: %w", err)
+	}
+	if intent.Status != domain.IntentStatusActive || intent.Version != flight.IntentVersion || intent.AircraftID != flight.AircraftID {
+		return domain.FlightRecord{}, fmt.Errorf("%w: linked intent version is not active", ErrInvalidTransition)
+	}
+	flight.Status = domain.FlightStatusActive
+	flight.StartedAt = s.now().UTC()
+	if err := s.durable.UpdateFlightRecord(ctx, flight, domain.FlightStatusPlanned); err != nil {
+		if errors.Is(err, durable.ErrVersionConflict) {
+			current, getErr := s.durable.GetFlightRecord(ctx, flightID)
+			if getErr == nil && current.Status == domain.FlightStatusActive {
+				return current, nil
+			}
+		}
+		return domain.FlightRecord{}, fmt.Errorf("start flight record: %w", err)
+	}
+	return flight, nil
+}
+
+func consistentOperatorID(values ...string) (string, error) {
+	operatorID := ""
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if operatorID != "" && value != operatorID {
+			return "", fmt.Errorf("%w: operator_id does not match linked resources", ErrValidation)
+		}
+		operatorID = value
+	}
+	return operatorID, nil
+}
+
 // RecordMaintenanceEvent appends a durable aircraft maintenance record.
 //
 // Parameters:
@@ -190,6 +361,7 @@ func (s *FleetService) GetOperationsDashboard(ctx context.Context) (readmodel.Op
 	if err != nil {
 		return readmodel.OperationsDashboard{}, fmt.Errorf("list conformance summaries: %w", err)
 	}
+	conformance = s.overlayRegistryConformance(ctx, intents, conformance)
 	aircraft, err := s.durable.ListAircraft(ctx)
 	if err != nil {
 		return readmodel.OperationsDashboard{}, fmt.Errorf("list aircraft: %w", err)
@@ -242,12 +414,206 @@ func (s *FleetService) GetConformanceDashboard(ctx context.Context) (readmodel.C
 	if err != nil {
 		return readmodel.ConformanceDashboard{}, fmt.Errorf("list conformance events: %w", err)
 	}
+	intents, err := s.durable.ListOperationalIntents(ctx, "")
+	if err != nil {
+		return readmodel.ConformanceDashboard{}, fmt.Errorf("list operational intents: %w", err)
+	}
+	summaries = s.overlayRegistryConformance(ctx, intents, summaries)
 
 	return readmodel.ConformanceDashboard{
 		Metrics:   conformanceMetrics(summaries, events),
 		Summaries: summaries,
 		Events:    events,
 	}, nil
+}
+
+func (s *FleetService) overlayRegistryConformance(ctx context.Context, intents []domain.OperationalIntent, durableSummaries []domain.ConformanceSummary) []domain.ConformanceSummary {
+	if s.registry == nil || len(intents) == 0 {
+		return durableSummaries
+	}
+	requested := make(map[string]struct{}, len(intents))
+	assignmentIDs := make([]string, 0, len(intents))
+	for _, intent := range intents {
+		assignmentID := strings.TrimSpace(intent.ID)
+		if assignmentID == "" {
+			continue
+		}
+		if _, exists := requested[assignmentID]; exists {
+			continue
+		}
+		requested[assignmentID] = struct{}{}
+		assignmentIDs = append(assignmentIDs, assignmentID)
+	}
+	if len(assignmentIDs) == 0 {
+		return durableSummaries
+	}
+	sort.Strings(assignmentIDs)
+
+	liveByVersion := make(map[string]domain.ConformanceSummary)
+	for start := 0; start < len(assignmentIDs); start += maxConformanceBatch {
+		end := min(start+maxConformanceBatch, len(assignmentIDs))
+		response, err := s.registry.BatchGetConformanceSummaries(ctx, &registryv1.BatchGetConformanceSummariesRequest{AssignmentIds: assignmentIDs[start:end]})
+		if err != nil || response == nil {
+			continue
+		}
+		for _, projection := range response.GetProjections() {
+			live, ok := registryConformanceSummary(projection.GetSummary(), requested)
+			if !ok {
+				continue
+			}
+			key := conformanceVersionKey(live.IntentID, live.IntentVersion)
+			current, exists := liveByVersion[key]
+			if !exists || live.AssignmentGeneration > current.AssignmentGeneration || (live.AssignmentGeneration == current.AssignmentGeneration && live.EvaluationRevision > current.EvaluationRevision) {
+				liveByVersion[key] = live
+			}
+		}
+	}
+	if len(liveByVersion) == 0 {
+		return durableSummaries
+	}
+
+	result := make([]domain.ConformanceSummary, 0, len(durableSummaries)+len(liveByVersion))
+	for _, durableSummary := range durableSummaries {
+		key := conformanceVersionKey(durableSummary.IntentID, durableSummary.IntentVersion)
+		live, exists := liveByVersion[key]
+		if !exists {
+			result = append(result, durableSummary)
+			continue
+		}
+		result = append(result, mergeLiveConformance(durableSummary, live))
+		delete(liveByVersion, key)
+	}
+	for _, live := range liveByVersion {
+		result = append(result, live)
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].UpdatedAt.Equal(result[j].UpdatedAt) {
+			return conformanceVersionKey(result[i].IntentID, result[i].IntentVersion) < conformanceVersionKey(result[j].IntentID, result[j].IntentVersion)
+		}
+		return result[i].UpdatedAt.After(result[j].UpdatedAt)
+	})
+	return result
+}
+
+func registryConformanceSummary(summary *conformancev1.ConformanceSummary, requested map[string]struct{}) (domain.ConformanceSummary, bool) {
+	if summary == nil {
+		return domain.ConformanceSummary{}, false
+	}
+	assignmentID := strings.TrimSpace(summary.GetAssignmentId())
+	intentID := strings.TrimSpace(summary.GetIntentId())
+	if assignmentID == "" || assignmentID != intentID || summary.GetIntentVersion() == 0 {
+		return domain.ConformanceSummary{}, false
+	}
+	if _, exists := requested[assignmentID]; !exists {
+		return domain.ConformanceSummary{}, false
+	}
+	observedAt := validProtoTime(summary.GetObservedAt())
+	condition := enumJSONName(summary.GetCondition().String(), "CONFORMANCE_CONDITION_")
+	violations := make([]domain.ConformanceViolationSummary, 0, len(summary.GetViolations()))
+	for _, violation := range summary.GetViolations() {
+		if violation == nil {
+			continue
+		}
+		violations = append(violations, domain.ConformanceViolationSummary{
+			ViolationType:   enumJSONName(violation.GetViolationType().String(), "VIOLATION_TYPE_"),
+			Phase:           enumJSONName(violation.GetPhase().String(), "INCIDENT_PHASE_"),
+			OpeningFrameID:  violation.GetOpeningFrameId(),
+			OpenedAt:        validProtoTime(violation.GetOpenedAt()),
+			LastObservedAt:  validProtoTime(violation.GetLastObservedAt()),
+			WorstDeviationM: violation.GetWorstDeviationM(),
+		})
+	}
+	updatedAt := time.Time{}
+	if observedAt != nil {
+		updatedAt = *observedAt
+	}
+	return domain.ConformanceSummary{
+		ID:                   summary.GetEvaluationId(),
+		OperatorID:           summary.GetOperatorId(),
+		IntentID:             intentID,
+		IntentVersion:        int(summary.GetIntentVersion()),
+		FlightID:             summary.GetFlightId(),
+		AircraftID:           summary.GetAircraftId(),
+		Status:               legacyConformanceStatus(condition),
+		AlertCount:           len(violations),
+		ReportabilityStatus:  domain.ReportabilityStatusReview,
+		UpdatedAt:            updatedAt,
+		AssignmentID:         assignmentID,
+		AssignmentGeneration: summary.GetAssignmentGeneration(),
+		EvaluationRevision:   summary.GetEvaluationRevision(),
+		EvaluationID:         summary.GetEvaluationId(),
+		Condition:            condition,
+		MonitoringStatus:     enumJSONName(summary.GetMonitoringStatus().String(), "MONITORING_STATUS_"),
+		RecordingStatus:      enumJSONName(summary.GetRecordingStatus().String(), "RECORDING_STATUS_"),
+		ObservedAt:           observedAt,
+		FrameID:              summary.GetFrameId(),
+		Violations:           violations,
+	}, true
+}
+
+func mergeLiveConformance(durableSummary, live domain.ConformanceSummary) domain.ConformanceSummary {
+	result := durableSummary
+	result.OperatorID = firstNonEmpty(live.OperatorID, result.OperatorID)
+	result.FlightID = firstNonEmpty(live.FlightID, result.FlightID)
+	result.AircraftID = firstNonEmpty(live.AircraftID, result.AircraftID)
+	result.Status = live.Status
+	if !live.UpdatedAt.IsZero() {
+		result.UpdatedAt = live.UpdatedAt
+	}
+	result.AssignmentID = live.AssignmentID
+	result.AssignmentGeneration = live.AssignmentGeneration
+	result.EvaluationRevision = live.EvaluationRevision
+	result.EvaluationID = live.EvaluationID
+	result.Condition = live.Condition
+	result.MonitoringStatus = live.MonitoringStatus
+	result.RecordingStatus = live.RecordingStatus
+	result.ObservedAt = live.ObservedAt
+	result.FrameID = live.FrameID
+	result.Violations = live.Violations
+	return result
+}
+
+func legacyConformanceStatus(condition string) domain.ConformanceStatus {
+	switch condition {
+	case "conforming":
+		return domain.ConformanceStatusConforming
+	case "non_conforming":
+		return domain.ConformanceStatusNonConforming
+	case "suspected", "recovering":
+		return domain.ConformanceStatusContingent
+	default:
+		return domain.ConformanceStatusUnknown
+	}
+}
+
+func enumJSONName(value, prefix string) string {
+	value = strings.TrimPrefix(value, prefix)
+	if value == "UNSPECIFIED" {
+		return ""
+	}
+	return strings.ToLower(value)
+}
+
+func validProtoTime(value interface {
+	CheckValid() error
+	AsTime() time.Time
+}) *time.Time {
+	if value == nil || value.CheckValid() != nil {
+		return nil
+	}
+	timestamp := value.AsTime().UTC()
+	return &timestamp
+}
+
+func conformanceVersionKey(intentID string, intentVersion int) string {
+	return fmt.Sprintf("%s:%d", intentID, intentVersion)
+}
+
+func firstNonEmpty(preferred, fallback string) string {
+	if preferred != "" {
+		return preferred
+	}
+	return fallback
 }
 
 // GetMaintenanceDashboard composes maintenance history, battery inventory, and

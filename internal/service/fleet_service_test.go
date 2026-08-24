@@ -11,11 +11,16 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/readmodel"
 	"github.com/Aero-Arc/aero-arc-api/internal/registry"
+	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 	replaymemory "github.com/Aero-Arc/aero-arc-api/internal/store/replay/memory"
 	telemetrymemory "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/memory"
+	conformancev1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/conformance/v1"
 	registryv1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/registry/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type failingRegistry struct{}
@@ -46,6 +51,18 @@ func (failingRegistry) ListAgents(context.Context, *registryv1.ListAgentsRequest
 
 func (failingRegistry) GetAgentPlacement(context.Context, *registryv1.GetAgentPlacementRequest, ...grpc.CallOption) (*registryv1.GetAgentPlacementResponse, error) {
 	return nil, errors.New("registry unavailable")
+}
+
+func (failingRegistry) PublishConformanceSummary(context.Context, *registryv1.PublishConformanceSummaryRequest, ...grpc.CallOption) (*registryv1.PublishConformanceSummaryResponse, error) {
+	return nil, errors.New("registry unavailable")
+}
+
+func (failingRegistry) GetConformanceSummary(context.Context, *registryv1.GetConformanceSummaryRequest, ...grpc.CallOption) (*registryv1.GetConformanceSummaryResponse, error) {
+	return nil, errors.New("registry unavailable")
+}
+
+func (failingRegistry) BatchGetConformanceSummaries(context.Context, *registryv1.BatchGetConformanceSummariesRequest, ...grpc.CallOption) (*registryv1.BatchGetConformanceSummariesResponse, error) {
+	return nil, status.Error(codes.Unavailable, "registry unavailable")
 }
 
 func TestFleetServiceComposesAircraftDashboard(t *testing.T) {
@@ -177,6 +194,190 @@ func TestFleetServiceGracefullyDegradesWhenRegistryUnavailable(t *testing.T) {
 	}
 	if dashboard.Readiness.Status != "warning" {
 		t.Fatalf("readiness = %q, want warning", dashboard.Readiness.Status)
+	}
+}
+
+func TestFleetServiceOverlaysRegistryConformanceInOneBatch(t *testing.T) {
+	ctx := context.Background()
+	observedAt := time.Date(2026, 8, 24, 5, 30, 0, 0, time.UTC)
+	durable := durablememory.NewStore()
+	reg := newTestRegistry()
+	for _, intentID := range []string{"intent-live-only", "intent-merge", "intent-missing"} {
+		must(t, durable.CreateOperationalIntent(ctx, domain.OperationalIntent{ID: intentID, Version: 2, AircraftID: "aircraft-1", ConformanceRequired: true}))
+	}
+	score := 0.91
+	must(t, durable.UpsertConformanceSummary(ctx, domain.ConformanceSummary{
+		ID: "durable-merge", IntentID: "intent-merge", IntentVersion: 2, AircraftID: "aircraft-old",
+		Status: domain.ConformanceStatusConforming, Score: &score, AlertCount: 9,
+		ReportabilityStatus: domain.ReportabilityStatusReportable, UpdatedAt: observedAt.Add(-time.Hour),
+	}))
+	must(t, durable.UpsertConformanceSummary(ctx, domain.ConformanceSummary{
+		ID: "durable-missing", IntentID: "intent-missing", IntentVersion: 2, AircraftID: "aircraft-1",
+		Status: domain.ConformanceStatusConforming, ReportabilityStatus: domain.ReportabilityStatusNo,
+		UpdatedAt: observedAt.Add(-2 * time.Hour),
+	}))
+	must(t, durable.RecordConformanceEvent(ctx, domain.ConformanceEvent{ID: "event-durable", IntentID: "intent-merge", OccurredAt: observedAt.Add(-time.Minute)}))
+
+	publishTestConformance(t, ctx, reg.MemoryClient, testConformanceProto("intent-live-only", observedAt, conformancev1.ConformanceCondition_CONFORMANCE_CONDITION_CONFORMING))
+	mergedProto := testConformanceProto("intent-merge", observedAt.Add(time.Minute), conformancev1.ConformanceCondition_CONFORMANCE_CONDITION_NON_CONFORMING)
+	mergedProto.EvaluationRevision = 7
+	mergedProto.EvaluationId = "evaluation-merge"
+	mergedProto.AircraftId = "aircraft-live"
+	mergedProto.Violations = []*conformancev1.ViolationSummary{{
+		ViolationType:   conformancev1.ViolationType_VIOLATION_TYPE_LATERAL_DEVIATION,
+		Phase:           conformancev1.IncidentPhase_INCIDENT_PHASE_OPEN,
+		OpeningFrameId:  "frame-opening",
+		OpenedAt:        timestamppb.New(observedAt.Add(-time.Minute)),
+		LastObservedAt:  timestamppb.New(observedAt),
+		WorstDeviationM: 12.5,
+	}}
+	publishTestConformance(t, ctx, reg.MemoryClient, mergedProto)
+
+	svc := NewFleetService(durable, telemetrymemory.NewStore(), replaymemory.NewStore(), reg)
+	operations, err := svc.GetOperationsDashboard(ctx)
+	if err != nil {
+		t.Fatalf("GetOperationsDashboard returned error: %v", err)
+	}
+	if reg.batchConformanceCalls != 1 {
+		t.Fatalf("BatchGetConformanceSummaries calls = %d, want 1", reg.batchConformanceCalls)
+	}
+	if got := reg.batchAssignmentIDs[0]; fmt.Sprint(got) != "[intent-live-only intent-merge intent-missing]" {
+		t.Fatalf("assignment IDs = %v", got)
+	}
+	byIntent := conformanceByIntent(operations.Conformance)
+	if len(byIntent) != 3 {
+		t.Fatalf("conformance summaries = %#v, want live-only, merged, and durable fallback", operations.Conformance)
+	}
+	liveOnly := byIntent["intent-live-only"]
+	if liveOnly.AssignmentID != "intent-live-only" || liveOnly.Status != domain.ConformanceStatusConforming || liveOnly.ObservedAt == nil || !liveOnly.ObservedAt.Equal(observedAt) {
+		t.Fatalf("live-only summary = %#v", liveOnly)
+	}
+	merged := byIntent["intent-merge"]
+	if merged.ID != "durable-merge" || merged.Status != domain.ConformanceStatusNonConforming || merged.Condition != "non_conforming" || merged.EvaluationRevision != 7 {
+		t.Fatalf("merged summary identity/status = %#v", merged)
+	}
+	if merged.Score == nil || *merged.Score != score || merged.AlertCount != 9 || merged.ReportabilityStatus != domain.ReportabilityStatusReportable {
+		t.Fatalf("merged durable fields = %#v, want preserved score/alerts/reportability", merged)
+	}
+	if len(merged.Violations) != 1 || merged.Violations[0].ViolationType != "lateral_deviation" || merged.Violations[0].Phase != "open" || merged.Violations[0].WorstDeviationM != 12.5 {
+		t.Fatalf("merged violations = %#v", merged.Violations)
+	}
+	if missing := byIntent["intent-missing"]; missing.ID != "durable-missing" || missing.AssignmentID != "" {
+		t.Fatalf("missing projection fallback = %#v", missing)
+	}
+
+	conformance, err := svc.GetConformanceDashboard(ctx)
+	if err != nil {
+		t.Fatalf("GetConformanceDashboard returned error: %v", err)
+	}
+	if reg.batchConformanceCalls != 2 {
+		t.Fatalf("batch calls after both dashboards = %d, want one per dashboard", reg.batchConformanceCalls)
+	}
+	if len(conformance.Summaries) != 3 || len(conformance.Events) != 1 || conformance.Events[0].ID != "event-durable" {
+		t.Fatalf("conformance dashboard = %#v, want live summaries plus durable event", conformance)
+	}
+}
+
+func TestFleetServiceConformanceOverlayDegradesOnRegistryFailure(t *testing.T) {
+	ctx := context.Background()
+	for _, code := range []codes.Code{codes.Unimplemented, codes.Unavailable} {
+		t.Run(code.String(), func(t *testing.T) {
+			durable := durablememory.NewStore()
+			must(t, durable.CreateOperationalIntent(ctx, domain.OperationalIntent{ID: "intent-1", Version: 1, ConformanceRequired: true}))
+			must(t, durable.UpsertConformanceSummary(ctx, domain.ConformanceSummary{
+				ID: "durable-1", IntentID: "intent-1", IntentVersion: 1,
+				Status: domain.ConformanceStatusConforming, ReportabilityStatus: domain.ReportabilityStatusNo,
+			}))
+			reg := &conformanceFailureRegistry{testRegistry: newTestRegistry(), err: status.Error(code, "projection unavailable")}
+			svc := NewFleetService(durable, telemetrymemory.NewStore(), replaymemory.NewStore(), reg)
+			operations, err := svc.GetOperationsDashboard(ctx)
+			if err != nil {
+				t.Fatalf("GetOperationsDashboard returned error: %v", err)
+			}
+			if len(operations.Conformance) != 1 || operations.Conformance[0].ID != "durable-1" {
+				t.Fatalf("operations conformance = %#v, want durable fallback", operations.Conformance)
+			}
+			conformance, err := svc.GetConformanceDashboard(ctx)
+			if err != nil {
+				t.Fatalf("GetConformanceDashboard returned error: %v", err)
+			}
+			if len(conformance.Summaries) != 1 || conformance.Summaries[0].ID != "durable-1" {
+				t.Fatalf("conformance summaries = %#v, want durable fallback", conformance.Summaries)
+			}
+		})
+	}
+}
+
+func TestFleetServiceBootstrapsBatteryAndFlightLifecycle(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 24, 7, 0, 0, 0, time.UTC)
+	store := durablememory.NewStore()
+	must(t, store.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1", OperatorID: "operator-1"}))
+	must(t, store.CreateBattery(ctx, domain.Battery{ID: "battery-1", OperatorID: "operator-1"}))
+	intent := domain.OperationalIntent{
+		ID: "intent-1", Version: 3, OperatorID: "operator-1", AircraftID: "aircraft-1",
+		Status: domain.IntentStatusAccepted, UpdatedAt: now.Add(-time.Minute),
+	}
+	must(t, store.CreateOperationalIntent(ctx, intent))
+	svc := NewFleetService(store, telemetrymemory.NewStore(), replaymemory.NewStore(), newTestRegistry())
+	svc.now = func() time.Time { return now }
+
+	installation, err := svc.InstallBattery(ctx, "aircraft-1", InstallBatteryRequest{ID: "install-1", BatteryID: "battery-1"})
+	if err != nil {
+		t.Fatalf("InstallBattery returned error: %v", err)
+	}
+	if installation.OperatorID != "operator-1" || !installation.InstalledAt.Equal(now) {
+		t.Fatalf("installation = %#v, want derived operator and server time", installation)
+	}
+	if _, err := svc.InstallBattery(ctx, "aircraft-1", InstallBatteryRequest{ID: "install-2", BatteryID: "battery-1"}); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("second InstallBattery error = %v, want version conflict", err)
+	}
+
+	flight, err := svc.CreatePlannedFlight(ctx, "intent-1", CreateFlightRequest{ID: "flight-1", MissionType: "sitl"})
+	if err != nil {
+		t.Fatalf("CreatePlannedFlight returned error: %v", err)
+	}
+	if flight.Status != domain.FlightStatusPlanned || flight.OperatorID != "operator-1" || flight.AircraftID != "aircraft-1" || flight.IntentVersion != 3 || !flight.StartedAt.IsZero() {
+		t.Fatalf("planned flight = %#v", flight)
+	}
+	if _, err := svc.CreatePlannedFlight(ctx, "intent-1", CreateFlightRequest{ID: "flight-1"}); !errors.Is(err, durable.ErrAlreadyExists) {
+		t.Fatalf("duplicate CreatePlannedFlight error = %v, want already exists", err)
+	}
+	if _, err := svc.StartFlight(ctx, "flight-1"); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("StartFlight with accepted intent error = %v, want invalid transition", err)
+	}
+
+	intent.Status = domain.IntentStatusActive
+	intent.UpdatedAt = now
+	must(t, store.UpdateOperationalIntent(ctx, intent, 0))
+	started, err := svc.StartFlight(ctx, "flight-1")
+	if err != nil {
+		t.Fatalf("StartFlight returned error: %v", err)
+	}
+	if started.Status != domain.FlightStatusActive || !started.StartedAt.Equal(now) {
+		t.Fatalf("started flight = %#v", started)
+	}
+	retry, err := svc.StartFlight(ctx, "flight-1")
+	if err != nil || retry.Status != domain.FlightStatusActive || !retry.StartedAt.Equal(started.StartedAt) {
+		t.Fatalf("StartFlight retry = %#v, %v", retry, err)
+	}
+}
+
+func TestFleetServiceBootstrapRejectsOperatorMismatch(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	must(t, store.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1", OperatorID: "operator-aircraft"}))
+	must(t, store.CreateBattery(ctx, domain.Battery{ID: "battery-1", OperatorID: "operator-battery"}))
+	svc := NewFleetService(store, telemetrymemory.NewStore(), replaymemory.NewStore(), newTestRegistry())
+	if _, err := svc.InstallBattery(ctx, "aircraft-1", InstallBatteryRequest{ID: "install-1", BatteryID: "battery-1"}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("InstallBattery error = %v, want validation", err)
+	}
+
+	must(t, store.CreateOperationalIntent(ctx, domain.OperationalIntent{
+		ID: "intent-1", Version: 1, OperatorID: "operator-intent", AircraftID: "aircraft-1", Status: domain.IntentStatusAccepted,
+	}))
+	if _, err := svc.CreatePlannedFlight(ctx, "intent-1", CreateFlightRequest{ID: "flight-1"}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("CreatePlannedFlight error = %v, want validation", err)
 	}
 }
 
@@ -608,7 +809,14 @@ func newTestRegistry() *testRegistry {
 
 type testRegistry struct {
 	*registry.MemoryClient
-	listAgentCalls int
+	listAgentCalls        int
+	batchConformanceCalls int
+	batchAssignmentIDs    [][]string
+}
+
+type conformanceFailureRegistry struct {
+	*testRegistry
+	err error
 }
 
 type controlledPlacementRegistry struct {
@@ -670,6 +878,50 @@ func (r *controlledPlacementRegistry) counts() (calls, active, maxActive int) {
 func (r *testRegistry) ListAgents(ctx context.Context, request *registryv1.ListAgentsRequest, options ...grpc.CallOption) (*registryv1.ListAgentsResponse, error) {
 	r.listAgentCalls++
 	return r.MemoryClient.ListAgents(ctx, request, options...)
+}
+
+func (r *testRegistry) BatchGetConformanceSummaries(ctx context.Context, request *registryv1.BatchGetConformanceSummariesRequest, options ...grpc.CallOption) (*registryv1.BatchGetConformanceSummariesResponse, error) {
+	r.batchConformanceCalls++
+	r.batchAssignmentIDs = append(r.batchAssignmentIDs, append([]string(nil), request.GetAssignmentIds()...))
+	return r.MemoryClient.BatchGetConformanceSummaries(ctx, request, options...)
+}
+
+func (r *conformanceFailureRegistry) BatchGetConformanceSummaries(context.Context, *registryv1.BatchGetConformanceSummariesRequest, ...grpc.CallOption) (*registryv1.BatchGetConformanceSummariesResponse, error) {
+	return nil, r.err
+}
+
+func testConformanceProto(intentID string, observedAt time.Time, condition conformancev1.ConformanceCondition) *conformancev1.ConformanceSummary {
+	return &conformancev1.ConformanceSummary{
+		AssignmentId:         intentID,
+		AssignmentGeneration: 3,
+		EvaluationRevision:   4,
+		EvaluationId:         "evaluation-" + intentID,
+		OperatorId:           "operator-1",
+		AircraftId:           "aircraft-1",
+		FlightId:             "flight-1",
+		IntentId:             intentID,
+		IntentVersion:        2,
+		Condition:            condition,
+		MonitoringStatus:     conformancev1.MonitoringStatus_MONITORING_STATUS_CURRENT,
+		RecordingStatus:      conformancev1.RecordingStatus_RECORDING_STATUS_CONFIRMED,
+		ObservedAt:           timestamppb.New(observedAt),
+		FrameId:              "frame-1",
+	}
+}
+
+func publishTestConformance(t *testing.T, ctx context.Context, client *registry.MemoryClient, summary *conformancev1.ConformanceSummary) {
+	t.Helper()
+	if _, err := client.PublishConformanceSummary(ctx, &registryv1.PublishConformanceSummaryRequest{Summary: summary}); err != nil {
+		t.Fatalf("PublishConformanceSummary returned error: %v", err)
+	}
+}
+
+func conformanceByIntent(summaries []domain.ConformanceSummary) map[string]domain.ConformanceSummary {
+	result := make(map[string]domain.ConformanceSummary, len(summaries))
+	for _, summary := range summaries {
+		result[summary.IntentID] = summary
+	}
+	return result
 }
 
 func must(t *testing.T, err error) {
