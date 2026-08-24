@@ -308,6 +308,26 @@ func TestFleetServiceConformanceOverlayDegradesOnRegistryFailure(t *testing.T) {
 	}
 }
 
+func TestConformanceMetricsSeparateLiveConditionFromScoresAndClearAxes(t *testing.T) {
+	summary := domain.ConformanceSummary{
+		AssignmentID: "intent-1", Status: domain.ConformanceStatusConforming,
+		Violations: []domain.ConformanceViolationSummary{
+			{ViolationType: "lateral_deviation", Phase: "clear"},
+			{ViolationType: "altitude_deviation", Phase: "open"},
+		},
+	}
+	metrics := conformanceMetrics([]domain.ConformanceSummary{summary}, nil)
+	if metrics[0].Value != "Not scored" || metrics[0].Detail != "Live condition is reported separately" {
+		t.Fatalf("target metric = %#v", metrics[0])
+	}
+	if metrics[2].Label != "Active findings" || metrics[2].Value != "1" {
+		t.Fatalf("findings metric = %#v", metrics[2])
+	}
+	if got := activeViolationCount(summary.Violations); got != 1 {
+		t.Fatalf("activeViolationCount() = %d, want 1", got)
+	}
+}
+
 func TestFleetServiceBootstrapsBatteryAndFlightLifecycle(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 8, 24, 7, 0, 0, 0, time.UTC)
