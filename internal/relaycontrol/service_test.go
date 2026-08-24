@@ -69,6 +69,9 @@ func (f *fakeRelayClient) ListActiveDrones(context.Context, *relayv1.ListActiveD
 func (f *fakeRelayClient) GetDroneStatus(context.Context, *relayv1.GetDroneStatusRequest, ...grpc.CallOption) (*relayv1.GetDroneStatusResponse, error) {
 	return nil, errors.New("unused")
 }
+func (f *fakeRelayClient) SendAircraftCommand(context.Context, *relayv1.SendAircraftCommandRequest, ...grpc.CallOption) (*relayv1.SendAircraftCommandResponse, error) {
+	return nil, errors.New("unused")
+}
 func (f *fakeRelayClient) SetOperationContext(ctx context.Context, r *relayv1.SetOperationContextRequest, _ ...grpc.CallOption) (*relayv1.SetOperationContextResponse, error) {
 	f.setRequests = append(f.setRequests, r)
 	if f.block {

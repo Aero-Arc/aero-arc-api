@@ -123,6 +123,40 @@ observation malformed. Optional numeric fields are nullable in API JSON so an
 omitted column is never coerced to zero. A malformed row is isolated to its
 aircraft/message group; independently sampled valid groups remain available.
 
+## Live Conformance Contract
+
+`GET /api/v1/operations` and `GET /api/v1/conformance` batch-read current live
+Conformance projections from Registry using the deterministic
+`assignment_id == intent_id` contract. The API never performs one Registry call
+per intent. Missing, expired, unavailable, or not-yet-implemented Registry
+projections do not fail either dashboard.
+
+Each summary preserves the legacy durable fields (`id`, `operator_id`,
+`intent_id`, `intent_version`, `flight_id`, `aircraft_id`, `status`, `score`,
+`alert_count`, `reportability_status`, and `updated_at`) and may add these live
+fields:
+
+- `assignment_id`, `assignment_generation`
+- `evaluation_revision`, `evaluation_id`
+- `condition`: `unknown`, `conforming`, `suspected`, `non_conforming`, or
+  `recovering`
+- `monitoring_status`: `received`, `armed`, `current`, `stale`, or `unavailable`
+- `recording_status`: `pending`, `confirmed`, or `degraded`
+- `observed_at`, `frame_id`
+- `violations`: current violation summaries containing `violation_type`,
+  `phase`, optional opening/observation timestamps and frame identity, and
+  `worst_deviation_m`
+
+Registry is the replaceable source for current state, not incident history.
+The `events` array in the Conformance dashboard and durable legacy fields such
+as score, alert count, and reportability remain sourced from the API store. A
+live projection for the same intent version overlays its current condition and
+cursor fields without erasing those durable values. A live-only projection is
+also returned so a no-seed flight appears immediately. The API maps the live
+condition onto legacy `status` for older clients: conforming and non-conforming
+map directly, suspected/recovering map to contingent, and unknown maps to
+unknown.
+
 ## Known Gaps
 
 - `AircraftDashboard.operating_profile` exists but is not currently populated

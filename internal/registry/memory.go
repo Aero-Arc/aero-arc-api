@@ -3,21 +3,26 @@ package registry
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
+	conformancev1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/conformance/v1"
 	registryv1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/registry/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type MemoryClient struct {
-	mu         sync.RWMutex
-	relays     map[string]*registryv1.Relay
-	agents     map[string]*registryv1.Agent
-	placements map[string]*registryv1.AgentPlacement
+	mu          sync.RWMutex
+	relays      map[string]*registryv1.Relay
+	agents      map[string]*registryv1.Agent
+	placements  map[string]*registryv1.AgentPlacement
+	conformance map[string]*registryv1.ConformanceProjection
 }
 
 // NewMemoryClient constructs an empty, concurrency-safe Registry client for
@@ -27,10 +32,159 @@ type MemoryClient struct {
 //   - client: stores cloned Relay, Agent, and placement records in process memory.
 func NewMemoryClient() *MemoryClient {
 	return &MemoryClient{
-		relays:     make(map[string]*registryv1.Relay),
-		agents:     make(map[string]*registryv1.Agent),
-		placements: make(map[string]*registryv1.AgentPlacement),
+		relays:      make(map[string]*registryv1.Relay),
+		agents:      make(map[string]*registryv1.Agent),
+		placements:  make(map[string]*registryv1.AgentPlacement),
+		conformance: make(map[string]*registryv1.ConformanceProjection),
 	}
+}
+
+// PublishConformanceSummary validates and stores a defensive copy of the
+// current projection behind its assignment-generation and evaluation-revision
+// cursor. Exact retries are idempotent; stale or conflicting cursors fail.
+//
+// Parameters:
+//   - ctx: controls cancellation before the in-memory mutation.
+//   - req: contains the current conformance summary.
+//   - options: are accepted for gRPC client compatibility and are not used.
+//
+// Returns:
+//   - response: contains the applied or idempotent projection.
+//   - error: reports cancellation, invalid identity, or a stale/conflicting cursor.
+func (c *MemoryClient) PublishConformanceSummary(ctx context.Context, req *registryv1.PublishConformanceSummaryRequest, _ ...grpc.CallOption) (*registryv1.PublishConformanceSummaryResponse, error) {
+	select {
+	case <-ctx.Done():
+		return nil, status.FromContextError(ctx.Err()).Err()
+	default:
+	}
+	summary := req.GetSummary()
+	if err := validateConformanceSummary(summary); err != nil {
+		return nil, err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	existing := c.conformance[summary.GetAssignmentId()]
+	disposition := registryv1.ConformancePublishDisposition_CONFORMANCE_PUBLISH_DISPOSITION_APPLIED
+	if current := existing.GetSummary(); current != nil {
+		switch {
+		case summary.GetAssignmentGeneration() < current.GetAssignmentGeneration(),
+			summary.GetAssignmentGeneration() == current.GetAssignmentGeneration() && summary.GetEvaluationRevision() < current.GetEvaluationRevision():
+			return nil, status.Error(codes.FailedPrecondition, "conformance cursor is stale")
+		case summary.GetAssignmentGeneration() == current.GetAssignmentGeneration() && summary.GetEvaluationRevision() == current.GetEvaluationRevision():
+			if !proto.Equal(summary, current) {
+				return nil, status.Error(codes.FailedPrecondition, "conformance cursor content changed")
+			}
+			disposition = registryv1.ConformancePublishDisposition_CONFORMANCE_PUBLISH_DISPOSITION_IDEMPOTENT
+		}
+	}
+	projection := &registryv1.ConformanceProjection{
+		Summary:  proto.Clone(summary).(*conformancev1.ConformanceSummary),
+		StoredAt: timestamppb.Now(),
+	}
+	c.conformance[summary.GetAssignmentId()] = projection
+	return &registryv1.PublishConformanceSummaryResponse{
+		Disposition: disposition,
+		Projection:  cloneConformanceProjection(projection),
+	}, nil
+}
+
+// GetConformanceSummary returns a defensive copy of one current in-memory
+// conformance projection.
+//
+// Parameters:
+//   - ctx: controls cancellation before lookup.
+//   - req: identifies the assignment.
+//   - options: are accepted for gRPC client compatibility and are not used.
+//
+// Returns:
+//   - response: contains the current projection.
+//   - error: reports cancellation, invalid identity, or a missing projection.
+func (c *MemoryClient) GetConformanceSummary(ctx context.Context, req *registryv1.GetConformanceSummaryRequest, _ ...grpc.CallOption) (*registryv1.GetConformanceSummaryResponse, error) {
+	select {
+	case <-ctx.Done():
+		return nil, status.FromContextError(ctx.Err()).Err()
+	default:
+	}
+	assignmentID := strings.TrimSpace(req.GetAssignmentId())
+	if assignmentID == "" {
+		return nil, status.Error(codes.InvalidArgument, "assignment_id is required")
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	projection := c.conformance[assignmentID]
+	if projection == nil {
+		return nil, status.Error(codes.NotFound, "conformance summary not found")
+	}
+	return &registryv1.GetConformanceSummaryResponse{Projection: cloneConformanceProjection(projection)}, nil
+}
+
+// BatchGetConformanceSummaries returns defensive copies of current projections
+// in deterministic assignment order and separately reports missing IDs.
+//
+// Parameters:
+//   - ctx: controls cancellation before lookup.
+//   - req: identifies one to 250 assignments; duplicate IDs are collapsed.
+//   - options: are accepted for gRPC client compatibility and are not used.
+//
+// Returns:
+//   - response: contains sorted projections and missing assignment IDs.
+//   - error: reports cancellation or invalid request identifiers.
+func (c *MemoryClient) BatchGetConformanceSummaries(ctx context.Context, req *registryv1.BatchGetConformanceSummariesRequest, _ ...grpc.CallOption) (*registryv1.BatchGetConformanceSummariesResponse, error) {
+	select {
+	case <-ctx.Done():
+		return nil, status.FromContextError(ctx.Err()).Err()
+	default:
+	}
+	if len(req.GetAssignmentIds()) == 0 || len(req.GetAssignmentIds()) > 250 {
+		return nil, status.Error(codes.InvalidArgument, "one to 250 assignment_ids are required")
+	}
+	unique := make(map[string]struct{}, len(req.GetAssignmentIds()))
+	for _, rawID := range req.GetAssignmentIds() {
+		assignmentID := strings.TrimSpace(rawID)
+		if assignmentID == "" {
+			return nil, status.Error(codes.InvalidArgument, "assignment_ids cannot contain an empty value")
+		}
+		unique[assignmentID] = struct{}{}
+	}
+	assignmentIDs := make([]string, 0, len(unique))
+	for assignmentID := range unique {
+		assignmentIDs = append(assignmentIDs, assignmentID)
+	}
+	sort.Strings(assignmentIDs)
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	response := &registryv1.BatchGetConformanceSummariesResponse{
+		Projections:          make([]*registryv1.ConformanceProjection, 0, len(assignmentIDs)),
+		MissingAssignmentIds: make([]string, 0),
+	}
+	for _, assignmentID := range assignmentIDs {
+		projection := c.conformance[assignmentID]
+		if projection == nil {
+			response.MissingAssignmentIds = append(response.MissingAssignmentIds, assignmentID)
+			continue
+		}
+		response.Projections = append(response.Projections, cloneConformanceProjection(projection))
+	}
+	return response, nil
+}
+
+func validateConformanceSummary(summary *conformancev1.ConformanceSummary) error {
+	if summary == nil || strings.TrimSpace(summary.GetAssignmentId()) == "" || summary.GetAssignmentGeneration() == 0 || summary.GetEvaluationRevision() == 0 || strings.TrimSpace(summary.GetEvaluationId()) == "" || strings.TrimSpace(summary.GetIntentId()) == "" || strings.TrimSpace(summary.GetAircraftId()) == "" || strings.TrimSpace(summary.GetFlightId()) == "" || summary.GetIntentVersion() == 0 || summary.GetObservedAt() == nil || summary.GetObservedAt().CheckValid() != nil || strings.TrimSpace(summary.GetFrameId()) == "" {
+		return status.Error(codes.InvalidArgument, "conformance summary identity and cursor are required")
+	}
+	if summary.GetCondition() == conformancev1.ConformanceCondition_CONFORMANCE_CONDITION_UNSPECIFIED || summary.GetMonitoringStatus() == conformancev1.MonitoringStatus_MONITORING_STATUS_UNSPECIFIED || summary.GetRecordingStatus() == conformancev1.RecordingStatus_RECORDING_STATUS_UNSPECIFIED {
+		return status.Error(codes.InvalidArgument, "conformance status axes are required")
+	}
+	return nil
+}
+
+func cloneConformanceProjection(projection *registryv1.ConformanceProjection) *registryv1.ConformanceProjection {
+	if projection == nil {
+		return nil
+	}
+	return proto.Clone(projection).(*registryv1.ConformanceProjection)
 }
 
 var _ registryv1.AeroRegistryClient = (*MemoryClient)(nil)

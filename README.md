@@ -277,7 +277,9 @@ Fleet and replay:
 - `GET /api/v1/aircraft/{aircraft_id}`
 - `GET /api/v1/aircraft/{aircraft_id}/map?limit=500`
 - `GET /api/v1/aircraft/{aircraft_id}/flights`
+- `POST /api/v1/aircraft/{aircraft_id}/battery-installations`
 - `GET /api/v1/flights/{flight_id}`
+- `POST /api/v1/flights/{flight_id}/start`
 - `GET /api/v1/flights/{flight_id}/replay?limit=500`
 - `POST /api/v1/batteries`
 - `POST /api/v1/maintenance-events`
@@ -294,8 +296,53 @@ Operational workflows:
 - `GET /api/v1/operational-intents/{intent_id}/coordination`
 - `POST /api/v1/operational-intents/{intent_id}/accept`
 - `POST /api/v1/operational-intents/{intent_id}/activate`
+- `POST /api/v1/operational-intents/{intent_id}/flights`
 - `GET /api/v1/operational-intents/{intent_id}/conformance`
 - `POST /api/v1/telemetry`
+
+### No-seed battery and flight bootstrap
+
+An aircraft must have a healthy active battery installation before preflight
+can clear and an intent can activate. Create the battery with `POST
+/api/v1/batteries`, then install it with:
+
+```json
+POST /api/v1/aircraft/{aircraft_id}/battery-installations
+{
+  "id": "installation-1",
+  "battery_id": "battery-1",
+  "operator_id": "operator-1"
+}
+```
+
+`operator_id` is optional when it can be derived from the aircraft and battery;
+all nonempty operator IDs must agree. `installed_at` is optional and defaults to
+server time. A second active installation for the same aircraft returns `409`
+rather than silently replacing physical state.
+
+Reserve the flight identity while the linked intent is accepted or active:
+
+```json
+POST /api/v1/operational-intents/{intent_id}/flights
+{
+  "id": "flight-1",
+  "operator_id": "operator-1",
+  "mission_type": "sitl"
+}
+```
+
+The API derives `aircraft_id`, `intent_id`, `intent_version`, and the effective
+operator from authoritative records and creates a `planned` flight. After the
+exact linked intent version becomes active, start the flight with an empty
+`POST /api/v1/flights/{flight_id}/start`. Starting assigns server time to
+`started_at`; retrying an already-active flight is idempotent. Starting against
+an accepted, superseded, completed, or otherwise non-active intent returns
+`409`.
+
+These operator-console routes follow the API's current local, unauthenticated
+single-operator deployment posture. They enforce operator consistency between
+linked records, but they are not a substitute for the authentication, tenancy,
+and authorization layer required before external exposure.
 
 Authenticated USS-to-USS SCD endpoints, enabled with
 `AERO_API_USS_BASE_URL`:

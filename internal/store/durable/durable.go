@@ -105,6 +105,7 @@ type Store interface {
 	ListPreflightChecks(ctx context.Context, intentID string) ([]domain.PreflightCheck, error)
 
 	CreateFlightRecord(ctx context.Context, flight domain.FlightRecord) error
+	UpdateFlightRecord(ctx context.Context, flight domain.FlightRecord, expectedStatus domain.FlightStatus) error
 	GetFlightRecord(ctx context.Context, flightID string) (domain.FlightRecord, error)
 	ListFlightRecords(ctx context.Context, aircraftID string) ([]domain.FlightRecord, error)
 

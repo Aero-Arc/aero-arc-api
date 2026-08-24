@@ -16,6 +16,9 @@ import (
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 	replaymemory "github.com/Aero-Arc/aero-arc-api/internal/store/replay/memory"
 	telemetrymemory "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/memory"
+	conformancev1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/conformance/v1"
+	registryv1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/registry/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestHandleListAircraft(t *testing.T) {
@@ -134,6 +137,134 @@ func TestHandleGetAircraftUsesMachPathParam(t *testing.T) {
 	}
 	if body.Aircraft.ID != "aircraft-1" {
 		t.Fatalf("aircraft ID = %q, want aircraft-1", body.Aircraft.ID)
+	}
+}
+
+func TestHandleBootstrapBatteryAndFlightLifecycle(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	reg := registry.NewMemoryClient()
+	now := time.Now().UTC()
+	if err := store.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1", OperatorID: "operator-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateBattery(ctx, domain.Battery{ID: "battery-1", OperatorID: "operator-1"}); err != nil {
+		t.Fatal(err)
+	}
+	intent := domain.OperationalIntent{
+		ID: "intent-1", Version: 2, OperatorID: "operator-1", AircraftID: "aircraft-1",
+		Status: domain.IntentStatusAccepted, UpdatedAt: now,
+	}
+	if err := store.CreateOperationalIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	fleet := service.NewFleetService(store, telemetry, replaymemory.NewStore(), reg)
+	server := NewWithWorkflows(
+		fleet,
+		service.NewIntentService(store, nil),
+		service.NewPreflightService(store),
+		service.NewConformanceService(store, telemetry),
+		time.Second,
+	)
+
+	installationResponse := performJSONRequest(t, server.Handler(), http.MethodPost, "/api/v1/aircraft/aircraft-1/battery-installations", `{"id":"install-1","battery_id":"battery-1"}`)
+	if installationResponse.Code != http.StatusCreated {
+		t.Fatalf("installation status=%d body=%s", installationResponse.Code, installationResponse.Body.String())
+	}
+	var installation domain.BatteryInstallation
+	if err := json.Unmarshal(installationResponse.Body.Bytes(), &installation); err != nil {
+		t.Fatal(err)
+	}
+	if installation.AircraftID != "aircraft-1" || installation.OperatorID != "operator-1" || installation.InstalledAt.IsZero() {
+		t.Fatalf("installation = %#v", installation)
+	}
+
+	flightResponse := performJSONRequest(t, server.Handler(), http.MethodPost, "/api/v1/operational-intents/intent-1/flights", `{"id":"flight-1","mission_type":"sitl"}`)
+	if flightResponse.Code != http.StatusCreated {
+		t.Fatalf("flight create status=%d body=%s", flightResponse.Code, flightResponse.Body.String())
+	}
+	var flight domain.FlightRecord
+	if err := json.Unmarshal(flightResponse.Body.Bytes(), &flight); err != nil {
+		t.Fatal(err)
+	}
+	if flight.Status != domain.FlightStatusPlanned || flight.IntentVersion != 2 || flight.AircraftID != "aircraft-1" {
+		t.Fatalf("planned flight = %#v", flight)
+	}
+	blocked := performJSONRequest(t, server.Handler(), http.MethodPost, "/api/v1/flights/flight-1/start", `{}`)
+	if blocked.Code != http.StatusConflict {
+		t.Fatalf("start before activation status=%d body=%s", blocked.Code, blocked.Body.String())
+	}
+
+	intent.Status = domain.IntentStatusActive
+	if err := store.UpdateOperationalIntent(ctx, intent, 0); err != nil {
+		t.Fatal(err)
+	}
+	startedResponse := performJSONRequest(t, server.Handler(), http.MethodPost, "/api/v1/flights/flight-1/start", `{}`)
+	if startedResponse.Code != http.StatusOK {
+		t.Fatalf("start status=%d body=%s", startedResponse.Code, startedResponse.Body.String())
+	}
+	if err := json.Unmarshal(startedResponse.Body.Bytes(), &flight); err != nil {
+		t.Fatal(err)
+	}
+	if flight.Status != domain.FlightStatusActive || flight.StartedAt.IsZero() {
+		t.Fatalf("started flight = %#v", flight)
+	}
+	retryResponse := performJSONRequest(t, server.Handler(), http.MethodPost, "/api/v1/flights/flight-1/start", `{}`)
+	if retryResponse.Code != http.StatusOK {
+		t.Fatalf("start retry status=%d body=%s", retryResponse.Code, retryResponse.Body.String())
+	}
+}
+
+func TestHandleOperationsExposesRegistryConformanceJSON(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	reg := registry.NewMemoryClient()
+	observedAt := time.Date(2026, 8, 24, 8, 0, 0, 0, time.UTC)
+	if err := store.CreateOperationalIntent(ctx, domain.OperationalIntent{ID: "intent-1", Version: 1, ConformanceRequired: true}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := reg.PublishConformanceSummary(ctx, &registryv1.PublishConformanceSummaryRequest{Summary: &conformancev1.ConformanceSummary{
+		AssignmentId: "intent-1", AssignmentGeneration: 5, EvaluationRevision: 6,
+		EvaluationId: "evaluation-6", AircraftId: "aircraft-1", FlightId: "flight-1",
+		IntentId: "intent-1", IntentVersion: 1,
+		Condition:        conformancev1.ConformanceCondition_CONFORMANCE_CONDITION_NON_CONFORMING,
+		MonitoringStatus: conformancev1.MonitoringStatus_MONITORING_STATUS_CURRENT,
+		RecordingStatus:  conformancev1.RecordingStatus_RECORDING_STATUS_CONFIRMED,
+		ObservedAt:       timestamppb.New(observedAt), FrameId: "frame-6",
+		Violations: []*conformancev1.ViolationSummary{{
+			ViolationType: conformancev1.ViolationType_VIOLATION_TYPE_ALTITUDE_DEVIATION,
+			Phase:         conformancev1.IncidentPhase_INCIDENT_PHASE_OPEN, WorstDeviationM: 8.25,
+		}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := New(service.NewFleetService(store, telemetrymemory.NewStore(), replaymemory.NewStore(), reg), time.Second)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/operations", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	summaries := body["conformance"].([]any)
+	summary := summaries[0].(map[string]any)
+	for key, want := range map[string]any{
+		"assignment_id": "intent-1", "assignment_generation": float64(5),
+		"evaluation_revision": float64(6), "evaluation_id": "evaluation-6",
+		"condition": "non_conforming", "monitoring_status": "current",
+		"recording_status": "confirmed", "frame_id": "frame-6", "status": "non_conforming",
+	} {
+		if summary[key] != want {
+			t.Fatalf("summary[%q] = %#v, want %#v; summary=%#v", key, summary[key], want, summary)
+		}
+	}
+	violations := summary["violations"].([]any)
+	if len(violations) != 1 || violations[0].(map[string]any)["violation_type"] != "altitude_deviation" {
+		t.Fatalf("violations = %#v", violations)
 	}
 }
 
@@ -928,4 +1059,13 @@ func float64Ptr(value float64) *float64 {
 
 func timePtr(value time.Time) *time.Time {
 	return &value
+}
+
+func performJSONRequest(t *testing.T, handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(method, path, bytes.NewBufferString(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
 }

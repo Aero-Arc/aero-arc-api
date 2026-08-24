@@ -235,6 +235,14 @@ func (s *Store) ListBatteries(_ context.Context) ([]domain.Battery, error) {
 func (s *Store) RecordBatteryInstallation(_ context.Context, installation domain.BatteryInstallation) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for _, existing := range s.batteryInstallations {
+		if existing.ID == installation.ID {
+			return durable.ErrAlreadyExists
+		}
+		if existing.AircraftID == installation.AircraftID && existing.RemovedAt == nil {
+			return durable.ErrVersionConflict
+		}
+	}
 	s.batteryInstallations = append(s.batteryInstallations, installation)
 	return nil
 }
@@ -1242,6 +1250,33 @@ func (s *Store) ListPreflightChecks(_ context.Context, intentID string) ([]domai
 func (s *Store) CreateFlightRecord(_ context.Context, flight domain.FlightRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, exists := s.flightRecords[flight.ID]; exists {
+		return durable.ErrAlreadyExists
+	}
+	s.flightRecords[flight.ID] = flight
+	return nil
+}
+
+// UpdateFlightRecord replaces an existing flight only while its current status
+// matches the caller's expected lifecycle state.
+//
+// Parameters:
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
+//   - flight: contains the replacement flight record.
+//   - expectedStatus: fences the update against concurrent lifecycle changes.
+//
+// Returns:
+//   - error: reports a missing flight or a lifecycle version conflict.
+func (s *Store) UpdateFlightRecord(_ context.Context, flight domain.FlightRecord, expectedStatus domain.FlightStatus) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, exists := s.flightRecords[flight.ID]
+	if !exists {
+		return durable.ErrNotFound
+	}
+	if current.Status != expectedStatus {
+		return durable.ErrVersionConflict
+	}
 	s.flightRecords[flight.ID] = flight
 	return nil
 }

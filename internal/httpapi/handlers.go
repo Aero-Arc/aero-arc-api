@@ -242,6 +242,49 @@ func (s *Server) handleCreateBattery(c *mach.Context) {
 	writeJSON(c, http.StatusCreated, battery)
 }
 
+func (s *Server) handleInstallBattery(c *mach.Context) {
+	var req service.InstallBatteryRequest
+	if err := decodeJSON(c, &req); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	installation, err := s.fleet.InstallBattery(ctx, c.Param("aircraft_id"), req)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusCreated, installation)
+}
+
+func (s *Server) handleCreatePlannedFlight(c *mach.Context) {
+	var req service.CreateFlightRequest
+	if err := decodeJSON(c, &req); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	flight, err := s.fleet.CreatePlannedFlight(ctx, c.Param("intent_id"), req)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusCreated, flight)
+}
+
+func (s *Server) handleStartFlight(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	flight, err := s.fleet.StartFlight(ctx, c.Param("flight_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, flight)
+}
+
 func (s *Server) handleCreateMaintenanceEvent(c *mach.Context) {
 	var event domain.MaintenanceEvent
 	if err := decodeJSON(c, &event); err != nil {

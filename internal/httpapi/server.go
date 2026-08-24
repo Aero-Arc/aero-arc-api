@@ -119,7 +119,9 @@ func (s *Server) Handler() http.Handler {
 	api.GET("/aircraft/{aircraft_id}/state", s.handleGetAircraftLiveState)
 	api.GET("/aircraft/{aircraft_id}/map", s.handleGetAircraftMap)
 	api.GET("/aircraft/{aircraft_id}/flights", s.handleListAircraftFlights)
+	api.POST("/aircraft/{aircraft_id}/battery-installations", s.handleInstallBattery)
 	api.GET("/flights/{flight_id}", s.handleGetFlight)
+	api.POST("/flights/{flight_id}/start", s.handleStartFlight)
 	api.GET("/flights/{flight_id}/replay", s.handleGetFlightReplay)
 
 	if s.workflowsAvailable() {
@@ -135,6 +137,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		api.POST("/operational-intents/{intent_id}/accept", s.handleAcceptOperationalIntent)
 		api.POST("/operational-intents/{intent_id}/activate", s.handleActivateOperationalIntent)
+		api.POST("/operational-intents/{intent_id}/flights", s.handleCreatePlannedFlight)
 		api.POST("/operational-intents/{intent_id}/complete", s.handleCompleteOperationalIntent)
 		api.POST("/operational-intents/{intent_id}/cancel", s.handleCancelOperationalIntent)
 		api.GET("/operational-intents/{intent_id}/conformance", s.handleGetOperationalIntentConformance)
