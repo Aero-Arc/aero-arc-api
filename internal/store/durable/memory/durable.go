@@ -415,6 +415,35 @@ func (s *Store) UpdateOperationalIntent(_ context.Context, intent domain.Operati
 	return s.updateOperationalIntentLocked(intent, expectedRevision)
 }
 
+// ActivateOperationalIntent atomically activates the supplied intent only
+// when its aircraft has no other active operational intent.
+//
+// Parameters:
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
+//   - intent: is the accepted intent to transition to active.
+//   - expectedRevision: fences the target intent against concurrent mutation.
+//
+// Returns:
+//   - error: reports stale target state or durable.ErrActiveIntent when another
+//     intent already owns the aircraft's active-flight lifecycle.
+func (s *Store) ActivateOperationalIntent(_ context.Context, intent domain.OperationalIntent, expectedRevision int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, exists := s.latestOperationalIntent(intent.ID)
+	if !exists {
+		return durable.ErrNotFound
+	}
+	if current.Version != intent.Version || current.Revision != expectedRevision {
+		return durable.ErrVersionConflict
+	}
+	for _, existing := range s.operationalIntents {
+		if (existing.ID != intent.ID || existing.Version != intent.Version) && existing.AircraftID == intent.AircraftID && existing.Status == domain.IntentStatusActive {
+			return durable.ErrActiveIntent
+		}
+	}
+	return s.updateOperationalIntentLocked(intent, expectedRevision)
+}
+
 func (s *Store) updateOperationalIntentLocked(intent domain.OperationalIntent, expectedRevision int64) error {
 	current, exists := s.latestOperationalIntent(intent.ID)
 	if !exists {

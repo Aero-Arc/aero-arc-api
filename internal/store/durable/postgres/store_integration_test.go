@@ -146,6 +146,67 @@ func TestConcurrentIntentUpdatesUseOptimisticRevision(t *testing.T) {
 	}
 }
 
+func TestConcurrentAircraftActivationsAllowExactlyOneIntent(t *testing.T) {
+	ctx, first, second := integrationStores(t)
+	now := time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)
+	intents := []domain.OperationalIntent{
+		integrationIntent("activation-a", now),
+		integrationIntent("activation-b", now),
+	}
+	for index := range intents {
+		intents[index].AircraftID = "aircraft-race"
+		intents[index].Status = domain.IntentStatusAccepted
+		if err := first.CreateOperationalIntent(ctx, intents[index]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stores := []*Store{first, second}
+	start := make(chan struct{})
+	errs := make(chan error, len(intents))
+	var ready sync.WaitGroup
+	ready.Add(len(intents))
+	for index, accepted := range intents {
+		active := accepted
+		active.Status = domain.IntentStatusActive
+		store := stores[index]
+		go func() {
+			ready.Done()
+			<-start
+			errs <- store.ActivateOperationalIntent(ctx, active, active.Revision)
+		}()
+	}
+	ready.Wait()
+	close(start)
+
+	var activated, rejected int
+	for range intents {
+		switch err := <-errs; {
+		case err == nil:
+			activated++
+		case errors.Is(err, durable.ErrActiveIntent):
+			rejected++
+		default:
+			t.Fatalf("activation error = %v", err)
+		}
+	}
+	if activated != 1 || rejected != 1 {
+		t.Fatalf("activated = %d, rejected = %d", activated, rejected)
+	}
+	stored, err := first.ListOperationalIntents(ctx, "aircraft-race")
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeCount := 0
+	for _, intent := range stored {
+		if intent.Status == domain.IntentStatusActive {
+			activeCount++
+		}
+	}
+	if activeCount != 1 {
+		t.Fatalf("active intents = %d, want 1; intents=%#v", activeCount, stored)
+	}
+}
+
 func TestUpdateOperationalIntentRejectsSupersededVersion(t *testing.T) {
 	ctx, store, _ := integrationStores(t)
 	now := time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC)

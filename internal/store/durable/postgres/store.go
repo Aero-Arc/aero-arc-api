@@ -117,6 +117,56 @@ func (s *Store) UpdateOperationalIntent(ctx context.Context, intent domain.Opera
 	return nil
 }
 
+// ActivateOperationalIntent atomically activates the supplied intent only
+// when its aircraft has no other active operational intent. An aircraft-scoped
+// transaction lock serializes competing activations across API replicas, and a
+// partial unique index remains the final storage-level backstop.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the transaction.
+//   - intent: is the accepted intent to transition to active.
+//   - expectedRevision: fences the target intent against concurrent mutation.
+//
+// Returns:
+//   - error: reports stale target state or durable.ErrActiveIntent when another
+//     intent already owns the aircraft's active-flight lifecycle.
+func (s *Store) ActivateOperationalIntent(ctx context.Context, intent domain.OperationalIntent, expectedRevision int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin operational intent activation: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, intent.AircraftID); err != nil {
+		return fmt.Errorf("lock aircraft operational lifecycle: %w", err)
+	}
+	if err = lockIntent(ctx, tx, intent.ID); err != nil {
+		return err
+	}
+	var activeIntentID string
+	err = tx.QueryRow(ctx, `
+		SELECT id
+		FROM operational_intents
+		WHERE aircraft_id = $1 AND (id <> $2 OR version <> $3) AND data->>'status' = $4
+		LIMIT 1`, intent.AircraftID, intent.ID, intent.Version, domain.IntentStatusActive).Scan(&activeIntentID)
+	switch {
+	case err == nil:
+		return durable.ErrActiveIntent
+	case !errors.Is(err, pgx.ErrNoRows):
+		return fmt.Errorf("check active aircraft operational intent: %w", err)
+	}
+	if err = updateOperationalIntentTx(ctx, tx, intent, expectedRevision); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "operational_intents_one_active_aircraft_idx" {
+			return durable.ErrActiveIntent
+		}
+		return err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit operational intent activation: %w", err)
+	}
+	return nil
+}
+
 func updateOperationalIntentTx(ctx context.Context, tx pgx.Tx, intent domain.OperationalIntent, expectedRevision int64) error {
 	raw, err := json.Marshal(intent)
 	if err != nil {

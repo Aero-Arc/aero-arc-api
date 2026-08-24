@@ -41,6 +41,10 @@ $$;
 CREATE INDEX IF NOT EXISTS operational_intents_aircraft_start_idx
     ON operational_intents (aircraft_id, planned_start_at);
 
+CREATE UNIQUE INDEX IF NOT EXISTS operational_intents_one_active_aircraft_idx
+    ON operational_intents (aircraft_id)
+    WHERE data->>'status' = 'active';
+
 CREATE TABLE IF NOT EXISTS operational_volumes (
     intent_id text NOT NULL,
     intent_version integer NOT NULL CHECK (intent_version > 0),
