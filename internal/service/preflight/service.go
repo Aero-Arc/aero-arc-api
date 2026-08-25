@@ -22,15 +22,42 @@ type PreflightEvaluation struct {
 	Blocked  bool                       `json:"blocked"`
 }
 
+// Option configures optional PreflightService dependencies.
+type Option func(*preflightOptions)
+
+type preflightOptions struct {
+	weather WeatherProvider
+	notam   NOTAMProvider
+}
+
+// WithWeatherProvider injects a WeatherProvider. Nil is ignored.
+func WithWeatherProvider(provider WeatherProvider) Option {
+	return func(opts *preflightOptions) {
+		if provider != nil {
+			opts.weather = provider
+		}
+	}
+}
+
+// WithNOTAMProvider injects a NOTAMProvider. Nil is ignored.
+func WithNOTAMProvider(provider NOTAMProvider) Option {
+	return func(opts *preflightOptions) {
+		if provider != nil {
+			opts.notam = provider
+		}
+	}
+}
+
 // NewPreflightService constructs service from the supplied configuration and dependencies.
 //
 // Parameters:
 //   - durableStore: is the durable.Store value supplied to NewPreflightService.
+//   - opts: optional provider overrides; defaults install demo weather/NOTAM providers.
 //
 // Returns:
 //   - result: is the *PreflightService value produced by NewPreflightService.
-func NewPreflightService(durableStore durable.Store) *PreflightService {
-	return NewPreflightServiceWithClock(durableStore, nil)
+func NewPreflightService(durableStore durable.Store, opts ...Option) *PreflightService {
+	return NewPreflightServiceWithClock(durableStore, nil, opts...)
 }
 
 // NewPreflightServiceWithClock constructs service from the supplied configuration and dependencies.
@@ -38,12 +65,22 @@ func NewPreflightService(durableStore durable.Store) *PreflightService {
 // Parameters:
 //   - durableStore: is the durable.Store value supplied to NewPreflightServiceWithClock.
 //   - now: supplies the event or wall-clock timestamp used by the operation.
+//   - opts: optional provider overrides; defaults install demo weather/NOTAM providers.
 //
 // Returns:
 //   - result: is the *PreflightService value produced by NewPreflightServiceWithClock.
-func NewPreflightServiceWithClock(durableStore durable.Store, now func() time.Time) *PreflightService {
+func NewPreflightServiceWithClock(durableStore durable.Store, now func() time.Time, opts ...Option) *PreflightService {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
+	}
+	options := preflightOptions{
+		weather: DemoWeatherProvider{},
+		notam:   DemoNOTAMProvider{},
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
 	}
 	return &PreflightService{
 		durable: durableStore,
@@ -54,7 +91,8 @@ func NewPreflightServiceWithClock(durableStore durable.Store, now func() time.Ti
 			IntentVolumeChecker{},
 			BatteryChecker{durable: durableStore},
 			MaintenanceChecker{durable: durableStore},
-			StaticEnvironmentChecker{},
+			WeatherChecker{provider: options.weather},
+			NOTAMChecker{provider: options.notam},
 		},
 	}
 }

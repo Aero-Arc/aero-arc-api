@@ -48,7 +48,7 @@ func requireNoCheck(t *testing.T, builder *Builder, key string) {
 
 func TestDefaultCheckerOrder(t *testing.T) {
 	service := NewPreflightService(nil)
-	want := []string{"aircraft", "remote_id", "intent_volume", "battery", "maintenance", "static_environment"}
+	want := []string{"aircraft", "remote_id", "intent_volume", "battery", "maintenance", "weather", "notam"}
 	if len(service.checkers) != len(want) {
 		t.Fatalf("checkers = %d, want %d", len(service.checkers), len(want))
 	}
