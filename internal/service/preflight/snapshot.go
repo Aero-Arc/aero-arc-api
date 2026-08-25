@@ -10,11 +10,12 @@ import (
 
 // Snapshot is the immutable input state for one preflight evaluation.
 type Snapshot struct {
-	Intent      domain.OperationalIntent
-	Aircraft    domain.Aircraft
-	AircraftErr error
-	Volumes     []domain.OperationalVolume
-	Now         time.Time
+	Intent           domain.OperationalIntent
+	Aircraft         domain.Aircraft
+	AircraftErr      error
+	Volumes          []domain.OperationalVolume
+	ConflictFindings []domain.ConflictFinding
+	Now              time.Time
 }
 
 func (s *PreflightService) loadSnapshot(ctx context.Context, intentID string) (Snapshot, error) {
@@ -28,13 +29,18 @@ func (s *PreflightService) loadSnapshot(ctx context.Context, intentID string) (S
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("list operational volumes: %w", err)
 	}
+	findings, err := s.durable.ListConflictFindings(ctx, intent.ID, intent.Version)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("list conflict findings: %w", err)
+	}
 
 	return Snapshot{
-		Intent:      intent,
-		Aircraft:    aircraft,
-		AircraftErr: aircraftErr,
-		Volumes:     volumesForVersion(volumes, intent.Version),
-		Now:         s.now().UTC(),
+		Intent:           intent,
+		Aircraft:         aircraft,
+		AircraftErr:      aircraftErr,
+		Volumes:          volumesForVersion(volumes, intent.Version),
+		ConflictFindings: findings,
+		Now:              s.now().UTC(),
 	}, nil
 }
 

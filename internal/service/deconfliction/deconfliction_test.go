@@ -8,7 +8,7 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	. "github.com/Aero-Arc/aero-arc-api/internal/service"
 	. "github.com/Aero-Arc/aero-arc-api/internal/service/deconfliction"
-	. "github.com/Aero-Arc/aero-arc-api/internal/service/preflight"
+	preflight "github.com/Aero-Arc/aero-arc-api/internal/service/preflight"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 )
@@ -392,7 +392,20 @@ func TestIntentServiceActivateRunsDeconfliction(t *testing.T) {
 		UpdatedAt:        now,
 	}))
 	createAcceptedIntentWithVolume(t, ctx, store, now, "10000000-0000-4000-8000-000000000002", "aircraft-2", "volume-peer", squareGeoJSON(), 10, 120, now)
-	if evaluation, err := NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID); err != nil {
+	must(t, store.RecordConflictFinding(ctx, domain.ConflictFinding{
+		ID:            "conflict-seed-clear",
+		OperatorID:    intent.OperatorID,
+		IntentID:      intent.ID,
+		IntentVersion: intent.Version,
+		AircraftID:    intent.AircraftID,
+		Status:        domain.ConflictFindingStatusClear,
+		SourceType:    domain.ConflictFindingSourceLocal,
+		SourceID:      "deconfliction_service",
+		RuleVersion:   "provider-aggregate-v1",
+		Message:       "seeded clear deconfliction evidence",
+		EvaluatedAt:   now,
+	}))
+	if evaluation, err := preflight.NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID); err != nil {
 		t.Fatalf("EvaluateIntent returned error: %v", err)
 	} else if evaluation.Blocked {
 		t.Fatalf("preflight blocked unexpectedly: %#v", evaluation.Findings)

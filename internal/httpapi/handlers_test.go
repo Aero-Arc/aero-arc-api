@@ -737,6 +737,21 @@ func TestHandleActivateOperationalIntentBlocksOnDeconflictionPotentialConflict(t
 	}, 0); err != nil {
 		t.Fatalf("UpdateOperationalIntent returned error: %v", err)
 	}
+	if err := durable.RecordConflictFinding(ctx, domain.ConflictFinding{
+		ID:            "conflict-intent-target-v1-clear",
+		OperatorID:    "operator-1",
+		IntentID:      "intent-target",
+		IntentVersion: 1,
+		AircraftID:    "aircraft-1",
+		Status:        domain.ConflictFindingStatusClear,
+		SourceType:    domain.ConflictFindingSourceLocal,
+		SourceID:      "deconfliction_service",
+		RuleVersion:   "provider-aggregate-v1",
+		Message:       "seeded clear deconfliction evidence",
+		EvaluatedAt:   now,
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	fleet := service.NewFleetService(durable, telemetry, replay, reg)
 	deconflictionService := newTestDeconflictionService(t, durable)
@@ -867,6 +882,22 @@ func TestHandleActivateOperationalIntentDoesNotTrustOldVersionClearFinding(t *te
 		SourceType:    domain.ConflictFindingSourceLocal,
 		RuleVersion:   "local-dss-shaped-v1",
 		EvaluatedAt:   now.Add(-time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := durable.RecordConflictFinding(ctx, domain.ConflictFinding{
+		ID:            "current-clear-seed",
+		OperatorID:    "operator-1",
+		IntentID:      "intent-target",
+		IntentVersion: 2,
+		AircraftID:    "aircraft-1",
+		Status:        domain.ConflictFindingStatusClear,
+		Severity:      domain.SeverityInfo,
+		SourceType:    domain.ConflictFindingSourceLocal,
+		SourceID:      "deconfliction_service",
+		RuleVersion:   "provider-aggregate-v1",
+		Message:       "seeded clear deconfliction evidence for current version",
+		EvaluatedAt:   now,
 	}); err != nil {
 		t.Fatal(err)
 	}

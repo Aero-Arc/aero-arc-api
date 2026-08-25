@@ -91,6 +91,7 @@ func NewPreflightServiceWithClock(durableStore durable.Store, now func() time.Ti
 			IntentVolumeChecker{},
 			BatteryChecker{durable: durableStore},
 			MaintenanceChecker{durable: durableStore},
+			DeconflictionChecker{},
 			WeatherChecker{provider: options.weather},
 			NOTAMChecker{provider: options.notam},
 		},
