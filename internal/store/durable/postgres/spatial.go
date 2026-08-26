@@ -89,3 +89,80 @@ func (s *Store) FindCandidates(ctx context.Context, query durable.CandidateQuery
 	}
 	return candidates, nil
 }
+
+// CheckMissionCoverage uses the authoritative PostGIS footprint to evaluate
+// every mission point and complete consecutive segment with ST_Covers.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL query.
+//   - volume: identifies the exact intent-version volume row.
+//   - items: supplies ordered canonical mission points.
+//
+// Returns:
+//   - result: identifies uncovered item and segment starting sequences.
+//   - error: reports missing geometry, query, or decoding failures.
+func (s *Store) CheckMissionCoverage(ctx context.Context, volume domain.OperationalVolume, items []domain.MissionItem) (durable.MissionCoverageResult, error) {
+	type routePoint struct {
+		Sequence  int     `json:"sequence"`
+		Longitude float64 `json:"longitude"`
+		Latitude  float64 `json:"latitude"`
+	}
+	points := make([]routePoint, len(items))
+	for index, item := range items {
+		points[index] = routePoint{
+			Sequence:  item.Sequence,
+			Longitude: float64(item.LongitudeE7) / 1e7,
+			Latitude:  float64(item.LatitudeE7) / 1e7,
+		}
+	}
+	raw, err := json.Marshal(points)
+	if err != nil {
+		return durable.MissionCoverageResult{}, fmt.Errorf("encode mission route: %w", err)
+	}
+	rows, err := s.pool.Query(ctx, `
+		WITH route_points AS (
+			SELECT sequence, ST_SetSRID(ST_MakePoint(longitude, latitude), 4326) AS point
+			FROM jsonb_to_recordset($4::jsonb) AS item(sequence integer, longitude double precision, latitude double precision)
+		), route AS (
+			SELECT sequence, point, LEAD(point) OVER (ORDER BY sequence) AS next_point
+			FROM route_points
+		), volume AS (
+			SELECT footprint
+			FROM operational_volumes
+			WHERE intent_id = $1 AND intent_version = $2 AND id = $3
+		)
+		SELECT route.sequence,
+		       COALESCE(ST_Covers(volume.footprint, route.point), false),
+		       CASE WHEN route.next_point IS NULL THEN true
+		            ELSE COALESCE(ST_Covers(volume.footprint, ST_MakeLine(route.point, route.next_point)), false)
+		       END
+		FROM route CROSS JOIN volume
+		ORDER BY route.sequence`, volume.IntentID, volume.IntentVersion, volume.ID, raw)
+	if err != nil {
+		return durable.MissionCoverageResult{}, fmt.Errorf("check PostGIS mission coverage: %w", err)
+	}
+	defer rows.Close()
+	result := durable.MissionCoverageResult{}
+	count := 0
+	for rows.Next() {
+		var sequence int
+		var itemCovered, segmentCovered bool
+		if err := rows.Scan(&sequence, &itemCovered, &segmentCovered); err != nil {
+			return durable.MissionCoverageResult{}, fmt.Errorf("scan PostGIS mission coverage: %w", err)
+		}
+		count++
+		if !itemCovered {
+			result.UncoveredItems = append(result.UncoveredItems, sequence)
+		}
+		if !segmentCovered {
+			result.UncoveredSegments = append(result.UncoveredSegments, sequence)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return durable.MissionCoverageResult{}, fmt.Errorf("iterate PostGIS mission coverage: %w", err)
+	}
+	if count != len(items) {
+		return durable.MissionCoverageResult{}, durable.ErrNotFound
+	}
+	return result, nil
+}

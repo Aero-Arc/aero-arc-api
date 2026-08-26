@@ -164,7 +164,7 @@ func TestHandleBootstrapBatteryAndFlightLifecycle(t *testing.T) {
 	server := NewWithWorkflows(
 		fleet,
 		service.NewIntentService(store, nil),
-		service.NewPreflightService(store),
+		preflight.NewPreflightService(store),
 		service.NewConformanceService(store, telemetry),
 		time.Second,
 	)

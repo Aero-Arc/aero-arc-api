@@ -11,6 +11,7 @@ type AircraftMapView struct {
 	ReplaySamples      []domain.TelemetrySample      `json:"replay_samples"`
 	ActiveIntent       *domain.OperationalIntent     `json:"active_intent,omitempty"`
 	OperationalVolumes []domain.OperationalVolume    `json:"operational_volumes"`
+	CommandedMission   *domain.Mission               `json:"commanded_mission,omitempty"`
 	ConformanceSummary *domain.ConformanceSummary    `json:"conformance_summary,omitempty"`
 	ConformanceEvents  []domain.ConformanceEvent     `json:"conformance_events"`
 }

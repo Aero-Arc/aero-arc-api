@@ -1,8 +1,11 @@
 package httpapi
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
@@ -12,14 +15,17 @@ import (
 )
 
 type Server struct {
-	fleet          *service.FleetService
-	intents        *service.IntentService
-	preflight      *preflight.PreflightService
-	conformance    *service.ConformanceService
-	deconfliction  *deconfliction.DeconflictionService
-	requestTimeout time.Duration
-	debug          bool
-	ussAuthorizer  USSAuthorizer
+	fleet                              *service.FleetService
+	intents                            *service.IntentService
+	preflight                          *preflight.PreflightService
+	conformance                        *service.ConformanceService
+	deconfliction                      *deconfliction.DeconflictionService
+	requestTimeout                     time.Duration
+	missionDeploymentTimeout           time.Duration
+	missionDeploymentTokenHash         [sha256.Size]byte
+	missionDeploymentControlConfigured bool
+	debug                              bool
+	ussAuthorizer                      USSAuthorizer
 }
 
 // New constructs httpapi from the supplied configuration and dependencies.
@@ -31,7 +37,7 @@ type Server struct {
 // Returns:
 //   - result: is the *Server value produced by New.
 func New(fleet *service.FleetService, requestTimeout time.Duration) *Server {
-	return &Server{fleet: fleet, requestTimeout: requestTimeout}
+	return &Server{fleet: fleet, requestTimeout: requestTimeout, missionDeploymentTimeout: 95 * time.Second}
 }
 
 // NewWithWorkflows constructs httpapi from the supplied configuration and dependencies.
@@ -48,16 +54,46 @@ func New(fleet *service.FleetService, requestTimeout time.Duration) *Server {
 //   - result: is the *Server value produced by NewWithWorkflows.
 func NewWithWorkflows(fleet *service.FleetService, intents *service.IntentService, preflightSvc *preflight.PreflightService, conformance *service.ConformanceService, requestTimeout time.Duration, deconflictionServices ...*deconfliction.DeconflictionService) *Server {
 	server := &Server{
-		fleet:          fleet,
-		intents:        intents,
-		preflight:      preflightSvc,
-		conformance:    conformance,
-		requestTimeout: requestTimeout,
+		fleet:                    fleet,
+		intents:                  intents,
+		preflight:                preflightSvc,
+		conformance:              conformance,
+		requestTimeout:           requestTimeout,
+		missionDeploymentTimeout: 95 * time.Second,
 	}
 	if len(deconflictionServices) > 0 {
 		server.deconfliction = deconflictionServices[0]
 	}
 	return server
+}
+
+// WithMissionDeploymentControl configures the bounded control-plane timeout
+// and hashes the bearer credential used only by mission deployment routes.
+func (s *Server) WithMissionDeploymentControl(timeout time.Duration, token string) *Server {
+	if timeout > 0 {
+		s.missionDeploymentTimeout = timeout
+	}
+	s.missionDeploymentTokenHash = sha256.Sum256([]byte(token))
+	s.missionDeploymentControlConfigured = token != ""
+	return s
+}
+
+func (s *Server) authorizeMissionDeployment(c *mach.Context) bool {
+	if !s.missionDeploymentControlEnabled() {
+		return false
+	}
+	want := s.missionDeploymentTokenHash
+	const prefix = "Bearer "
+	header := c.Request.Header.Get("Authorization")
+	if !strings.HasPrefix(header, prefix) {
+		return false
+	}
+	got := sha256.Sum256([]byte(strings.TrimSpace(strings.TrimPrefix(header, prefix))))
+	return subtle.ConstantTimeCompare(want[:], got[:]) == 1
+}
+
+func (s *Server) missionDeploymentControlEnabled() bool {
+	return s.missionDeploymentControlConfigured
 }
 
 // WithDebug enables or disables debug-only HTTP behavior on the server.
@@ -93,7 +129,7 @@ func (s *Server) Handler() http.Handler {
 	app.Use(mach.CORSWithConfig(mach.CORSConfig{
 		AllowOrigins: []string{"*"},
 		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodOptions},
-		AllowHeaders: []string{"Content-Type", "Authorization"},
+		AllowHeaders: []string{"Content-Type", "Authorization", "Idempotency-Key"},
 	}))
 	if s.debug {
 		app.Use(debugRequestLogger())
@@ -123,6 +159,10 @@ func (s *Server) Handler() http.Handler {
 	api.POST("/aircraft/{aircraft_id}/battery-installations", s.handleInstallBattery)
 	api.GET("/flights/{flight_id}", s.handleGetFlight)
 	api.POST("/flights/{flight_id}/start", s.handleStartFlight)
+	api.POST("/flights/{flight_id}/missions/import", s.handleImportMission)
+	api.GET("/flights/{flight_id}/missions/current", s.handleGetCurrentMission)
+	api.POST("/flights/{flight_id}/missions/current/deploy", s.handleDeployCurrentMission)
+	api.GET("/flights/{flight_id}/mission-deployments/{deployment_id}", s.handleGetMissionDeployment)
 	api.GET("/flights/{flight_id}/replay", s.handleGetFlightReplay)
 
 	if s.workflowsAvailable() {

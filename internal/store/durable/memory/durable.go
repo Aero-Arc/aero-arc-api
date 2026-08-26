@@ -13,30 +13,34 @@ import (
 )
 
 type Store struct {
-	mu                        sync.RWMutex
-	operators                 map[string]domain.Operator
-	aircraft                  map[string]domain.Aircraft
-	batteries                 map[string]domain.Battery
-	batteryInstallations      []domain.BatteryInstallation
-	operatingProfiles         map[string]domain.AircraftOperatingProfile
-	operatingLimits           map[string]domain.OperatingLimit
-	maintenanceEvents         []domain.MaintenanceEvent
-	operationalIntents        map[string]domain.OperationalIntent
-	operationalVolumes        map[string]domain.OperationalVolume
-	authorizations            map[string]domain.RegulatoryAuthorization
-	preflightChecks           []domain.PreflightCheck
-	flightRecords             map[string]domain.FlightRecord
-	conformanceEvents         []domain.ConformanceEvent
-	conformanceSummaries      map[string]domain.ConformanceSummary
-	evidenceRecords           map[string]domain.EvidenceRecord
-	reportabilityReviews      []domain.ReportabilityReview
-	complianceFindings        []domain.ComplianceFinding
-	conflictFindings          []domain.ConflictFinding
-	personnel                 map[string]domain.OperationsPersonnel
-	personnelAssignments      []domain.PersonnelAssignment
-	publications              map[string]domain.OperationalIntentPublication
-	peerNotifications         map[string]domain.PeerNotification
-	receivedPeerNotifications map[string]domain.ReceivedPeerNotification
+	mu                         sync.RWMutex
+	operators                  map[string]domain.Operator
+	aircraft                   map[string]domain.Aircraft
+	batteries                  map[string]domain.Battery
+	batteryInstallations       []domain.BatteryInstallation
+	operatingProfiles          map[string]domain.AircraftOperatingProfile
+	operatingLimits            map[string]domain.OperatingLimit
+	maintenanceEvents          []domain.MaintenanceEvent
+	operationalIntents         map[string]domain.OperationalIntent
+	operationalVolumes         map[string]domain.OperationalVolume
+	authorizations             map[string]domain.RegulatoryAuthorization
+	preflightChecks            []domain.PreflightCheck
+	flightRecords              map[string]domain.FlightRecord
+	missions                   map[string]domain.Mission
+	missionByIdempotencyKey    map[string]string
+	missionDeployments         map[string]domain.MissionDeployment
+	deploymentByIdempotencyKey map[string]string
+	conformanceEvents          []domain.ConformanceEvent
+	conformanceSummaries       map[string]domain.ConformanceSummary
+	evidenceRecords            map[string]domain.EvidenceRecord
+	reportabilityReviews       []domain.ReportabilityReview
+	complianceFindings         []domain.ComplianceFinding
+	conflictFindings           []domain.ConflictFinding
+	personnel                  map[string]domain.OperationsPersonnel
+	personnelAssignments       []domain.PersonnelAssignment
+	publications               map[string]domain.OperationalIntentPublication
+	peerNotifications          map[string]domain.PeerNotification
+	receivedPeerNotifications  map[string]domain.ReceivedPeerNotification
 }
 
 var _ durable.OperationalStore = (*Store)(nil)
@@ -47,21 +51,25 @@ var _ durable.OperationalStore = (*Store)(nil)
 //   - result: is the *Store value produced by NewStore.
 func NewStore() *Store {
 	return &Store{
-		operators:                 make(map[string]domain.Operator),
-		aircraft:                  make(map[string]domain.Aircraft),
-		batteries:                 make(map[string]domain.Battery),
-		operatingProfiles:         make(map[string]domain.AircraftOperatingProfile),
-		operatingLimits:           make(map[string]domain.OperatingLimit),
-		operationalIntents:        make(map[string]domain.OperationalIntent),
-		operationalVolumes:        make(map[string]domain.OperationalVolume),
-		authorizations:            make(map[string]domain.RegulatoryAuthorization),
-		flightRecords:             make(map[string]domain.FlightRecord),
-		conformanceSummaries:      make(map[string]domain.ConformanceSummary),
-		evidenceRecords:           make(map[string]domain.EvidenceRecord),
-		personnel:                 make(map[string]domain.OperationsPersonnel),
-		publications:              make(map[string]domain.OperationalIntentPublication),
-		peerNotifications:         make(map[string]domain.PeerNotification),
-		receivedPeerNotifications: make(map[string]domain.ReceivedPeerNotification),
+		operators:                  make(map[string]domain.Operator),
+		aircraft:                   make(map[string]domain.Aircraft),
+		batteries:                  make(map[string]domain.Battery),
+		operatingProfiles:          make(map[string]domain.AircraftOperatingProfile),
+		operatingLimits:            make(map[string]domain.OperatingLimit),
+		operationalIntents:         make(map[string]domain.OperationalIntent),
+		operationalVolumes:         make(map[string]domain.OperationalVolume),
+		authorizations:             make(map[string]domain.RegulatoryAuthorization),
+		flightRecords:              make(map[string]domain.FlightRecord),
+		missions:                   make(map[string]domain.Mission),
+		missionByIdempotencyKey:    make(map[string]string),
+		missionDeployments:         make(map[string]domain.MissionDeployment),
+		deploymentByIdempotencyKey: make(map[string]string),
+		conformanceSummaries:       make(map[string]domain.ConformanceSummary),
+		evidenceRecords:            make(map[string]domain.EvidenceRecord),
+		personnel:                  make(map[string]domain.OperationsPersonnel),
+		publications:               make(map[string]domain.OperationalIntentPublication),
+		peerNotifications:          make(map[string]domain.PeerNotification),
+		receivedPeerNotifications:  make(map[string]domain.ReceivedPeerNotification),
 	}
 }
 
@@ -1349,6 +1357,187 @@ func (s *Store) ListFlightRecords(_ context.Context, aircraftID string) ([]domai
 	}
 	sort.Slice(flights, func(i, j int) bool { return flights[i].StartedAt.After(flights[j].StartedAt) })
 	return flights, nil
+}
+
+// CreateMission atomically creates an immutable mission version or returns the
+// original mission for an exact idempotent replay. Reusing the key with a
+// different request is rejected.
+//
+// Parameters:
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
+//   - mission: contains validated binding, hashes, items, and idempotency metadata.
+//
+// Returns:
+//   - result: is the stored mission with its server-assigned flight-local version.
+//   - error: reports duplicate identity or conflicting idempotency-key reuse.
+func (s *Store) CreateMission(_ context.Context, mission domain.Mission) (domain.Mission, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if id, exists := s.missionByIdempotencyKey[mission.IdempotencyKey]; exists {
+		existing := s.missions[id]
+		if existing.IdempotencyRequest != mission.IdempotencyRequest {
+			return domain.Mission{}, durable.ErrIdempotencyConflict
+		}
+		return cloneMission(existing), nil
+	}
+	if _, exists := s.missions[mission.ID]; exists {
+		return domain.Mission{}, durable.ErrAlreadyExists
+	}
+	version := 1
+	for _, existing := range s.missions {
+		if existing.FlightID == mission.FlightID && existing.Version >= version {
+			version = existing.Version + 1
+		}
+	}
+	mission.Version = version
+	mission = cloneMission(mission)
+	s.missions[mission.ID] = mission
+	s.missionByIdempotencyKey[mission.IdempotencyKey] = mission.ID
+	return cloneMission(mission), nil
+}
+
+// GetMissionByIdempotencyKey returns the immutable mission associated with a request key.
+//
+// Parameters:
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
+//   - key: identifies the original import request.
+//
+// Returns:
+//   - result: is a defensive copy of the stored mission.
+//   - error: is durable.ErrNotFound when the key has not been used.
+func (s *Store) GetMissionByIdempotencyKey(_ context.Context, key string) (domain.Mission, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	id, exists := s.missionByIdempotencyKey[key]
+	if !exists {
+		return domain.Mission{}, durable.ErrNotFound
+	}
+	return cloneMission(s.missions[id]), nil
+}
+
+// GetCurrentMissionForFlight returns the newest immutable mission version imported for a flight.
+//
+// Parameters:
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
+//   - flightID: identifies the flight binding.
+//
+// Returns:
+//   - result: is a defensive copy of the current mission.
+//   - error: is durable.ErrNotFound when the flight has no mission.
+func (s *Store) GetCurrentMissionForFlight(_ context.Context, flightID string) (domain.Mission, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var current *domain.Mission
+	for _, mission := range s.missions {
+		if mission.FlightID == flightID && (current == nil || mission.Version > current.Version) {
+			item := mission
+			current = &item
+		}
+	}
+	if current == nil {
+		return domain.Mission{}, durable.ErrNotFound
+	}
+	return cloneMission(*current), nil
+}
+
+// GetCurrentMissionForIntent returns the newest mission whose immutable binding
+// exactly matches an aircraft and operational-intent version.
+//
+// Parameters:
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
+//   - aircraftID: identifies the bound aircraft.
+//   - intentID: identifies the bound operational intent.
+//   - intentVersion: identifies the exact immutable intent version.
+//
+// Returns:
+//   - result: is a defensive copy of the newest matching mission.
+//   - error: is durable.ErrNotFound when no matching mission exists.
+func (s *Store) GetCurrentMissionForIntent(_ context.Context, aircraftID string, intentID string, intentVersion int) (domain.Mission, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var current *domain.Mission
+	for _, mission := range s.missions {
+		if mission.AircraftID != aircraftID || mission.IntentID != intentID || mission.IntentVersion != intentVersion {
+			continue
+		}
+		if current == nil || mission.CreatedAt.After(current.CreatedAt) || (mission.CreatedAt.Equal(current.CreatedAt) && mission.Version > current.Version) {
+			item := mission
+			current = &item
+		}
+	}
+	if current == nil {
+		return domain.Mission{}, durable.ErrNotFound
+	}
+	return cloneMission(*current), nil
+}
+
+func cloneMission(mission domain.Mission) domain.Mission {
+	mission.Items = append([]domain.MissionItem(nil), mission.Items...)
+	mission.ValidationFindings = append([]domain.MissionValidationFinding(nil), mission.ValidationFindings...)
+	return mission
+}
+
+// CreateMissionDeployment atomically records one exact command or returns an
+// existing exact idempotency replay.
+func (s *Store) CreateMissionDeployment(_ context.Context, deployment domain.MissionDeployment) (domain.MissionDeployment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if id, exists := s.deploymentByIdempotencyKey[deployment.IdempotencyKey]; exists {
+		existing := s.missionDeployments[id]
+		if existing.IdempotencyRequest != deployment.IdempotencyRequest {
+			return domain.MissionDeployment{}, durable.ErrIdempotencyConflict
+		}
+		return existing, nil
+	}
+	if _, exists := s.missionDeployments[deployment.ID]; exists {
+		return domain.MissionDeployment{}, durable.ErrAlreadyExists
+	}
+	deployment.Revision = 0
+	s.missionDeployments[deployment.ID] = deployment
+	s.deploymentByIdempotencyKey[deployment.IdempotencyKey] = deployment.ID
+	return deployment, nil
+}
+
+// GetMissionDeployment returns one durable mission deployment by identity.
+func (s *Store) GetMissionDeployment(_ context.Context, deploymentID string) (domain.MissionDeployment, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	deployment, exists := s.missionDeployments[deploymentID]
+	if !exists {
+		return domain.MissionDeployment{}, durable.ErrNotFound
+	}
+	return deployment, nil
+}
+
+// GetMissionDeploymentByIdempotencyKey returns one deployment request replay.
+func (s *Store) GetMissionDeploymentByIdempotencyKey(_ context.Context, key string) (domain.MissionDeployment, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	id, exists := s.deploymentByIdempotencyKey[key]
+	if !exists {
+		return domain.MissionDeployment{}, durable.ErrNotFound
+	}
+	return s.missionDeployments[id], nil
+}
+
+// UpdateMissionDeployment replaces a deployment after an optimistic revision check.
+func (s *Store) UpdateMissionDeployment(_ context.Context, deployment domain.MissionDeployment, expectedRevision int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, exists := s.missionDeployments[deployment.ID]
+	if !exists {
+		return durable.ErrNotFound
+	}
+	if existing.Revision != expectedRevision {
+		return durable.ErrVersionConflict
+	}
+	if existing.IdempotencyKey != deployment.IdempotencyKey || existing.IdempotencyRequest != deployment.IdempotencyRequest ||
+		existing.CommandID != deployment.CommandID || existing.MissionID != deployment.MissionID {
+		return durable.ErrVersionConflict
+	}
+	deployment.Revision = expectedRevision + 1
+	s.missionDeployments[deployment.ID] = deployment
+	return nil
 }
 
 // RecordConformanceEvent durably records the supplied Store data.

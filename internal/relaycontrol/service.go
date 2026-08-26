@@ -23,6 +23,7 @@ const defaultTimeout = 5 * time.Second
 
 type SetRequest struct {
 	AgentID       string
+	AircraftID    string
 	FlightID      string
 	IntentID      string
 	IntentVersion uint32
@@ -96,7 +97,7 @@ func (s *Service) SetOperationContext(ctx context.Context, req SetRequest) (stri
 	if err != nil {
 		return "", err
 	}
-	command := &agentv1.SetOperationContextCommand{CommandId: commandID, Context: &agentv1.OperationContext{FlightId: req.FlightID, IntentId: req.IntentID, IntentVersion: req.IntentVersion}}
+	command := &agentv1.SetOperationContextCommand{CommandId: commandID, Context: &agentv1.OperationContext{FlightId: req.FlightID, IntentId: req.IntentID, IntentVersion: req.IntentVersion, AircraftId: req.AircraftID}}
 	err = s.call(ctx, req.AgentID, func(callCtx context.Context, client relayv1.RelayControlClient) error {
 		response, err := client.SetOperationContext(callCtx, &relayv1.SetOperationContextRequest{AgentId: req.AgentID, Command: command})
 		if err != nil {
@@ -105,6 +106,26 @@ func (s *Service) SetOperationContext(ctx context.Context, req SetRequest) (stri
 		return validateAck(response.GetResult(), commandID)
 	})
 	return commandID, err
+}
+
+// EnsureOperationContext delivers one stable context command and requires a
+// correlated successful Agent acknowledgement before returning.
+func (s *Service) EnsureOperationContext(ctx context.Context, agentID string, command *agentv1.SetOperationContextCommand) error {
+	if strings.TrimSpace(agentID) == "" || command == nil || strings.TrimSpace(command.GetCommandId()) == "" || command.GetContext() == nil {
+		return fmt.Errorf("agent_id and a complete operation context command are required")
+	}
+	operation := command.GetContext()
+	if strings.TrimSpace(operation.GetAircraftId()) == "" || strings.TrimSpace(operation.GetFlightId()) == "" ||
+		strings.TrimSpace(operation.GetIntentId()) == "" || operation.GetIntentVersion() == 0 {
+		return fmt.Errorf("mission operation context requires aircraft_id, flight_id, intent_id, and positive intent_version")
+	}
+	return s.call(ctx, agentID, func(callCtx context.Context, client relayv1.RelayControlClient) error {
+		response, err := client.SetOperationContext(callCtx, &relayv1.SetOperationContextRequest{AgentId: agentID, Command: command})
+		if err != nil {
+			return err
+		}
+		return validateAck(response.GetResult(), command.GetCommandId())
+	})
 }
 
 // ClearOperationContext clears the selected Service state without changing unrelated records.
@@ -135,6 +156,27 @@ func (s *Service) ClearOperationContext(ctx context.Context, req ClearRequest) (
 	return commandID, err
 }
 
+// DeployMission routes one API-authoritative command through the Agent's
+// Registry placement and returns only a correlated Agent result.
+func (s *Service) DeployMission(ctx context.Context, agentID string, command *agentv1.DeployMissionCommand) (*agentv1.MissionDeploymentResult, error) {
+	if strings.TrimSpace(agentID) == "" || command == nil || strings.TrimSpace(command.GetCommandId()) == "" {
+		return nil, fmt.Errorf("agent_id and a command with command_id are required")
+	}
+	var result *agentv1.MissionDeploymentResult
+	err := s.call(ctx, agentID, func(callCtx context.Context, client relayv1.RelayControlClient) error {
+		response, err := client.DeployMission(callCtx, &relayv1.DeployMissionRequest{AgentId: agentID, Command: command})
+		if err != nil {
+			return err
+		}
+		if response.GetResult() == nil {
+			return fmt.Errorf("relay returned no mission deployment result")
+		}
+		result = response.GetResult()
+		return nil
+	})
+	return result, err
+}
+
 func (s *Service) call(ctx context.Context, agentID string, invoke func(context.Context, relayv1.RelayControlClient) error) error {
 	for attempt := 0; attempt < 2; attempt++ {
 		placement, err := s.resolve(ctx, agentID, attempt > 0)
@@ -150,7 +192,7 @@ func (s *Service) call(ctx context.Context, agentID string, invoke func(context.
 		cancel()
 		if status.Code(err) != codes.Unavailable || attempt == 1 {
 			if err != nil {
-				return fmt.Errorf("deliver operation context: %w", err)
+				return fmt.Errorf("deliver relay control command: %w", err)
 			}
 			return nil
 		}
