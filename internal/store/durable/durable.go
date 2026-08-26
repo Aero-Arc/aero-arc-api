@@ -16,10 +16,11 @@ import (
 )
 
 var (
-	ErrNotFound        = errors.New("not found")
-	ErrAlreadyExists   = errors.New("already exists")
-	ErrVersionConflict = errors.New("version conflict")
-	ErrActiveIntent    = errors.New("aircraft already has an active operational intent")
+	ErrNotFound            = errors.New("not found")
+	ErrAlreadyExists       = errors.New("already exists")
+	ErrVersionConflict     = errors.New("version conflict")
+	ErrActiveIntent        = errors.New("aircraft already has an active operational intent")
+	ErrIdempotencyConflict = errors.New("idempotency key was already used for a different request")
 )
 
 type CandidateQuery struct {
@@ -30,6 +31,13 @@ type CandidateQuery struct {
 type Candidate struct {
 	IntentID      string
 	IntentVersion int
+}
+
+// MissionCoverageResult identifies route items and following route segments
+// that are not covered by one exact operational volume footprint.
+type MissionCoverageResult struct {
+	UncoveredItems    []int
+	UncoveredSegments []int
 }
 
 // OperationalStore is the durable boundary for the operational-intent and
@@ -110,6 +118,15 @@ type Store interface {
 	UpdateFlightRecord(ctx context.Context, flight domain.FlightRecord, expectedStatus domain.FlightStatus) error
 	GetFlightRecord(ctx context.Context, flightID string) (domain.FlightRecord, error)
 	ListFlightRecords(ctx context.Context, aircraftID string) ([]domain.FlightRecord, error)
+	CreateMission(ctx context.Context, mission domain.Mission) (domain.Mission, error)
+	GetMissionByIdempotencyKey(ctx context.Context, key string) (domain.Mission, error)
+	GetCurrentMissionForFlight(ctx context.Context, flightID string) (domain.Mission, error)
+	GetCurrentMissionForIntent(ctx context.Context, aircraftID string, intentID string, intentVersion int) (domain.Mission, error)
+	CheckMissionCoverage(ctx context.Context, volume domain.OperationalVolume, items []domain.MissionItem) (MissionCoverageResult, error)
+	CreateMissionDeployment(ctx context.Context, deployment domain.MissionDeployment) (domain.MissionDeployment, error)
+	GetMissionDeployment(ctx context.Context, deploymentID string) (domain.MissionDeployment, error)
+	GetMissionDeploymentByIdempotencyKey(ctx context.Context, key string) (domain.MissionDeployment, error)
+	UpdateMissionDeployment(ctx context.Context, deployment domain.MissionDeployment, expectedRevision int64) error
 
 	RecordConformanceEvent(ctx context.Context, event domain.ConformanceEvent) error
 	ListConformanceEvents(ctx context.Context, flightID string) ([]domain.ConformanceEvent, error)

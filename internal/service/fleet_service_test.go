@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -725,6 +726,15 @@ func TestFleetServiceComposesAircraftMapView(t *testing.T) {
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}))
+	mission, err := durable.CreateMission(ctx, domain.Mission{
+		ID: "mission-1", OperatorID: "operator-1", FlightID: "flight-1", AircraftID: "aircraft-1", IntentID: "intent-1", IntentVersion: 2,
+		SourceFormat: domain.MissionSourceFormatQGCWPL110, SourceSHA256: strings.Repeat("a", 64), MissionDigest: strings.Repeat("b", 64),
+		IdempotencyKey: "map-mission", IdempotencyRequest: strings.Repeat("c", 64), CreatedAt: now,
+		Items: []domain.MissionItem{{Sequence: 0, Frame: 0, Command: 16, LatitudeE7: 355000000, LongitudeE7: -975000000, AltitudeM: 50}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	must(t, durable.UpsertConformanceSummary(ctx, domain.ConformanceSummary{
 		ID:                  "conformance-1",
 		OperatorID:          "operator-1",
@@ -768,6 +778,9 @@ func TestFleetServiceComposesAircraftMapView(t *testing.T) {
 	}
 	if len(view.OperationalVolumes) != 1 || view.OperationalVolumes[0].ID != "volume-1" {
 		t.Fatalf("volumes = %#v, want volume-1", view.OperationalVolumes)
+	}
+	if view.CommandedMission == nil || view.CommandedMission.ID != mission.ID || len(view.CommandedMission.Items) != 1 {
+		t.Fatalf("commanded mission = %#v, want mission-1", view.CommandedMission)
 	}
 	if view.ConformanceSummary == nil || view.ConformanceSummary.Status != domain.ConformanceStatusConforming {
 		t.Fatalf("summary = %#v, want conforming", view.ConformanceSummary)

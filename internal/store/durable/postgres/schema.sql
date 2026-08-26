@@ -172,3 +172,51 @@ CREATE TABLE IF NOT EXISTS received_peer_notifications (
 
 CREATE INDEX IF NOT EXISTS received_peer_notifications_intent_idx
     ON received_peer_notifications (intent_id, received_at);
+
+CREATE TABLE IF NOT EXISTS missions (
+    id text PRIMARY KEY,
+    operator_id text NOT NULL,
+    flight_id text NOT NULL,
+    aircraft_id text NOT NULL,
+    intent_id text NOT NULL,
+    intent_version integer NOT NULL CHECK (intent_version > 0),
+    version integer NOT NULL CHECK (version > 0),
+    source_format text NOT NULL,
+    source_sha256 text NOT NULL CHECK (source_sha256 ~ '^[0-9a-f]{64}$'),
+    mission_digest text NOT NULL CHECK (mission_digest ~ '^[0-9a-f]{64}$'),
+    idempotency_key text NOT NULL UNIQUE,
+    idempotency_request_hash text NOT NULL CHECK (idempotency_request_hash ~ '^[0-9a-f]{64}$'),
+    created_at timestamptz NOT NULL,
+    data jsonb NOT NULL,
+    UNIQUE (flight_id, version),
+    FOREIGN KEY (intent_id, intent_version)
+        REFERENCES operational_intents (id, version) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS missions_flight_current_idx
+    ON missions (flight_id, version DESC);
+CREATE INDEX IF NOT EXISTS missions_intent_current_idx
+    ON missions (aircraft_id, intent_id, intent_version, created_at DESC, version DESC);
+
+CREATE TABLE IF NOT EXISTS mission_items (
+    mission_id text NOT NULL REFERENCES missions (id) ON DELETE CASCADE,
+    sequence integer NOT NULL CHECK (sequence >= 0 AND sequence < 200),
+    data jsonb NOT NULL,
+    PRIMARY KEY (mission_id, sequence)
+);
+
+CREATE TABLE IF NOT EXISTS mission_deployments (
+    id text PRIMARY KEY,
+    flight_id text NOT NULL,
+    mission_id text NOT NULL REFERENCES missions (id) ON DELETE RESTRICT,
+    idempotency_key text NOT NULL UNIQUE,
+    idempotency_request_hash text NOT NULL CHECK (idempotency_request_hash ~ '^[0-9a-f]{64}$'),
+    revision bigint NOT NULL DEFAULT 0 CHECK (revision >= 0),
+    status text NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    data jsonb NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS mission_deployments_flight_idx
+    ON mission_deployments (flight_id, created_at DESC);

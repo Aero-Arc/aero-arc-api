@@ -44,10 +44,11 @@ func (f *fakePool) Invalidate(id string) { f.invalidated = append(f.invalidated,
 func (f *fakePool) Close() error         { return nil }
 
 type fakeRelayClient struct {
-	setRequests   []*relayv1.SetOperationContextRequest
-	clearRequests []*relayv1.ClearOperationContextRequest
-	setErrors     []error
-	block         bool
+	setRequests    []*relayv1.SetOperationContextRequest
+	clearRequests  []*relayv1.ClearOperationContextRequest
+	deployRequests []*relayv1.DeployMissionRequest
+	setErrors      []error
+	block          bool
 }
 
 func TestNewRequiresRelayTransportCredentials(t *testing.T) {
@@ -71,6 +72,13 @@ func (f *fakeRelayClient) GetDroneStatus(context.Context, *relayv1.GetDroneStatu
 }
 func (f *fakeRelayClient) SendAircraftCommand(context.Context, *relayv1.SendAircraftCommandRequest, ...grpc.CallOption) (*relayv1.SendAircraftCommandResponse, error) {
 	return nil, errors.New("unused")
+}
+func (f *fakeRelayClient) DeployMission(_ context.Context, request *relayv1.DeployMissionRequest, _ ...grpc.CallOption) (*relayv1.DeployMissionResponse, error) {
+	f.deployRequests = append(f.deployRequests, request)
+	return &relayv1.DeployMissionResponse{Result: &agentv1.MissionDeploymentResult{
+		CommandId: request.GetCommand().GetCommandId(), Binding: request.GetCommand().GetBinding(),
+		Status: agentv1.MissionDeploymentResult_STATUS_APPLIED,
+	}}, nil
 }
 func (f *fakeRelayClient) SetOperationContext(ctx context.Context, r *relayv1.SetOperationContextRequest, _ ...grpc.CallOption) (*relayv1.SetOperationContextResponse, error) {
 	f.setRequests = append(f.setRequests, r)
@@ -97,7 +105,7 @@ func TestSetOperationContextCachesPlacementAndPreservesCommandID(t *testing.T) {
 	client := &fakeRelayClient{}
 	service := newWithPool(registry, &fakePool{clients: map[string]*fakeRelayClient{"relay-1": client}}, time.Second, time.Minute)
 	for i := 0; i < 2; i++ {
-		id, err := service.SetOperationContext(context.Background(), SetRequest{AgentID: "agent-1", FlightID: "flight-1", IntentID: "intent-1", IntentVersion: 3, CommandID: "command-1"})
+		id, err := service.SetOperationContext(context.Background(), SetRequest{AgentID: "agent-1", AircraftID: "aircraft-1", FlightID: "flight-1", IntentID: "intent-1", IntentVersion: 3, CommandID: "command-1"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -112,8 +120,22 @@ func TestSetOperationContextCachesPlacementAndPreservesCommandID(t *testing.T) {
 		t.Fatalf("requests=%d", len(client.setRequests))
 	}
 	context := client.setRequests[0].Command.GetContext()
-	if context.GetFlightId() != "flight-1" || context.GetIntentId() != "intent-1" || context.GetIntentVersion() != 3 {
+	if context.GetAircraftId() != "aircraft-1" || context.GetFlightId() != "flight-1" || context.GetIntentId() != "intent-1" || context.GetIntentVersion() != 3 {
 		t.Fatalf("context=%v", context)
+	}
+}
+
+func TestDeployMissionUsesAuthoritativePlacementAndPreservesCommand(t *testing.T) {
+	client := &fakeRelayClient{}
+	service := newWithPool(&fakeRegistry{relayIDs: []string{"relay-1"}}, &fakePool{clients: map[string]*fakeRelayClient{"relay-1": client}}, time.Second, time.Minute)
+	command := &agentv1.DeployMissionCommand{CommandId: "deploy-command", Binding: &agentv1.MissionBinding{MissionId: "mission-1"}}
+	result, err := service.DeployMission(context.Background(), "agent-1", command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.GetCommandId() != command.GetCommandId() || len(client.deployRequests) != 1 ||
+		client.deployRequests[0].GetAgentId() != "agent-1" || client.deployRequests[0].GetCommand() != command {
+		t.Fatalf("result=%#v requests=%#v", result, client.deployRequests)
 	}
 }
 

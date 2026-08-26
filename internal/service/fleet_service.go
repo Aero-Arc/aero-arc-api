@@ -28,6 +28,7 @@ type FleetService struct {
 	now                func() time.Time
 	registryFreshness  time.Duration
 	telemetryFreshness time.Duration
+	missionDeployer    MissionDeployer
 }
 
 const (
@@ -115,6 +116,12 @@ func (s *FleetService) WithLiveStatePolicy(registryFreshness, telemetryFreshness
 	if now != nil {
 		s.now = now
 	}
+	return s
+}
+
+// WithMissionDeployer installs the authenticated API-to-Relay mission command transport.
+func (s *FleetService) WithMissionDeployer(deployer MissionDeployer) *FleetService {
+	s.missionDeployer = deployer
 	return s
 }
 
@@ -795,6 +802,13 @@ func (s *FleetService) GetAircraftMapView(ctx context.Context, aircraftID string
 		return readmodel.AircraftMapView{}, fmt.Errorf("list operational volumes: %w", err)
 	}
 	view.OperationalVolumes = volumesForVersion(volumes, intent.Version)
+
+	mission, err := s.durable.GetCurrentMissionForIntent(ctx, aircraft.ID, intent.ID, intent.Version)
+	if err == nil {
+		view.CommandedMission = &mission
+	} else if !errors.Is(err, durable.ErrNotFound) {
+		return readmodel.AircraftMapView{}, fmt.Errorf("get commanded mission: %w", err)
+	}
 
 	summary, err := conformanceSummaryForVersion(ctx, s.durable, *intent)
 	if err != nil {

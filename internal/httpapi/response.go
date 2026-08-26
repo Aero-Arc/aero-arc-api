@@ -34,7 +34,15 @@ func writeServiceError(c *mach.Context, err error) {
 		writeError(c, http.StatusConflict, strings.TrimSpace(err.Error()))
 		return
 	}
+	if errors.Is(err, service.ErrMissionDeploymentUnavailable) {
+		writeError(c, http.StatusServiceUnavailable, "secure Relay mission control is not configured")
+		return
+	}
 	if errors.Is(err, durable.ErrAlreadyExists) || errors.Is(err, durable.ErrVersionConflict) {
+		writeError(c, http.StatusConflict, strings.TrimSpace(err.Error()))
+		return
+	}
+	if errors.Is(err, durable.ErrIdempotencyConflict) {
 		writeError(c, http.StatusConflict, strings.TrimSpace(err.Error()))
 		return
 	}
