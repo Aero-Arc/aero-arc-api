@@ -241,3 +241,29 @@ func TestMissionDeploymentAlreadyAppliedAcceptsReadbackOnlyZeroUploadCount(t *te
 		t.Fatalf("fresh APPLIED with zero count status = %q", deployment.Status)
 	}
 }
+
+func TestGetMissionDeploymentScopesDurableResultToFlight(t *testing.T) {
+	svc, _ := newMissionTestService(t)
+	mission, err := svc.ImportMission(context.Background(), "flight-1", "import-for-status", validMissionRequest(validWPL110))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.WithMissionDeployer(&fakeMissionDeployer{})
+	deployed, err := svc.DeployCurrentMission(context.Background(), "flight-1", mission.Mission.ID, mission.Mission.MissionDigest, "deploy-for-status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.GetMissionDeployment(context.Background(), "flight-1", deployed.Deployment.ID)
+	if err != nil || got.ID != deployed.Deployment.ID {
+		t.Fatalf("deployment = %#v err=%v", got, err)
+	}
+	if _, err := svc.GetMissionDeployment(context.Background(), "another-flight", deployed.Deployment.ID); !errors.Is(err, durable.ErrNotFound) {
+		t.Fatalf("cross-flight deployment error = %v", err)
+	}
+	if _, err := svc.GetMissionDeployment(context.Background(), "flight-1", "missing-deployment"); !errors.Is(err, durable.ErrNotFound) {
+		t.Fatalf("missing deployment error = %v", err)
+	}
+	if _, err := svc.GetMissionDeployment(context.Background(), "", deployed.Deployment.ID); !errors.Is(err, ErrValidation) {
+		t.Fatalf("invalid scope error = %v", err)
+	}
+}
