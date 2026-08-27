@@ -63,6 +63,21 @@ func TestAircraftFlightAndMissionFencePersistAcrossRestart(t *testing.T) {
 	if err != nil || restartedFlight.IntentVersion != flight.IntentVersion || restartedFlight.Status != domain.FlightStatusPlanned {
 		t.Fatalf("flight = %#v err=%v", restartedFlight, err)
 	}
+	for name, get := range map[string]func() (domain.Mission, error){
+		"identity":    func() (domain.Mission, error) { return reader.GetMission(ctx, mission.ID) },
+		"idempotency": func() (domain.Mission, error) { return reader.GetMissionByIdempotencyKey(ctx, mission.IdempotencyKey) },
+		"binding": func() (domain.Mission, error) {
+			return reader.GetCurrentMissionForIntent(ctx, mission.AircraftID, mission.IntentID, mission.IntentVersion)
+		},
+	} {
+		got, getErr := get()
+		if getErr != nil || got.ID != mission.ID || len(got.Items) != len(mission.Items) {
+			t.Fatalf("%s mission = %#v err=%v", name, got, getErr)
+		}
+	}
+	if _, err := reader.GetMission(ctx, "missing-mission"); !errors.Is(err, durable.ErrNotFound) {
+		t.Fatalf("missing mission error = %v", err)
+	}
 	active := restartedFlight
 	active.Status, active.StartedAt = domain.FlightStatusActive, now.Add(time.Minute)
 	if err := reader.StartFlightWithCurrentMissionDeployment(ctx, active, domain.FlightStatusPlanned); err != nil {
@@ -73,6 +88,26 @@ func TestAircraftFlightAndMissionFencePersistAcrossRestart(t *testing.T) {
 	}
 	if replay, err := reader.CreateMissionDeploymentForPlannedFlight(ctx, deployment); err != nil || replay.ID != deployment.ID {
 		t.Fatalf("post-start deployment replay = %#v err=%v", replay, err)
+	}
+	conflictingMission := mission
+	conflictingMission.IdempotencyRequest = strings.Repeat("e", 64)
+	if _, err := reader.CreateMissionForPlannedFlight(ctx, conflictingMission); !errors.Is(err, durable.ErrIdempotencyConflict) {
+		t.Fatalf("post-start mission idempotency conflict = %v", err)
+	}
+	newMission := mission
+	newMission.ID, newMission.IdempotencyKey, newMission.IdempotencyRequest = "post-start-mission", "post-start-import-key", strings.Repeat("f", 64)
+	if _, err := reader.CreateMissionForPlannedFlight(ctx, newMission); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("post-start new mission error = %v", err)
+	}
+	conflictingDeployment := deployment
+	conflictingDeployment.IdempotencyRequest = strings.Repeat("e", 64)
+	if _, err := reader.CreateMissionDeploymentForPlannedFlight(ctx, conflictingDeployment); !errors.Is(err, durable.ErrIdempotencyConflict) {
+		t.Fatalf("post-start deployment idempotency conflict = %v", err)
+	}
+	newDeployment := deployment
+	newDeployment.ID, newDeployment.IdempotencyKey, newDeployment.IdempotencyRequest = "post-start-deployment", "post-start-deploy-key", strings.Repeat("f", 64)
+	if _, err := reader.CreateMissionDeploymentForPlannedFlight(ctx, newDeployment); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("post-start new deployment error = %v", err)
 	}
 }
 
@@ -371,13 +406,71 @@ func TestPostgresStartScopesUncertaintyToExactCurrentMission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(current, "scope-current-applied", "scope-current-applied-key", domain.MissionDeploymentApplied)); err != nil {
+	pending, err := store.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(current, "scope-current-pending", "scope-current-pending-key", domain.MissionDeploymentPending))
+	if err != nil {
 		t.Fatal(err)
 	}
 	active := flight
 	active.Status, active.StartedAt = domain.FlightStatusActive, now.Add(time.Minute)
+	if err := store.StartFlightWithCurrentMissionDeployment(ctx, active, domain.FlightStatusPlanned); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("pending current deployment start error = %v", err)
+	}
+	pending.Status = domain.MissionDeploymentRejected
+	pending.UpdatedAt = now.Add(30 * time.Second)
+	if err := store.UpdateMissionDeployment(ctx, pending, pending.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(current, "scope-current-applied", "scope-current-applied-key", domain.MissionDeploymentApplied)); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.StartFlightWithCurrentMissionDeployment(ctx, active, domain.FlightStatusPlanned); err != nil {
 		t.Fatalf("historical uncertainty blocked verified current mission: %v", err)
+	}
+}
+
+func TestPostgresStartRejectsTerminalIntentInsideFence(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	resetMissionFleetTables(t, store)
+	now := time.Now().UTC()
+	aircraft := domain.Aircraft{ID: "terminal-aircraft", OperatorID: "operator-1", AgentID: "agent-1", CreatedAt: now, UpdatedAt: now}
+	if err := store.CreateAircraft(ctx, aircraft); err != nil {
+		t.Fatal(err)
+	}
+	intent := domain.OperationalIntent{ID: "terminal-intent", Version: 1, OperatorID: "operator-1", AircraftID: aircraft.ID, Status: domain.IntentStatusActive, PlannedStartAt: now, PlannedEndAt: now.Add(time.Hour), UpdatedAt: now}
+	if err := store.CreateOperationalIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	flight := domain.FlightRecord{ID: "terminal-flight", OperatorID: "operator-1", AircraftID: aircraft.ID, IntentID: intent.ID, IntentVersion: 1, Status: domain.FlightStatusPlanned, StartedAt: now}
+	if err := store.CreateFlightRecord(ctx, flight); err != nil {
+		t.Fatal(err)
+	}
+	active := flight
+	active.Status, active.StartedAt = domain.FlightStatusActive, now.Add(time.Minute)
+	if err := store.StartFlightWithCurrentMissionDeployment(ctx, active, domain.FlightStatusPlanned); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("missing mission start error = %v", err)
+	}
+	mission, err := store.CreateMissionForPlannedFlight(ctx, postgresLifecycleMission(flight, "terminal-mission", "terminal-import-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StartFlightWithCurrentMissionDeployment(ctx, active, domain.FlightStatusPlanned); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("unverified mission start error = %v", err)
+	}
+	if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(mission, "terminal-applied", "terminal-deploy-key", domain.MissionDeploymentApplied)); err != nil {
+		t.Fatal(err)
+	}
+	intent.Status = domain.IntentStatusComplete
+	intent.UpdatedAt = now.Add(time.Minute)
+	if err := store.UpdateOperationalIntent(ctx, intent, intent.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StartFlightWithCurrentMissionDeployment(ctx, active, domain.FlightStatusPlanned); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("terminal intent start error = %v", err)
 	}
 }
 

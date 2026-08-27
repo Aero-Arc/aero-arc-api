@@ -50,6 +50,7 @@ type fakeRelayClient struct {
 	setErrors         []error
 	activeContext     *agentv1.OperationContext
 	omitActiveContext bool
+	clearResult       *agentv1.OperationContextCommandAck
 	block             bool
 }
 
@@ -123,7 +124,41 @@ func TestEnsureOperationContextRejectsMissingOrMismatchedActiveContext(t *testin
 }
 func (f *fakeRelayClient) ClearOperationContext(_ context.Context, r *relayv1.ClearOperationContextRequest, _ ...grpc.CallOption) (*relayv1.ClearOperationContextResponse, error) {
 	f.clearRequests = append(f.clearRequests, r)
+	if f.clearResult != nil {
+		return &relayv1.ClearOperationContextResponse{Result: f.clearResult}, nil
+	}
 	return &relayv1.ClearOperationContextResponse{Result: &agentv1.OperationContextCommandAck{CommandId: r.Command.GetCommandId(), Status: agentv1.OperationContextCommandAck_STATUS_ALREADY_APPLIED}}, nil
+}
+
+func TestClearOperationContextForReconciliationRequiresCorrelatedSafeState(t *testing.T) {
+	old := &agentv1.OperationContext{AircraftId: "aircraft-1", FlightId: "flight-1", IntentId: "intent-1", IntentVersion: 3}
+	command := &agentv1.ClearOperationContextCommand{CommandId: "clear-command", FlightId: old.GetFlightId()}
+	for _, test := range []struct {
+		name    string
+		result  *agentv1.OperationContextCommandAck
+		wantErr bool
+	}{
+		{name: "cleared", result: &agentv1.OperationContextCommandAck{CommandId: command.GetCommandId(), Status: agentv1.OperationContextCommandAck_STATUS_APPLIED}},
+		{name: "newer context preserved", result: &agentv1.OperationContextCommandAck{CommandId: command.GetCommandId(), Status: agentv1.OperationContextCommandAck_STATUS_ALREADY_APPLIED, ActiveContext: &agentv1.OperationContext{AircraftId: old.GetAircraftId(), FlightId: "new-flight", IntentId: "new-intent", IntentVersion: 4}}},
+		{name: "old context remains", result: &agentv1.OperationContextCommandAck{CommandId: command.GetCommandId(), Status: agentv1.OperationContextCommandAck_STATUS_APPLIED, ActiveContext: old}, wantErr: true},
+		{name: "mismatched ack", result: &agentv1.OperationContextCommandAck{CommandId: "another-command", Status: agentv1.OperationContextCommandAck_STATUS_APPLIED}, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeRelayClient{clearResult: test.result}
+			service := newWithPool(&fakeRegistry{relayIDs: []string{"relay-1"}}, &fakePool{clients: map[string]*fakeRelayClient{"relay-1": client}}, time.Second, time.Minute)
+			err := service.ClearOperationContextForReconciliation(context.Background(), "agent-1", command, old)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, test.wantErr)
+			}
+			if len(client.clearRequests) != 1 {
+				t.Fatalf("clear requests = %d", len(client.clearRequests))
+			}
+		})
+	}
+	service := newWithPool(&fakeRegistry{}, &fakePool{}, time.Second, time.Minute)
+	if err := service.ClearOperationContextForReconciliation(context.Background(), "", command, old); err == nil {
+		t.Fatal("invalid clear request returned nil error")
+	}
 }
 
 func TestSetOperationContextCachesPlacementAndPreservesCommandID(t *testing.T) {
