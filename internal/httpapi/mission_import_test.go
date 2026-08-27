@@ -30,6 +30,7 @@ func TestMissionImportAndCurrentHTTPContract(t *testing.T) {
 	}
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/flights/flight-1/missions/import", bytes.NewReader(raw))
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer test-mission-deployment-token")
 	request.Header.Set("Idempotency-Key", "http-import-1")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -49,6 +50,7 @@ func TestMissionImportAndCurrentHTTPContract(t *testing.T) {
 
 	replayRequest := httptest.NewRequest(http.MethodPost, "/api/v1/flights/flight-1/missions/import", bytes.NewReader(raw))
 	replayRequest.Header.Set("Idempotency-Key", "http-import-1")
+	replayRequest.Header.Set("Authorization", "Bearer test-mission-deployment-token")
 	replayResponse := httptest.NewRecorder()
 	handler.ServeHTTP(replayResponse, replayRequest)
 	if replayResponse.Code != http.StatusOK || replayResponse.Header().Get("Idempotent-Replayed") != "true" {
@@ -69,9 +71,36 @@ func TestMissionImportAndCurrentHTTPContract(t *testing.T) {
 	}
 }
 
+func TestMissionImportRequiresMissionControlAuthorization(t *testing.T) {
+	handler := newMissionHTTPHandler(t)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/flights/flight-1/missions/import", bytes.NewBufferString(`{}`))
+	request.Header.Set("Idempotency-Key", "unauthorized-import")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestMissionImportFailsClosedWhenControlIsUnconfigured(t *testing.T) {
+	handler := New(nil, time.Second).Handler()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/flights/flight-1/missions/import", bytes.NewBufferString(`{}`))
+	request.Header.Set("Authorization", "Bearer any-token")
+	request.Header.Set("Idempotency-Key", "unconfigured-import")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 type httpMissionDeployer struct{}
 
 func (*httpMissionDeployer) EnsureOperationContext(context.Context, string, *agentv1.SetOperationContextCommand) error {
+	return nil
+}
+
+func (*httpMissionDeployer) ClearOperationContextForReconciliation(context.Context, string, *agentv1.ClearOperationContextCommand, *agentv1.OperationContext) error {
 	return nil
 }
 
@@ -87,32 +116,50 @@ func TestMissionDeploymentHTTPRequiresAuthorizationAndNoRoutingPayload(t *testin
 	importBody := `{"source_format":"qgc_wpl_110","aircraft_id":"aircraft-1","intent_id":"intent-1","intent_version":1,"source":"QGC WPL 110\n0\t1\t0\t16\t0\t0\t0\t0\t-35.363262\t149.165237\t0\t1\n1\t0\t0\t22\t0\t0\t0\t0\t-35.363262\t149.165237\t20\t1\n2\t0\t0\t21\t0\t0\t0\t0\t-35.363262\t149.165237\t0\t1\n"}`
 	importRequest := httptest.NewRequest(http.MethodPost, "/api/v1/flights/flight-1/missions/import", bytes.NewBufferString(importBody))
 	importRequest.Header.Set("Idempotency-Key", "http-deploy-import")
+	importRequest.Header.Set("Authorization", "Bearer test-mission-deployment-token")
 	importResponse := httptest.NewRecorder()
 	handler.ServeHTTP(importResponse, importRequest)
 	if importResponse.Code != http.StatusCreated {
 		t.Fatalf("import status=%d body=%s", importResponse.Code, importResponse.Body.String())
 	}
 
-	unauthorized := httptest.NewRequest(http.MethodPost, "/api/v1/flights/flight-1/missions/current/deploy", nil)
+	var imported service.ImportMissionResult
+	if err := json.Unmarshal(importResponse.Body.Bytes(), &imported); err != nil {
+		t.Fatal(err)
+	}
+	deployPath := "/api/v1/flights/flight-1/missions/" + imported.Mission.ID + "/deploy"
+	ifMatch := `"` + imported.Mission.MissionDigest + `"`
+	unauthorized := httptest.NewRequest(http.MethodPost, deployPath, nil)
 	unauthorized.Header.Set("Idempotency-Key", "http-deploy")
+	unauthorized.Header.Set("If-Match", ifMatch)
 	unauthorizedResponse := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedResponse, unauthorized)
 	if unauthorizedResponse.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized status=%d body=%s", unauthorizedResponse.Code, unauthorizedResponse.Body.String())
 	}
 
-	withPayload := httptest.NewRequest(http.MethodPost, "/api/v1/flights/flight-1/missions/current/deploy", bytes.NewBufferString(`{"agent_id":"attacker"}`))
+	withPayload := httptest.NewRequest(http.MethodPost, deployPath, bytes.NewBufferString(`{"agent_id":"attacker"}`))
 	withPayload.Header.Set("Authorization", "Bearer test-mission-deployment-token")
 	withPayload.Header.Set("Idempotency-Key", "http-deploy")
+	withPayload.Header.Set("If-Match", ifMatch)
 	withPayloadResponse := httptest.NewRecorder()
 	handler.ServeHTTP(withPayloadResponse, withPayload)
 	if withPayloadResponse.Code != http.StatusBadRequest {
 		t.Fatalf("payload status=%d body=%s", withPayloadResponse.Code, withPayloadResponse.Body.String())
 	}
+	missingPrecondition := httptest.NewRequest(http.MethodPost, deployPath, nil)
+	missingPrecondition.Header.Set("Authorization", "Bearer test-mission-deployment-token")
+	missingPrecondition.Header.Set("Idempotency-Key", "http-deploy")
+	missingPreconditionResponse := httptest.NewRecorder()
+	handler.ServeHTTP(missingPreconditionResponse, missingPrecondition)
+	if missingPreconditionResponse.Code != http.StatusBadRequest {
+		t.Fatalf("missing If-Match status=%d body=%s", missingPreconditionResponse.Code, missingPreconditionResponse.Body.String())
+	}
 
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/flights/flight-1/missions/current/deploy", nil)
+	request := httptest.NewRequest(http.MethodPost, deployPath, nil)
 	request.Header.Set("Authorization", "Bearer test-mission-deployment-token")
 	request.Header.Set("Idempotency-Key", "http-deploy")
+	request.Header.Set("If-Match", ifMatch)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -136,9 +183,10 @@ func TestMissionDeploymentHTTPRequiresAuthorizationAndNoRoutingPayload(t *testin
 
 func TestMissionDeploymentHTTPFailsClosedWhenControlIsUnconfigured(t *testing.T) {
 	handler := New(nil, time.Second).Handler()
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/flights/flight-1/missions/current/deploy", nil)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/flights/flight-1/missions/mission-1/deploy", nil)
 	request.Header.Set("Authorization", "Bearer any-token")
 	request.Header.Set("Idempotency-Key", "deploy-key")
+	request.Header.Set("If-Match", `"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"`)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable {
@@ -151,6 +199,7 @@ func TestMissionImportReturnsStructuredValidationFindings(t *testing.T) {
 	body := `{"source_format":"qgc_wpl_110","aircraft_id":"aircraft-1","intent_id":"intent-1","intent_version":1,"source":"QGC WPL 120\\n"}`
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/flights/flight-1/missions/import", bytes.NewBufferString(body))
 	request.Header.Set("Idempotency-Key", "invalid-http-import")
+	request.Header.Set("Authorization", "Bearer test-mission-deployment-token")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {

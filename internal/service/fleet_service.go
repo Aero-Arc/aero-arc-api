@@ -275,7 +275,7 @@ func (s *FleetService) StartFlight(ctx context.Context, flightID string) (domain
 	}
 	flight.Status = domain.FlightStatusActive
 	flight.StartedAt = s.now().UTC()
-	if err := s.durable.UpdateFlightRecord(ctx, flight, domain.FlightStatusPlanned); err != nil {
+	if err := s.durable.StartFlightWithCurrentMissionDeployment(ctx, flight, domain.FlightStatusPlanned); err != nil {
 		if errors.Is(err, durable.ErrVersionConflict) {
 			current, getErr := s.durable.GetFlightRecord(ctx, flightID)
 			if getErr == nil && current.Status == domain.FlightStatusActive {

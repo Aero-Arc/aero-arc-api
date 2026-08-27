@@ -173,6 +173,33 @@ CREATE TABLE IF NOT EXISTS received_peer_notifications (
 CREATE INDEX IF NOT EXISTS received_peer_notifications_intent_idx
     ON received_peer_notifications (intent_id, received_at);
 
+CREATE TABLE IF NOT EXISTS aircraft (
+    id text PRIMARY KEY,
+    operator_id text NOT NULL,
+    agent_id text NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    data jsonb NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS aircraft_operator_idx ON aircraft (operator_id, id);
+
+CREATE TABLE IF NOT EXISTS flight_records (
+    id text PRIMARY KEY,
+    operator_id text NOT NULL,
+    aircraft_id text NOT NULL REFERENCES aircraft (id) ON DELETE RESTRICT,
+    intent_id text NOT NULL,
+    intent_version integer NOT NULL CHECK (intent_version > 0),
+    status text NOT NULL,
+    started_at timestamptz NOT NULL,
+    data jsonb NOT NULL,
+    FOREIGN KEY (intent_id, intent_version)
+        REFERENCES operational_intents (id, version) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS flight_records_aircraft_idx
+    ON flight_records (aircraft_id, started_at DESC, id);
+
 CREATE TABLE IF NOT EXISTS missions (
     id text PRIMARY KEY,
     operator_id text NOT NULL,
@@ -189,6 +216,8 @@ CREATE TABLE IF NOT EXISTS missions (
     created_at timestamptz NOT NULL,
     data jsonb NOT NULL,
     UNIQUE (flight_id, version),
+    FOREIGN KEY (flight_id) REFERENCES flight_records (id) ON DELETE RESTRICT,
+    FOREIGN KEY (aircraft_id) REFERENCES aircraft (id) ON DELETE RESTRICT,
     FOREIGN KEY (intent_id, intent_version)
         REFERENCES operational_intents (id, version) ON DELETE RESTRICT
 );
@@ -215,7 +244,8 @@ CREATE TABLE IF NOT EXISTS mission_deployments (
     status text NOT NULL,
     created_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL,
-    data jsonb NOT NULL
+    data jsonb NOT NULL,
+    FOREIGN KEY (flight_id) REFERENCES flight_records (id) ON DELETE RESTRICT
 );
 
 CREATE INDEX IF NOT EXISTS mission_deployments_flight_idx

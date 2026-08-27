@@ -129,7 +129,7 @@ func (s *Server) Handler() http.Handler {
 	app.Use(mach.CORSWithConfig(mach.CORSConfig{
 		AllowOrigins: []string{"*"},
 		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodOptions},
-		AllowHeaders: []string{"Content-Type", "Authorization", "Idempotency-Key"},
+		AllowHeaders: []string{"Content-Type", "Authorization", "Idempotency-Key", "If-Match"},
 	}))
 	if s.debug {
 		app.Use(debugRequestLogger())
@@ -161,7 +161,7 @@ func (s *Server) Handler() http.Handler {
 	api.POST("/flights/{flight_id}/start", s.handleStartFlight)
 	api.POST("/flights/{flight_id}/missions/import", s.handleImportMission)
 	api.GET("/flights/{flight_id}/missions/current", s.handleGetCurrentMission)
-	api.POST("/flights/{flight_id}/missions/current/deploy", s.handleDeployCurrentMission)
+	api.POST("/flights/{flight_id}/missions/{mission_id}/deploy", s.handleDeployCurrentMission)
 	api.GET("/flights/{flight_id}/mission-deployments/{deployment_id}", s.handleGetMissionDeployment)
 	api.GET("/flights/{flight_id}/replay", s.handleGetFlightReplay)
 

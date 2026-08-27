@@ -168,7 +168,7 @@ func (s *FleetService) ImportMission(ctx context.Context, flightID string, idemp
 		IdempotencyKey: idempotencyKey, IdempotencyRequest: requestHash,
 		ValidationFindings: findings, Items: items, CreatedAt: s.now().UTC(),
 	}
-	stored, err := s.durable.CreateMission(ctx, mission)
+	stored, err := s.durable.CreateMissionForPlannedFlight(ctx, mission)
 	if err != nil {
 		return ImportMissionResult{}, fmt.Errorf("create mission: %w", err)
 	}

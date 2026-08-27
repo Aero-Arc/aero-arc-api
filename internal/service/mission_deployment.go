@@ -14,6 +14,7 @@ import (
 )
 
 const missionDeploymentCommandTTL = 2 * time.Minute
+const missionDeploymentReconciliationTTL = 15 * time.Minute
 
 // ErrMissionDeploymentUnavailable means secure API-to-Relay control is not configured.
 var ErrMissionDeploymentUnavailable = errors.New("mission deployment unavailable")
@@ -21,6 +22,7 @@ var ErrMissionDeploymentUnavailable = errors.New("mission deployment unavailable
 // MissionDeployer sends one stable command through authoritative Registry placement.
 type MissionDeployer interface {
 	EnsureOperationContext(context.Context, string, *agentv1.SetOperationContextCommand) error
+	ClearOperationContextForReconciliation(context.Context, string, *agentv1.ClearOperationContextCommand, *agentv1.OperationContext) error
 	DeployMission(context.Context, string, *agentv1.DeployMissionCommand) (*agentv1.MissionDeploymentResult, error)
 }
 
@@ -32,25 +34,22 @@ type DeployMissionResult struct {
 
 // DeployCurrentMission durably identifies and dispatches the exact current
 // mission. The caller supplies neither mission bytes nor control-plane routing.
-func (s *FleetService) DeployCurrentMission(ctx context.Context, flightID, idempotencyKey string) (DeployMissionResult, error) {
-	flightID, idempotencyKey = strings.TrimSpace(flightID), strings.TrimSpace(idempotencyKey)
-	if flightID == "" {
-		return DeployMissionResult{}, fmt.Errorf("%w: flight_id is required", ErrValidation)
+func (s *FleetService) DeployCurrentMission(ctx context.Context, flightID, expectedMissionID, expectedDigest, idempotencyKey string) (DeployMissionResult, error) {
+	flightID, expectedMissionID = strings.TrimSpace(flightID), strings.TrimSpace(expectedMissionID)
+	expectedDigest, idempotencyKey = strings.TrimSpace(expectedDigest), strings.TrimSpace(idempotencyKey)
+	if flightID == "" || expectedMissionID == "" || len(expectedDigest) != 64 {
+		return DeployMissionResult{}, fmt.Errorf("%w: flight_id, expected mission_id, and mission digest are required", ErrValidation)
 	}
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
 		return DeployMissionResult{}, err
 	}
 	existing, lookupErr := s.durable.GetMissionDeploymentByIdempotencyKey(ctx, idempotencyKey)
 	if lookupErr == nil {
-		if existing.FlightID != flightID {
+		if existing.FlightID != flightID || existing.MissionID != expectedMissionID || existing.MissionDigest != expectedDigest {
 			return DeployMissionResult{}, durable.ErrIdempotencyConflict
 		}
-		current, err := s.GetCurrentMission(ctx, flightID)
-		if err != nil {
-			return DeployMissionResult{}, err
-		}
 		existingRequestHash := sha256Hex(strings.Join([]string{
-			"deploy-mission-v1", flightID, current.ID, fmt.Sprint(current.Version), current.MissionDigest,
+			"deploy-mission-v1", existing.FlightID, existing.MissionID, fmt.Sprint(existing.MissionVersion), existing.MissionDigest,
 		}, "\x00"))
 		if existing.IdempotencyRequest != existingRequestHash {
 			return DeployMissionResult{}, durable.ErrIdempotencyConflict
@@ -69,6 +68,9 @@ func (s *FleetService) DeployCurrentMission(ctx context.Context, flightID, idemp
 	if err != nil {
 		return DeployMissionResult{}, err
 	}
+	if mission.ID != expectedMissionID || mission.MissionDigest != expectedDigest {
+		return DeployMissionResult{}, fmt.Errorf("%w: expected mission identity or digest is not the current immutable mission", durable.ErrVersionConflict)
+	}
 	requestHash := sha256Hex(strings.Join([]string{
 		"deploy-mission-v1", flight.ID, mission.ID, fmt.Sprint(mission.Version), mission.MissionDigest,
 	}, "\x00"))
@@ -78,11 +80,13 @@ func (s *FleetService) DeployCurrentMission(ctx context.Context, flightID, idemp
 		AircraftID: flight.AircraftID, AgentID: aircraft.AgentID, IntentID: flight.IntentID,
 		IntentVersion: flight.IntentVersion, MissionID: mission.ID, MissionVersion: mission.Version,
 		MissionDigest: mission.MissionDigest, CommandID: uuid.NewString(), IdempotencyKey: idempotencyKey,
-		OperationContextCommandID: uuid.NewString(),
-		IdempotencyRequest:        requestHash, Status: domain.MissionDeploymentPending,
-		IssuedAt: now, ExpiresAt: now.Add(missionDeploymentCommandTTL), CreatedAt: now, UpdatedAt: now,
+		OperationContextCommandID:    uuid.NewString(),
+		ReconciliationClearCommandID: uuid.NewString(),
+		IdempotencyRequest:           requestHash, Status: domain.MissionDeploymentPending,
+		IssuedAt: now, ExpiresAt: now.Add(missionDeploymentCommandTTL),
+		ReconcileUntil: now.Add(missionDeploymentCommandTTL + missionDeploymentReconciliationTTL), CreatedAt: now, UpdatedAt: now,
 	}
-	deployment, err := s.durable.CreateMissionDeployment(ctx, created)
+	deployment, err := s.durable.CreateMissionDeploymentForPlannedFlight(ctx, created)
 	if err != nil {
 		return DeployMissionResult{}, fmt.Errorf("create mission deployment: %w", err)
 	}
@@ -149,9 +153,25 @@ func (s *FleetService) DeployCurrentMission(ctx context.Context, flightID, idemp
 	}
 
 	command := missionDeploymentCommand(deployment, mission)
+	dispatching := deployment
+	dispatching.AttemptCount++
+	dispatching.UpdatedAt = s.now().UTC()
+	dispatching.Status = domain.MissionDeploymentOutcomeUnknown
+	dispatching.Message = "mission dispatch began; no correlated Agent outcome has been persisted yet"
+	if err := s.durable.UpdateMissionDeployment(ctx, dispatching, deployment.Revision); err != nil {
+		if errors.Is(err, durable.ErrVersionConflict) {
+			current, getErr := s.durable.GetMissionDeployment(ctx, deployment.ID)
+			if getErr == nil {
+				return DeployMissionResult{Deployment: current, Replayed: true}, nil
+			}
+		}
+		return DeployMissionResult{}, fmt.Errorf("persist mission dispatch attempt: %w", err)
+	}
+	dispatching.Revision++
+	deployment = dispatching
+
 	result, deployErr := s.missionDeployer.DeployMission(ctx, deployment.AgentID, command)
 	updated := deployment
-	updated.AttemptCount++
 	updated.UpdatedAt = s.now().UTC()
 	if deployErr != nil {
 		updated.Status = domain.MissionDeploymentOutcomeUnknown
@@ -258,10 +278,12 @@ func applyMissionDeploymentResult(deployment *domain.MissionDeployment, result *
 	if !ok {
 		return fmt.Errorf("relay returned unsupported mission deployment status %s", result.GetStatus())
 	}
-	if statusValue == domain.MissionDeploymentApplied || statusValue == domain.MissionDeploymentAlreadyApplied {
-		if result.GetOnboardMissionDigest() != deployment.MissionDigest || int(result.GetUploadedItemCount()) != itemCount {
-			statusValue = domain.MissionDeploymentOnboardMissionMismatch
-		}
+	if statusValue == domain.MissionDeploymentApplied &&
+		(result.GetOnboardMissionDigest() != deployment.MissionDigest || int(result.GetUploadedItemCount()) != itemCount) {
+		statusValue = domain.MissionDeploymentOnboardMissionMismatch
+	}
+	if statusValue == domain.MissionDeploymentAlreadyApplied && result.GetOnboardMissionDigest() != deployment.MissionDigest {
+		statusValue = domain.MissionDeploymentOnboardMissionMismatch
 	}
 	deployment.Status, deployment.Message = statusValue, result.GetMessage()
 	deployment.UploadedItemCount, deployment.OnboardMissionDigest = result.GetUploadedItemCount(), result.GetOnboardMissionDigest()

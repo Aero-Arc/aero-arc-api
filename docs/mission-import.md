@@ -13,6 +13,7 @@ Import a new flight-local mission version:
 ```http
 POST /api/v1/flights/{flight_id}/missions/import
 Content-Type: application/json
+Authorization: Bearer <mission-control-token>
 Idempotency-Key: mission-import-2026-08-26-001
 
 {
@@ -44,11 +45,17 @@ Deploy that exact current version without accepting mission bytes or topology
 from the browser:
 
 ```http
-POST /api/v1/flights/{flight_id}/missions/current/deploy
-Authorization: Bearer <mission-deploy-token>
+POST /api/v1/flights/{flight_id}/missions/{mission_id}/deploy
+Authorization: Bearer <mission-control-token>
 Idempotency-Key: mission-deploy-2026-08-26-001
+If-Match: "<lowercase mission_digest>"
 Content-Length: 0
 ```
+
+The mission identity in the path and quoted digest in `If-Match` are mandatory
+review-to-deploy preconditions. If either no longer identifies the exact current
+immutable mission, the API returns `409` and dispatches nothing. The browser
+still supplies no plan or control-plane routing.
 
 The API re-reads the planned flight, current mission, current accepted/active
 intent version, aircraft, operator, and `aircraft.agent_id` immediately before
@@ -75,7 +82,7 @@ Read one deployment result, scoped to its flight:
 
 ```http
 GET /api/v1/flights/{flight_id}/mission-deployments/{deployment_id}
-Authorization: Bearer <mission-deploy-token>
+Authorization: Bearer <mission-control-token>
 ```
 
 Configure the outbound control plane as one all-or-none mTLS identity:
@@ -91,12 +98,14 @@ AERO_API_RELAY_CONTROL_TIMEOUT=45s
 AERO_API_RELAY_PLACEMENT_TTL=10s
 ```
 
-Partial TLS configuration, a short/missing route token, or Relay control with
-the in-memory Registry is rejected at startup. Without this complete config the
-import/read routes remain available, while deployment fails closed with `503`.
-The dedicated bearer token is a bounded first-slice control guard because the
-API does not yet have operator identity/session authorization. Do not compile
-it into a public web bundle; inject it only into a trusted/local Ops session.
+Partial TLS configuration, a short/missing control token, or Relay control with
+the in-memory Registry is rejected at startup. Without the complete control
+configuration, import and deployment fail closed with `503`; current-mission
+reads remain available. Import, deployment, and deployment-status reads require
+the same dedicated bearer token. This is a bounded first-slice control guard
+because the API does not yet have operator identity/session authorization. Do
+not compile it into a public web bundle; inject it only into a trusted/local Ops
+session.
 
 `GET /api/v1/aircraft/{aircraft_id}/map` includes that route as
 `commanded_mission` only when its aircraft, intent ID, and intent version exactly
@@ -159,13 +168,32 @@ contract; link capability negotiation and fail-closed legacy fallback remain an
 Agent concern rather than a reason to reject otherwise valid intent-contained
 routes globally.
 
+## Lifecycle and persistence fence
+
+Aircraft, flight, mission, mission-item, and deployment records used by this
+slice are stored in PostgreSQL. Foreign keys prevent missions and deployments
+from referring to nonexistent aircraft or flights. Exact import and deployment
+idempotency replays remain available after an API restart and after the flight
+has started; conflicting key reuse is still rejected.
+
+Mission import, creation of a deployment attempt, and flight start serialize on
+the durable flight record. A new import or deployment cannot commit after start,
+and start cannot pass an exact current mission with a `pending` or
+`outcome_unknown` deployment. Start requires an `applied` or `already_applied`
+result for the exact current mission and rechecks the linked active intent
+version and aircraft inside the same transaction. Uncertainty belonging only to
+an older mission version does not poison a newer, independently verified current
+mission.
+
 ## Deliberate deferrals
 
 This slice deploys and records Agent/autopilot acknowledgement and exact onboard
-digest readback, but it does not activate the operational intent, start or
-complete the flight, switch vehicle mode, arm, or begin mission execution. It
-also does not infer operational volumes from waypoints. Those remain explicit
-lifecycle/C2 operations rather than side effects of uploading a mission.
+digest readback, but it does not activate the operational intent, complete the
+flight, switch vehicle mode, arm, or begin mission execution. Flight start is a
+separate API lifecycle call and now requires the exact current mission to have a
+verified deployment. The API also does not infer operational volumes from
+waypoints. Those remain explicit lifecycle/C2 operations rather than side
+effects of uploading a mission.
 
 Multipart upload is deferred. JSON source text keeps the first UI/API slice
 small while retaining strict size limits, unknown-field rejection, durable

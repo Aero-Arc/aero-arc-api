@@ -13,6 +13,7 @@ import (
 type fakeMissionDeployer struct {
 	contextErr error
 	deployErr  error
+	deployHook func()
 	contexts   []*agentv1.SetOperationContextCommand
 	commands   []*agentv1.DeployMissionCommand
 	agentIDs   []string
@@ -24,9 +25,16 @@ func (f *fakeMissionDeployer) EnsureOperationContext(_ context.Context, agentID 
 	return f.contextErr
 }
 
+func (f *fakeMissionDeployer) ClearOperationContextForReconciliation(_ context.Context, _ string, _ *agentv1.ClearOperationContextCommand, _ *agentv1.OperationContext) error {
+	return nil
+}
+
 func (f *fakeMissionDeployer) DeployMission(_ context.Context, agentID string, command *agentv1.DeployMissionCommand) (*agentv1.MissionDeploymentResult, error) {
 	f.agentIDs = append(f.agentIDs, agentID)
 	f.commands = append(f.commands, command)
+	if f.deployHook != nil {
+		f.deployHook()
+	}
 	if f.deployErr != nil {
 		return nil, f.deployErr
 	}
@@ -47,7 +55,7 @@ func TestDeployCurrentMissionEnsuresContextThenDispatchesExactMission(t *testing
 	}
 	deployer := &fakeMissionDeployer{}
 	svc.WithMissionDeployer(deployer)
-	result, err := svc.DeployCurrentMission(context.Background(), "flight-1", "deploy-key")
+	result, err := svc.DeployCurrentMission(context.Background(), "flight-1", mission.Mission.ID, mission.Mission.MissionDigest, "deploy-key")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +74,7 @@ func TestDeployCurrentMissionEnsuresContextThenDispatchesExactMission(t *testing
 		command.GetBinding().GetMissionDigest() != mission.Mission.MissionDigest || len(command.GetPlan().GetItems()) != len(mission.Mission.Items) {
 		t.Fatalf("deploy command = %#v", command)
 	}
-	replay, err := svc.DeployCurrentMission(context.Background(), "flight-1", "deploy-key")
+	replay, err := svc.DeployCurrentMission(context.Background(), "flight-1", mission.Mission.ID, mission.Mission.MissionDigest, "deploy-key")
 	if err != nil || !replay.Replayed || replay.Deployment.ID != result.Deployment.ID || len(deployer.commands) != 1 {
 		t.Fatalf("terminal replay = %#v err=%v calls=%d", replay, err, len(deployer.commands))
 	}
@@ -78,7 +86,7 @@ func TestDeployCurrentMissionEnsuresContextThenDispatchesExactMission(t *testing
 	if err := store.UpdateFlightRecord(context.Background(), flight, domain.FlightStatusPlanned); err != nil {
 		t.Fatal(err)
 	}
-	postTransitionReplay, err := svc.DeployCurrentMission(context.Background(), "flight-1", "deploy-key")
+	postTransitionReplay, err := svc.DeployCurrentMission(context.Background(), "flight-1", mission.Mission.ID, mission.Mission.MissionDigest, "deploy-key")
 	if err != nil || !postTransitionReplay.Replayed || postTransitionReplay.Deployment.ID != result.Deployment.ID || len(deployer.commands) != 1 {
 		t.Fatalf("post-transition terminal replay = %#v err=%v calls=%d", postTransitionReplay, err, len(deployer.commands))
 	}
@@ -86,12 +94,13 @@ func TestDeployCurrentMissionEnsuresContextThenDispatchesExactMission(t *testing
 
 func TestDeployCurrentMissionDoesNotDispatchWithoutContextAck(t *testing.T) {
 	svc, _ := newMissionTestService(t)
-	if _, err := svc.ImportMission(context.Background(), "flight-1", "import-context-failure", validMissionRequest(validWPL110)); err != nil {
+	mission, err := svc.ImportMission(context.Background(), "flight-1", "import-context-failure", validMissionRequest(validWPL110))
+	if err != nil {
 		t.Fatal(err)
 	}
 	deployer := &fakeMissionDeployer{contextErr: errors.New("agent offline")}
 	svc.WithMissionDeployer(deployer)
-	first, err := svc.DeployCurrentMission(context.Background(), "flight-1", "deploy-context-failure")
+	first, err := svc.DeployCurrentMission(context.Background(), "flight-1", mission.Mission.ID, mission.Mission.MissionDigest, "deploy-context-failure")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +109,7 @@ func TestDeployCurrentMissionDoesNotDispatchWithoutContextAck(t *testing.T) {
 	}
 	contextCommandID := deployer.contexts[0].GetCommandId()
 	deployer.contextErr = nil
-	retry, err := svc.DeployCurrentMission(context.Background(), "flight-1", "deploy-context-failure")
+	retry, err := svc.DeployCurrentMission(context.Background(), "flight-1", mission.Mission.ID, mission.Mission.MissionDigest, "deploy-context-failure")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,21 +121,27 @@ func TestDeployCurrentMissionDoesNotDispatchWithoutContextAck(t *testing.T) {
 
 func TestDeployCurrentMissionRejectsConflictingIdempotencyAndLifecycle(t *testing.T) {
 	svc, store := newMissionTestService(t)
-	if _, err := svc.ImportMission(context.Background(), "flight-1", "first-import", validMissionRequest(validWPL110)); err != nil {
+	firstMission, err := svc.ImportMission(context.Background(), "flight-1", "first-import", validMissionRequest(validWPL110))
+	if err != nil {
 		t.Fatal(err)
 	}
 	deployer := &fakeMissionDeployer{}
 	svc.WithMissionDeployer(deployer)
-	if _, err := svc.DeployCurrentMission(context.Background(), "flight-1", "stable-deploy-key"); err != nil {
+	if _, err := svc.DeployCurrentMission(context.Background(), "flight-1", firstMission.Mission.ID, firstMission.Mission.MissionDigest, "stable-deploy-key"); err != nil {
 		t.Fatal(err)
 	}
 	changed := validMissionRequest(validWPL110)
 	changed.Source = "QGC WPL 110\n0\t1\t0\t16\t0\t0\t0\t0\t-35.3632620\t149.1652370\t0\t1\n1\t0\t0\t22\t0\t0\t0\t0\t-35.3632620\t149.1652370\t20\t1\n2\t0\t0\t21\t0\t0\t0\t1\t-35.3632620\t149.1652370\t0\t1\n"
-	if _, err := svc.ImportMission(context.Background(), "flight-1", "second-import", changed); err != nil {
+	secondMission, err := svc.ImportMission(context.Background(), "flight-1", "second-import", changed)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.DeployCurrentMission(context.Background(), "flight-1", "stable-deploy-key"); !errors.Is(err, durable.ErrIdempotencyConflict) {
+	if _, err := svc.DeployCurrentMission(context.Background(), "flight-1", secondMission.Mission.ID, secondMission.Mission.MissionDigest, "stable-deploy-key"); !errors.Is(err, durable.ErrIdempotencyConflict) {
 		t.Fatalf("conflicting deployment error = %v", err)
+	}
+	originalReplay, err := svc.DeployCurrentMission(context.Background(), "flight-1", firstMission.Mission.ID, firstMission.Mission.MissionDigest, "stable-deploy-key")
+	if err != nil || !originalReplay.Replayed || originalReplay.Deployment.MissionID != firstMission.Mission.ID {
+		t.Fatalf("exact original deployment replay = %#v err=%v", originalReplay, err)
 	}
 	flight, err := store.GetFlightRecord(context.Background(), "flight-1")
 	if err != nil {
@@ -136,23 +151,93 @@ func TestDeployCurrentMissionRejectsConflictingIdempotencyAndLifecycle(t *testin
 	if err := store.UpdateFlightRecord(context.Background(), flight, domain.FlightStatusPlanned); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.DeployCurrentMission(context.Background(), "flight-1", "active-deploy"); !errors.Is(err, ErrInvalidTransition) {
+	if _, err := svc.DeployCurrentMission(context.Background(), "flight-1", secondMission.Mission.ID, secondMission.Mission.MissionDigest, "active-deploy"); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("active flight deployment error = %v", err)
+	}
+}
+
+func TestDeployCurrentMissionRejectsReviewedMissionAfterRouteReplacement(t *testing.T) {
+	svc, _ := newMissionTestService(t)
+	reviewed, err := svc.ImportMission(context.Background(), "flight-1", "reviewed-import", validMissionRequest(validWPL110))
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := validMissionRequest(validWPL110)
+	changed.Source = "QGC WPL 110\n0\t1\t0\t16\t0\t0\t0\t0\t-35.3632620\t149.1652370\t0\t1\n1\t0\t0\t22\t0\t0\t0\t0\t-35.3632620\t149.1652370\t20\t1\n2\t0\t0\t21\t0\t0\t0\t1\t-35.3632620\t149.1652370\t0\t1\n"
+	if _, err := svc.ImportMission(context.Background(), "flight-1", "replacement-import", changed); err != nil {
+		t.Fatal(err)
+	}
+	deployer := &fakeMissionDeployer{}
+	svc.WithMissionDeployer(deployer)
+	if _, err := svc.DeployCurrentMission(context.Background(), "flight-1", reviewed.Mission.ID, reviewed.Mission.MissionDigest, "reviewed-deploy"); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("stale reviewed mission error = %v", err)
+	}
+	if len(deployer.contexts) != 0 || len(deployer.commands) != 0 {
+		t.Fatalf("stale mission reached control plane: contexts=%d commands=%d", len(deployer.contexts), len(deployer.commands))
 	}
 }
 
 func TestDeployCurrentMissionRetainsTransportUnknown(t *testing.T) {
 	svc, _ := newMissionTestService(t)
-	if _, err := svc.ImportMission(context.Background(), "flight-1", "import-unknown", validMissionRequest(validWPL110)); err != nil {
+	mission, err := svc.ImportMission(context.Background(), "flight-1", "import-unknown", validMissionRequest(validWPL110))
+	if err != nil {
 		t.Fatal(err)
 	}
 	deployer := &fakeMissionDeployer{deployErr: context.DeadlineExceeded}
 	svc.WithMissionDeployer(deployer)
-	result, err := svc.DeployCurrentMission(context.Background(), "flight-1", "deploy-unknown")
+	result, err := svc.DeployCurrentMission(context.Background(), "flight-1", mission.Mission.ID, mission.Mission.MissionDigest, "deploy-unknown")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Deployment.Status != domain.MissionDeploymentOutcomeUnknown || result.Deployment.Message == "" || len(deployer.commands) != 1 {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestDeployCurrentMissionPersistsUnknownBeforeRelayCall(t *testing.T) {
+	svc, store := newMissionTestService(t)
+	mission, err := svc.ImportMission(context.Background(), "flight-1", "import-dispatch-marker", validMissionRequest(validWPL110))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployer := &fakeMissionDeployer{}
+	deployer.deployHook = func() {
+		persisted, getErr := store.GetMissionDeploymentByIdempotencyKey(context.Background(), "dispatch-marker")
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		if persisted.Status != domain.MissionDeploymentOutcomeUnknown || persisted.AttemptCount != 1 || persisted.Revision != 1 {
+			t.Fatalf("pre-dispatch marker = %#v", persisted)
+		}
+	}
+	svc.WithMissionDeployer(deployer)
+	result, err := svc.DeployCurrentMission(context.Background(), "flight-1", mission.Mission.ID, mission.Mission.MissionDigest, "dispatch-marker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Deployment.Status != domain.MissionDeploymentApplied || result.Deployment.AttemptCount != 1 || result.Deployment.Revision != 2 {
+		t.Fatalf("deployment = %#v", result.Deployment)
+	}
+}
+
+func TestMissionDeploymentAlreadyAppliedAcceptsReadbackOnlyZeroUploadCount(t *testing.T) {
+	deployment := domain.MissionDeployment{CommandID: "command-1", MissionDigest: "digest-1"}
+	binding := &agentv1.MissionBinding{MissionId: "mission-1", MissionVersion: 1, MissionDigest: "digest-1", DeploymentId: "deployment-1", OperatorId: "operator-1", AircraftId: "aircraft-1", FlightId: "flight-1", IntentId: "intent-1", IntentVersion: 1}
+	result := &agentv1.MissionDeploymentResult{
+		CommandId: "command-1", Binding: binding, Status: agentv1.MissionDeploymentResult_STATUS_ALREADY_APPLIED,
+		UploadedItemCount: 0, OnboardMissionDigest: "digest-1",
+	}
+	if err := applyMissionDeploymentResult(&deployment, result, binding, 3); err != nil {
+		t.Fatal(err)
+	}
+	if deployment.Status != domain.MissionDeploymentAlreadyApplied || deployment.UploadedItemCount != 0 {
+		t.Fatalf("deployment = %#v", deployment)
+	}
+	result.Status = agentv1.MissionDeploymentResult_STATUS_APPLIED
+	if err := applyMissionDeploymentResult(&deployment, result, binding, 3); err != nil {
+		t.Fatal(err)
+	}
+	if deployment.Status != domain.MissionDeploymentOnboardMissionMismatch {
+		t.Fatalf("fresh APPLIED with zero count status = %q", deployment.Status)
 	}
 }

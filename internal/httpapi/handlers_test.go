@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -199,6 +200,21 @@ func TestHandleBootstrapBatteryAndFlightLifecycle(t *testing.T) {
 
 	intent.Status = domain.IntentStatusActive
 	if err := store.UpdateOperationalIntent(ctx, intent, 0); err != nil {
+		t.Fatal(err)
+	}
+	mission, err := store.CreateMission(ctx, domain.Mission{
+		ID: "mission-1", OperatorID: "operator-1", FlightID: "flight-1", AircraftID: "aircraft-1",
+		IntentID: "intent-1", IntentVersion: 2, SourceFormat: domain.MissionSourceFormatQGCWPL110,
+		SourceSHA256: strings.Repeat("a", 64), MissionDigest: strings.Repeat("b", 64),
+		IdempotencyKey: "http-start-mission", IdempotencyRequest: strings.Repeat("c", 64), CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateMissionDeployment(ctx, domain.MissionDeployment{
+		ID: "deployment-1", FlightID: "flight-1", MissionID: mission.ID, MissionDigest: mission.MissionDigest,
+		IdempotencyKey: "http-start-deployment", IdempotencyRequest: strings.Repeat("d", 64), Status: domain.MissionDeploymentApplied,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	startedResponse := performJSONRequest(t, server.Handler(), http.MethodPost, "/api/v1/flights/flight-1/start", `{}`)
