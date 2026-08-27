@@ -1373,6 +1373,32 @@ func (s *Store) ListFlightRecords(_ context.Context, aircraftID string) ([]domai
 func (s *Store) CreateMission(_ context.Context, mission domain.Mission) (domain.Mission, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.createMissionLocked(mission)
+}
+
+// CreateMissionForPlannedFlight creates a mission while holding the same
+// lifecycle fence used by StartFlight.
+func (s *Store) CreateMissionForPlannedFlight(_ context.Context, mission domain.Mission) (domain.Mission, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if id, exists := s.missionByIdempotencyKey[mission.IdempotencyKey]; exists {
+		existing := s.missions[id]
+		if existing.IdempotencyRequest != mission.IdempotencyRequest {
+			return domain.Mission{}, durable.ErrIdempotencyConflict
+		}
+		return cloneMission(existing), nil
+	}
+	flight, exists := s.flightRecords[mission.FlightID]
+	if !exists {
+		return domain.Mission{}, durable.ErrNotFound
+	}
+	if flight.Status != domain.FlightStatusPlanned {
+		return domain.Mission{}, durable.ErrVersionConflict
+	}
+	return s.createMissionLocked(mission)
+}
+
+func (s *Store) createMissionLocked(mission domain.Mission) (domain.Mission, error) {
 	if id, exists := s.missionByIdempotencyKey[mission.IdempotencyKey]; exists {
 		existing := s.missions[id]
 		if existing.IdempotencyRequest != mission.IdempotencyRequest {
@@ -1413,6 +1439,17 @@ func (s *Store) GetMissionByIdempotencyKey(_ context.Context, key string) (domai
 		return domain.Mission{}, durable.ErrNotFound
 	}
 	return cloneMission(s.missions[id]), nil
+}
+
+// GetMission returns one immutable mission by identity.
+func (s *Store) GetMission(_ context.Context, missionID string) (domain.Mission, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	mission, exists := s.missions[missionID]
+	if !exists {
+		return domain.Mission{}, durable.ErrNotFound
+	}
+	return cloneMission(mission), nil
 }
 
 // GetCurrentMissionForFlight returns the newest immutable mission version imported for a flight.
@@ -1482,6 +1519,41 @@ func cloneMission(mission domain.Mission) domain.Mission {
 func (s *Store) CreateMissionDeployment(_ context.Context, deployment domain.MissionDeployment) (domain.MissionDeployment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.createMissionDeploymentLocked(deployment)
+}
+
+// CreateMissionDeploymentForPlannedFlight records a command under the flight lifecycle fence.
+func (s *Store) CreateMissionDeploymentForPlannedFlight(_ context.Context, deployment domain.MissionDeployment) (domain.MissionDeployment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if id, exists := s.deploymentByIdempotencyKey[deployment.IdempotencyKey]; exists {
+		existing := s.missionDeployments[id]
+		if existing.IdempotencyRequest != deployment.IdempotencyRequest {
+			return domain.MissionDeployment{}, durable.ErrIdempotencyConflict
+		}
+		return existing, nil
+	}
+	flight, exists := s.flightRecords[deployment.FlightID]
+	if !exists {
+		return domain.MissionDeployment{}, durable.ErrNotFound
+	}
+	if flight.Status != domain.FlightStatusPlanned {
+		return domain.MissionDeployment{}, durable.ErrVersionConflict
+	}
+	var currentMission *domain.Mission
+	for _, mission := range s.missions {
+		if mission.FlightID == deployment.FlightID && (currentMission == nil || mission.Version > currentMission.Version) {
+			candidate := mission
+			currentMission = &candidate
+		}
+	}
+	if currentMission == nil || currentMission.ID != deployment.MissionID || currentMission.MissionDigest != deployment.MissionDigest {
+		return domain.MissionDeployment{}, durable.ErrVersionConflict
+	}
+	return s.createMissionDeploymentLocked(deployment)
+}
+
+func (s *Store) createMissionDeploymentLocked(deployment domain.MissionDeployment) (domain.MissionDeployment, error) {
 	if id, exists := s.deploymentByIdempotencyKey[deployment.IdempotencyKey]; exists {
 		existing := s.missionDeployments[id]
 		if existing.IdempotencyRequest != deployment.IdempotencyRequest {
@@ -1496,6 +1568,54 @@ func (s *Store) CreateMissionDeployment(_ context.Context, deployment domain.Mis
 	s.missionDeployments[deployment.ID] = deployment
 	s.deploymentByIdempotencyKey[deployment.IdempotencyKey] = deployment.ID
 	return deployment, nil
+}
+
+// StartFlightWithCurrentMissionDeployment atomically requires the current
+// mission to have a verified terminal deployment before activating the flight.
+func (s *Store) StartFlightWithCurrentMissionDeployment(_ context.Context, flight domain.FlightRecord, expectedStatus domain.FlightStatus) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	currentFlight, exists := s.flightRecords[flight.ID]
+	if !exists {
+		return durable.ErrNotFound
+	}
+	if currentFlight.Status != expectedStatus {
+		return durable.ErrVersionConflict
+	}
+	intent, exists := s.latestOperationalIntent(currentFlight.IntentID)
+	if !exists {
+		return durable.ErrNotFound
+	}
+	if intent.Status != domain.IntentStatusActive || intent.Version != currentFlight.IntentVersion || intent.AircraftID != currentFlight.AircraftID {
+		return durable.ErrVersionConflict
+	}
+	var currentMission *domain.Mission
+	for _, mission := range s.missions {
+		if mission.FlightID == flight.ID && (currentMission == nil || mission.Version > currentMission.Version) {
+			candidate := mission
+			currentMission = &candidate
+		}
+	}
+	if currentMission == nil {
+		return durable.ErrVersionConflict
+	}
+	verified := false
+	for _, deployment := range s.missionDeployments {
+		if deployment.FlightID != flight.ID || deployment.MissionID != currentMission.ID || deployment.MissionDigest != currentMission.MissionDigest {
+			continue
+		}
+		if deployment.Status == domain.MissionDeploymentPending || deployment.Status == domain.MissionDeploymentOutcomeUnknown {
+			return durable.ErrVersionConflict
+		}
+		if deployment.Status == domain.MissionDeploymentApplied || deployment.Status == domain.MissionDeploymentAlreadyApplied {
+			verified = true
+		}
+	}
+	if !verified {
+		return durable.ErrVersionConflict
+	}
+	s.flightRecords[flight.ID] = flight
+	return nil
 }
 
 // GetMissionDeployment returns one durable mission deployment by identity.

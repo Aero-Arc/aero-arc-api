@@ -44,11 +44,13 @@ func (f *fakePool) Invalidate(id string) { f.invalidated = append(f.invalidated,
 func (f *fakePool) Close() error         { return nil }
 
 type fakeRelayClient struct {
-	setRequests    []*relayv1.SetOperationContextRequest
-	clearRequests  []*relayv1.ClearOperationContextRequest
-	deployRequests []*relayv1.DeployMissionRequest
-	setErrors      []error
-	block          bool
+	setRequests       []*relayv1.SetOperationContextRequest
+	clearRequests     []*relayv1.ClearOperationContextRequest
+	deployRequests    []*relayv1.DeployMissionRequest
+	setErrors         []error
+	activeContext     *agentv1.OperationContext
+	omitActiveContext bool
+	block             bool
 }
 
 func TestNewRequiresRelayTransportCredentials(t *testing.T) {
@@ -93,7 +95,31 @@ func (f *fakeRelayClient) SetOperationContext(ctx context.Context, r *relayv1.Se
 			return nil, err
 		}
 	}
-	return &relayv1.SetOperationContextResponse{Result: &agentv1.OperationContextCommandAck{CommandId: r.Command.GetCommandId(), Status: agentv1.OperationContextCommandAck_STATUS_APPLIED}}, nil
+	active := f.activeContext
+	if active == nil && !f.omitActiveContext {
+		active = r.Command.GetContext()
+	}
+	return &relayv1.SetOperationContextResponse{Result: &agentv1.OperationContextCommandAck{CommandId: r.Command.GetCommandId(), Status: agentv1.OperationContextCommandAck_STATUS_APPLIED, ActiveContext: active}}, nil
+}
+
+func TestEnsureOperationContextRejectsMissingOrMismatchedActiveContext(t *testing.T) {
+	command := &agentv1.SetOperationContextCommand{CommandId: "context-command", Context: &agentv1.OperationContext{
+		AircraftId: "aircraft-1", FlightId: "flight-1", IntentId: "intent-1", IntentVersion: 3,
+	}}
+	for _, test := range []struct {
+		name   string
+		client *fakeRelayClient
+	}{
+		{name: "missing", client: &fakeRelayClient{omitActiveContext: true}},
+		{name: "mismatch", client: &fakeRelayClient{activeContext: &agentv1.OperationContext{AircraftId: "aircraft-2", FlightId: "flight-1", IntentId: "intent-1", IntentVersion: 3}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service := newWithPool(&fakeRegistry{relayIDs: []string{"relay-1"}}, &fakePool{clients: map[string]*fakeRelayClient{"relay-1": test.client}}, time.Second, time.Minute)
+			if err := service.EnsureOperationContext(context.Background(), "agent-1", command); err == nil {
+				t.Fatal("EnsureOperationContext returned nil error")
+			}
+		})
+	}
 }
 func (f *fakeRelayClient) ClearOperationContext(_ context.Context, r *relayv1.ClearOperationContextRequest, _ ...grpc.CallOption) (*relayv1.ClearOperationContextResponse, error) {
 	f.clearRequests = append(f.clearRequests, r)

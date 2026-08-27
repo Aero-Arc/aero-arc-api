@@ -194,6 +194,14 @@ func (s *Server) handleGetFlightReplay(c *mach.Context) {
 }
 
 func (s *Server) handleImportMission(c *mach.Context) {
+	if !s.missionDeploymentControlEnabled() {
+		writeError(c, http.StatusServiceUnavailable, "secure mission control is not configured")
+		return
+	}
+	if !s.authorizeMissionDeployment(c) {
+		writeError(c, http.StatusUnauthorized, "valid mission control authorization is required")
+		return
+	}
 	const maxMissionImportBody = 2 << 20
 	c.Request.Body = http.MaxBytesReader(c.Response, c.Request.Body, maxMissionImportBody)
 	var req service.ImportMissionRequest
@@ -252,7 +260,12 @@ func (s *Server) handleDeployCurrentMission(c *mach.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Context(), s.missionDeploymentTimeout)
 	defer cancel()
-	result, err := s.fleet.DeployCurrentMission(ctx, c.Param("flight_id"), c.Request.Header.Get("Idempotency-Key"))
+	expectedDigest, err := parseMissionIfMatch(c.Request.Header.Get("If-Match"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, err := s.fleet.DeployCurrentMission(ctx, c.Param("flight_id"), c.Param("mission_id"), expectedDigest, c.Request.Header.Get("Idempotency-Key"))
 	if err != nil {
 		writeServiceError(c, err)
 		return
@@ -265,6 +278,20 @@ func (s *Server) handleDeployCurrentMission(c *mach.Context) {
 		c.Response.Header().Set("Idempotent-Replayed", "true")
 	}
 	writeJSON(c, status, result)
+}
+
+func parseMissionIfMatch(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if len(value) != 66 || value[0] != '"' || value[len(value)-1] != '"' {
+		return "", errors.New(`If-Match must contain one quoted lowercase SHA-256 mission digest`)
+	}
+	digest := value[1 : len(value)-1]
+	for _, character := range digest {
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+			return "", errors.New(`If-Match must contain one quoted lowercase SHA-256 mission digest`)
+		}
+	}
+	return digest, nil
 }
 
 func (s *Server) handleGetMissionDeployment(c *mach.Context) {

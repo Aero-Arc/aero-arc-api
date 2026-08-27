@@ -78,6 +78,58 @@ func (s *Store) CreateMission(ctx context.Context, mission domain.Mission) (doma
 		return domain.Mission{}, fmt.Errorf("begin mission create: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	mission, err = createMission(ctx, tx, mission)
+	if err != nil {
+		return domain.Mission{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return domain.Mission{}, fmt.Errorf("commit mission create: %w", err)
+	}
+	return mission, nil
+}
+
+// CreateMissionForPlannedFlight creates a mission while holding the same
+// PostgreSQL row lock used by flight activation.
+func (s *Store) CreateMissionForPlannedFlight(ctx context.Context, mission domain.Mission) (domain.Mission, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Mission{}, fmt.Errorf("begin planned-flight mission create: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 1))`, mission.IdempotencyKey); err != nil {
+		return domain.Mission{}, fmt.Errorf("lock mission idempotency key: %w", err)
+	}
+	existing, err := getMissionByIdempotencyKey(ctx, tx, mission.IdempotencyKey)
+	if err == nil {
+		if existing.IdempotencyRequest != mission.IdempotencyRequest {
+			return domain.Mission{}, durable.ErrIdempotencyConflict
+		}
+		return existing, nil
+	}
+	if !errors.Is(err, durable.ErrNotFound) {
+		return domain.Mission{}, err
+	}
+	var status domain.FlightStatus
+	if err := tx.QueryRow(ctx, `SELECT status FROM flight_records WHERE id=$1 FOR UPDATE`, mission.FlightID).Scan(&status); errors.Is(err, pgx.ErrNoRows) {
+		return domain.Mission{}, durable.ErrNotFound
+	} else if err != nil {
+		return domain.Mission{}, fmt.Errorf("lock mission flight: %w", err)
+	}
+	if status != domain.FlightStatusPlanned {
+		return domain.Mission{}, durable.ErrVersionConflict
+	}
+	mission, err = createMission(ctx, tx, mission)
+	if err != nil {
+		return domain.Mission{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return domain.Mission{}, fmt.Errorf("commit planned-flight mission create: %w", err)
+	}
+	return mission, nil
+}
+
+func createMission(ctx context.Context, tx pgx.Tx, mission domain.Mission) (domain.Mission, error) {
+	var err error
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 1))`, mission.IdempotencyKey); err != nil {
 		return domain.Mission{}, fmt.Errorf("lock mission idempotency key: %w", err)
 	}
@@ -128,9 +180,6 @@ func (s *Store) CreateMission(ctx context.Context, mission domain.Mission) (doma
 			return domain.Mission{}, fmt.Errorf("insert mission item %d: %w", item.Sequence, err)
 		}
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.Mission{}, fmt.Errorf("commit mission create: %w", err)
-	}
 	return mission, nil
 }
 
@@ -145,6 +194,11 @@ func (s *Store) CreateMission(ctx context.Context, mission domain.Mission) (doma
 //   - error: is durable.ErrNotFound when the key has not been used.
 func (s *Store) GetMissionByIdempotencyKey(ctx context.Context, key string) (domain.Mission, error) {
 	return getMissionByIdempotencyKey(ctx, s.pool, key)
+}
+
+// GetMission returns one immutable mission by identity.
+func (s *Store) GetMission(ctx context.Context, missionID string) (domain.Mission, error) {
+	return getMission(ctx, s.pool, `WHERE id = $1`, missionID)
 }
 
 // GetCurrentMissionForFlight returns the highest immutable mission version for one flight.

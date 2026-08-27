@@ -103,7 +103,7 @@ func (s *Service) SetOperationContext(ctx context.Context, req SetRequest) (stri
 		if err != nil {
 			return err
 		}
-		return validateAck(response.GetResult(), commandID)
+		return validateSetAck(response.GetResult(), commandID, command.GetContext())
 	})
 	return commandID, err
 }
@@ -124,7 +124,30 @@ func (s *Service) EnsureOperationContext(ctx context.Context, agentID string, co
 		if err != nil {
 			return err
 		}
-		return validateAck(response.GetResult(), command.GetCommandId())
+		return validateSetAck(response.GetResult(), command.GetCommandId(), command.GetContext())
+	})
+}
+
+// ClearOperationContextForReconciliation conditionally clears the old flight
+// context and proves that exact binding is no longer active before recovery.
+func (s *Service) ClearOperationContextForReconciliation(ctx context.Context, agentID string, command *agentv1.ClearOperationContextCommand, old *agentv1.OperationContext) error {
+	if strings.TrimSpace(agentID) == "" || command == nil || strings.TrimSpace(command.GetCommandId()) == "" ||
+		strings.TrimSpace(command.GetFlightId()) == "" || command.GetAuthoritative() || old == nil {
+		return fmt.Errorf("agent_id, conditional clear command, and old operation context are required")
+	}
+	return s.call(ctx, agentID, func(callCtx context.Context, client relayv1.RelayControlClient) error {
+		response, err := client.ClearOperationContext(callCtx, &relayv1.ClearOperationContextRequest{AgentId: agentID, Command: command})
+		if err != nil {
+			return err
+		}
+		ack := response.GetResult()
+		if err := validateAck(ack, command.GetCommandId()); err != nil {
+			return err
+		}
+		if operationContextsEqual(ack.GetActiveContext(), old) {
+			return fmt.Errorf("agent acknowledgement still reports the old operation context active")
+		}
+		return nil
 	})
 }
 
@@ -258,6 +281,23 @@ func validateAck(ack *agentv1.OperationContextCommandAck, commandID string) erro
 	default:
 		return fmt.Errorf("agent rejected operation context: %s: %s", ack.GetStatus(), ack.GetError())
 	}
+}
+
+func validateSetAck(ack *agentv1.OperationContextCommandAck, commandID string, expected *agentv1.OperationContext) error {
+	if err := validateAck(ack, commandID); err != nil {
+		return err
+	}
+	active := ack.GetActiveContext()
+	if !operationContextsEqual(active, expected) {
+		return fmt.Errorf("agent acknowledgement active_context does not exactly match the requested aircraft/flight/intent/version")
+	}
+	return nil
+}
+
+func operationContextsEqual(left, right *agentv1.OperationContext) bool {
+	return left != nil && right != nil && left.GetAircraftId() == right.GetAircraftId() &&
+		left.GetFlightId() == right.GetFlightId() && left.GetIntentId() == right.GetIntentId() &&
+		left.GetIntentVersion() == right.GetIntentVersion()
 }
 
 func ensureCommandID(id string) (string, error) {

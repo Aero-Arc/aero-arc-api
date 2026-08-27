@@ -371,6 +371,22 @@ func TestFleetServiceBootstrapsBatteryAndFlightLifecycle(t *testing.T) {
 	intent.Status = domain.IntentStatusActive
 	intent.UpdatedAt = now
 	must(t, store.UpdateOperationalIntent(ctx, intent, 0))
+	mission, err := store.CreateMission(ctx, domain.Mission{
+		ID: "mission-1", OperatorID: "operator-1", FlightID: "flight-1", AircraftID: "aircraft-1",
+		IntentID: "intent-1", IntentVersion: 3, SourceFormat: domain.MissionSourceFormatQGCWPL110,
+		SourceSHA256: strings.Repeat("a", 64), MissionDigest: strings.Repeat("b", 64),
+		IdempotencyKey: "start-test-mission", IdempotencyRequest: strings.Repeat("c", 64), CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.CreateMissionDeployment(ctx, domain.MissionDeployment{
+		ID: "deployment-1", FlightID: "flight-1", MissionID: mission.ID, MissionDigest: mission.MissionDigest,
+		IdempotencyKey: "start-test-deployment", IdempotencyRequest: strings.Repeat("d", 64), Status: domain.MissionDeploymentApplied,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	started, err := svc.StartFlight(ctx, "flight-1")
 	if err != nil {
 		t.Fatalf("StartFlight returned error: %v", err)

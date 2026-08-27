@@ -18,7 +18,7 @@ func TestMissionPersistsAcrossStoreRestartWithPostGISCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := writer.pool.Exec(ctx, `TRUNCATE mission_deployments, mission_items, missions, received_peer_notifications, peer_notifications, operational_intent_publications, conflict_findings, operational_volumes, operational_intents`); err != nil {
+	if _, err := writer.pool.Exec(ctx, `TRUNCATE mission_deployments, mission_items, missions, flight_records, aircraft, received_peer_notifications, peer_notifications, operational_intent_publications, conflict_findings, operational_volumes, operational_intents`); err != nil {
 		writer.Close()
 		t.Fatal(err)
 	}
@@ -28,6 +28,14 @@ func TestMissionPersistsAcrossStoreRestartWithPostGISCoverage(t *testing.T) {
 		PlannedStartAt: now, PlannedEndAt: now.Add(time.Hour), UpdatedAt: now,
 	}
 	if err := writer.CreateOperationalIntent(ctx, intent); err != nil {
+		writer.Close()
+		t.Fatal(err)
+	}
+	if err := writer.CreateAircraft(ctx, domain.Aircraft{ID: intent.AircraftID, OperatorID: "operator-1", AgentID: "agent-1", CreatedAt: now, UpdatedAt: now}); err != nil {
+		writer.Close()
+		t.Fatal(err)
+	}
+	if err := writer.CreateFlightRecord(ctx, domain.FlightRecord{ID: "flight-1", OperatorID: "operator-1", AircraftID: intent.AircraftID, IntentID: intent.ID, IntentVersion: intent.Version, Status: domain.FlightStatusPlanned}); err != nil {
 		writer.Close()
 		t.Fatal(err)
 	}

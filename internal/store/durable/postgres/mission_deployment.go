@@ -20,6 +20,68 @@ func (s *Store) CreateMissionDeployment(ctx context.Context, deployment domain.M
 		return domain.MissionDeployment{}, fmt.Errorf("begin mission deployment create: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	deployment, err = createMissionDeployment(ctx, tx, deployment)
+	if err != nil {
+		return domain.MissionDeployment{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return domain.MissionDeployment{}, fmt.Errorf("commit mission deployment create: %w", err)
+	}
+	return deployment, nil
+}
+
+// CreateMissionDeploymentForPlannedFlight records a deployment under the
+// flight row lock shared with mission import and StartFlight.
+func (s *Store) CreateMissionDeploymentForPlannedFlight(ctx context.Context, deployment domain.MissionDeployment) (domain.MissionDeployment, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.MissionDeployment{}, fmt.Errorf("begin planned-flight mission deployment: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 3))`, deployment.IdempotencyKey); err != nil {
+		return domain.MissionDeployment{}, fmt.Errorf("lock mission deployment idempotency key: %w", err)
+	}
+	existing, err := getMissionDeploymentByIdempotencyKey(ctx, tx, deployment.IdempotencyKey)
+	if err == nil {
+		if existing.IdempotencyRequest != deployment.IdempotencyRequest {
+			return domain.MissionDeployment{}, durable.ErrIdempotencyConflict
+		}
+		return existing, nil
+	}
+	if !errors.Is(err, durable.ErrNotFound) {
+		return domain.MissionDeployment{}, err
+	}
+	var flightStatus domain.FlightStatus
+	if err := tx.QueryRow(ctx, `SELECT status FROM flight_records WHERE id=$1 FOR UPDATE`, deployment.FlightID).Scan(&flightStatus); errors.Is(err, pgx.ErrNoRows) {
+		return domain.MissionDeployment{}, durable.ErrNotFound
+	} else if err != nil {
+		return domain.MissionDeployment{}, fmt.Errorf("lock deployment flight: %w", err)
+	}
+	if flightStatus != domain.FlightStatusPlanned {
+		return domain.MissionDeployment{}, durable.ErrVersionConflict
+	}
+	var currentMissionID, currentMissionDigest string
+	if err := tx.QueryRow(ctx, `SELECT id,mission_digest FROM missions WHERE flight_id=$1 ORDER BY version DESC LIMIT 1`, deployment.FlightID).
+		Scan(&currentMissionID, &currentMissionDigest); errors.Is(err, pgx.ErrNoRows) {
+		return domain.MissionDeployment{}, durable.ErrVersionConflict
+	} else if err != nil {
+		return domain.MissionDeployment{}, fmt.Errorf("get current mission for deployment: %w", err)
+	}
+	if currentMissionID != deployment.MissionID || currentMissionDigest != deployment.MissionDigest {
+		return domain.MissionDeployment{}, durable.ErrVersionConflict
+	}
+	deployment, err = createMissionDeployment(ctx, tx, deployment)
+	if err != nil {
+		return domain.MissionDeployment{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return domain.MissionDeployment{}, fmt.Errorf("commit planned-flight mission deployment: %w", err)
+	}
+	return deployment, nil
+}
+
+func createMissionDeployment(ctx context.Context, tx pgx.Tx, deployment domain.MissionDeployment) (domain.MissionDeployment, error) {
+	var err error
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 3))`, deployment.IdempotencyKey); err != nil {
 		return domain.MissionDeployment{}, fmt.Errorf("lock mission deployment idempotency key: %w", err)
 	}
@@ -51,9 +113,6 @@ func (s *Store) CreateMissionDeployment(ctx context.Context, deployment domain.M
 			return domain.MissionDeployment{}, durable.ErrAlreadyExists
 		}
 		return domain.MissionDeployment{}, fmt.Errorf("insert mission deployment: %w", err)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.MissionDeployment{}, fmt.Errorf("commit mission deployment create: %w", err)
 	}
 	return deployment, nil
 }
@@ -123,15 +182,17 @@ func getMissionDeployment(ctx context.Context, query deploymentQuerier, clause s
 }
 
 type missionDeploymentData struct {
-	Deployment                domain.MissionDeployment `json:"deployment"`
-	AgentID                   string                   `json:"agent_id"`
-	OperationContextCommandID string                   `json:"operation_context_command_id"`
+	Deployment                   domain.MissionDeployment `json:"deployment"`
+	AgentID                      string                   `json:"agent_id"`
+	OperationContextCommandID    string                   `json:"operation_context_command_id"`
+	ReconciliationClearCommandID string                   `json:"reconciliation_clear_command_id"`
 }
 
 func encodeMissionDeployment(deployment domain.MissionDeployment) ([]byte, error) {
 	return json.Marshal(missionDeploymentData{
 		Deployment: deployment, AgentID: deployment.AgentID,
-		OperationContextCommandID: deployment.OperationContextCommandID,
+		OperationContextCommandID:    deployment.OperationContextCommandID,
+		ReconciliationClearCommandID: deployment.ReconciliationClearCommandID,
 	})
 }
 
@@ -143,5 +204,6 @@ func decodeMissionDeployment(raw []byte, deployment *domain.MissionDeployment) e
 	*deployment = data.Deployment
 	deployment.AgentID = data.AgentID
 	deployment.OperationContextCommandID = data.OperationContextCommandID
+	deployment.ReconciliationClearCommandID = data.ReconciliationClearCommandID
 	return nil
 }
