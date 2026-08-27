@@ -252,7 +252,7 @@ func (s *Server) handleDeployCurrentMission(c *mach.Context) {
 		writeError(c, http.StatusUnauthorized, "valid mission deployment authorization is required")
 		return
 	}
-	defer c.Request.Body.Close()
+	defer func() { _ = c.Request.Body.Close() }()
 	var probe [1]byte
 	if count, err := c.Request.Body.Read(probe[:]); count != 0 || (err != nil && !errors.Is(err, io.EOF)) {
 		writeError(c, http.StatusBadRequest, "mission deployment request must have an empty body")
@@ -287,7 +287,7 @@ func parseMissionIfMatch(value string) (string, error) {
 	}
 	digest := value[1 : len(value)-1]
 	for _, character := range digest {
-		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
 			return "", errors.New(`If-Match must contain one quoted lowercase SHA-256 mission digest`)
 		}
 	}

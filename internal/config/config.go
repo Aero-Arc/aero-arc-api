@@ -297,7 +297,7 @@ func (cfg *Config) Validate() error {
 		return fmt.Errorf("AERO_API_MISSION_DEPLOY_TOKEN requires complete Relay control mTLS configuration")
 	}
 	if configuredRelayTLS > 0 && cfg.RegistryMode != "grpc" {
-		return fmt.Errorf("Relay mission control requires registry mode grpc")
+		return fmt.Errorf("relay mission control requires registry mode grpc")
 	}
 	if cfg.TelemetryFreshness <= 0 {
 		return fmt.Errorf("AERO_API_TELEMETRY_FRESHNESS must be > 0")
