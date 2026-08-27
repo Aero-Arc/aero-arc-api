@@ -51,6 +51,7 @@ type fakeRelayClient struct {
 	activeContext     *agentv1.OperationContext
 	omitActiveContext bool
 	clearResult       *agentv1.OperationContextCommandAck
+	clearErr          error
 	block             bool
 }
 
@@ -124,6 +125,9 @@ func TestEnsureOperationContextRejectsMissingOrMismatchedActiveContext(t *testin
 }
 func (f *fakeRelayClient) ClearOperationContext(_ context.Context, r *relayv1.ClearOperationContextRequest, _ ...grpc.CallOption) (*relayv1.ClearOperationContextResponse, error) {
 	f.clearRequests = append(f.clearRequests, r)
+	if f.clearErr != nil {
+		return nil, f.clearErr
+	}
 	if f.clearResult != nil {
 		return &relayv1.ClearOperationContextResponse{Result: f.clearResult}, nil
 	}
@@ -158,6 +162,11 @@ func TestClearOperationContextForReconciliationRequiresCorrelatedSafeState(t *te
 	service := newWithPool(&fakeRegistry{}, &fakePool{}, time.Second, time.Minute)
 	if err := service.ClearOperationContextForReconciliation(context.Background(), "", command, old); err == nil {
 		t.Fatal("invalid clear request returned nil error")
+	}
+	transportFailure := &fakeRelayClient{clearErr: errors.New("relay unavailable")}
+	service = newWithPool(&fakeRegistry{relayIDs: []string{"relay-1"}}, &fakePool{clients: map[string]*fakeRelayClient{"relay-1": transportFailure}}, time.Second, time.Minute)
+	if err := service.ClearOperationContextForReconciliation(context.Background(), "agent-1", command, old); err == nil {
+		t.Fatal("clear transport failure returned nil error")
 	}
 }
 
