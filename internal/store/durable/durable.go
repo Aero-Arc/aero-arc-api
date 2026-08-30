@@ -130,6 +130,7 @@ type Store interface {
 	CreateMissionDeploymentForPlannedFlight(ctx context.Context, deployment domain.MissionDeployment) (domain.MissionDeployment, error)
 	GetMissionDeployment(ctx context.Context, deploymentID string) (domain.MissionDeployment, error)
 	GetMissionDeploymentByIdempotencyKey(ctx context.Context, key string) (domain.MissionDeployment, error)
+	GetPreviousMissionDeploymentForAircraft(ctx context.Context, aircraftID string, deploymentID string) (domain.MissionDeployment, error)
 	GetCurrentMissionDeploymentForFlight(ctx context.Context, flightID string) (domain.MissionDeployment, error)
 	UpdateMissionDeployment(ctx context.Context, deployment domain.MissionDeployment, expectedRevision int64) error
 	StartFlightWithCurrentMissionDeployment(ctx context.Context, flight domain.FlightRecord, expectedStatus domain.FlightStatus) error
