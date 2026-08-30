@@ -70,6 +70,14 @@ version. A missing or rejected Agent acknowledgement prevents mission dispatch.
 Both the context-command ID and deploy-command ID remain stable across API,
 Registry-placement refresh, Relay, and Agent retries.
 
+When deployment switches an aircraft between planned flights, the API first
+sends a stable conditional clear for the immediately preceding durably admitted
+flight context. The Agent clears only when that old `flight_id` is still active,
+so a delayed clear cannot remove a newer context. A missing or ambiguous clear
+acknowledgement leaves the new deployment retryable and fenced; no mission is
+dispatched until retry proves the old context is no longer active and the exact
+new context is acknowledged.
+
 The synchronous response and durable status use `pending`, `applied`,
 `already_applied`, `rejected`, `temporary_error`, `outcome_unknown`,
 `binding_mismatch`, and `onboard_mission_mismatch`. Transport deadlines and
@@ -78,11 +86,13 @@ the same command ID, binding, plan, issued time, and expiry. Exact terminal
 retries return the original record with `Idempotent-Replayed: true`; reusing an
 idempotency key after the current mission changes returns `409`.
 
-`expires_at` fences the Agent's first aircraft effect. It does not prevent
-readback recovery for a command the Agent had already durably marked
-`effect_started` or `outcome_unknown`. The API may resend that exact immutable
-command through `reconcile_until`; the Agent rejects a post-expiry first effect
-but can finish readback reconciliation for an existing uncertain WAL record.
+`expires_at` fences the Agent's first aircraft effect. The API does not retry a
+`pending` or `temporary_error` command after expiry because no mission dispatch
+was durably started. Expiry does not prevent readback recovery for a command the
+API marked `outcome_unknown` after durably recording that dispatch began. The
+API may resend that exact immutable command through `reconcile_until`; the Agent
+rejects a post-expiry first effect but can finish readback reconciliation for an
+existing uncertain WAL record.
 At `reconcile_until` the API stops redispatching and retains
 `outcome_unknown` for explicit operational resolution. That unresolved record
 continues to fence replacement missions, intent/volume mutations, another

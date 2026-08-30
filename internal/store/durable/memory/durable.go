@@ -1781,6 +1781,33 @@ func (s *Store) GetMissionDeploymentByIdempotencyKey(_ context.Context, key stri
 	return s.missionDeployments[id], nil
 }
 
+// GetPreviousMissionDeploymentForAircraft returns the immediately preceding
+// durable aircraft admission. It is used to conditionally clear an old flight
+// context before dispatch switches the aircraft to another planned flight.
+func (s *Store) GetPreviousMissionDeploymentForAircraft(_ context.Context, aircraftID, deploymentID string) (domain.MissionDeployment, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	current, exists := s.missionDeployments[deploymentID]
+	if !exists || current.AircraftID != aircraftID {
+		return domain.MissionDeployment{}, durable.ErrNotFound
+	}
+	currentOrder := s.deploymentCreationOrder[deploymentID]
+	var previous *domain.MissionDeployment
+	var previousOrder uint64
+	for id, deployment := range s.missionDeployments {
+		order := s.deploymentCreationOrder[id]
+		if deployment.AircraftID != aircraftID || order >= currentOrder || (previous != nil && order <= previousOrder) {
+			continue
+		}
+		candidate := deployment
+		previous, previousOrder = &candidate, order
+	}
+	if previous == nil {
+		return domain.MissionDeployment{}, durable.ErrNotFound
+	}
+	return *previous, nil
+}
+
 // GetCurrentMissionDeploymentForFlight returns the authoritative deployment
 // for the flight's current mission, preferring an unresolved retryable command
 // over newer terminal history.

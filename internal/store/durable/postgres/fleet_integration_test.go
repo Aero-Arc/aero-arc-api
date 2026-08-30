@@ -518,14 +518,20 @@ func TestPostgresAircraftMissionLifecycleUsesLatestAuthoritativeDeployment(t *te
 		flight, mission := setup(t, "cross-latest")
 		firstDeployment := postgresLifecycleDeployment(mission, "cross-latest-first-applied", "cross-latest-first-key", domain.MissionDeploymentApplied)
 		firstDeployment.CreatedAt = time.Now().UTC()
-		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, firstDeployment); err != nil {
+		firstStored, err := store.CreateMissionDeploymentForPlannedFlight(ctx, firstDeployment)
+		if err != nil {
 			t.Fatal(err)
 		}
 		_, secondMission := addFlight(t, flight, "cross-latest")
 		secondDeployment := postgresLifecycleDeployment(secondMission, "cross-latest-second-applied", "cross-latest-second-key", domain.MissionDeploymentApplied)
 		secondDeployment.CreatedAt = firstDeployment.CreatedAt.Add(-time.Hour)
-		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, secondDeployment); err != nil {
+		secondStored, err := store.CreateMissionDeploymentForPlannedFlight(ctx, secondDeployment)
+		if err != nil {
 			t.Fatal(err)
+		}
+		previous, err := store.GetPreviousMissionDeploymentForAircraft(ctx, flight.AircraftID, secondStored.ID)
+		if err != nil || previous.ID != firstStored.ID {
+			t.Fatalf("previous deployment = %#v err=%v, want %s", previous, err, firstStored.ID)
 		}
 		active := flight
 		active.Status = domain.FlightStatusActive

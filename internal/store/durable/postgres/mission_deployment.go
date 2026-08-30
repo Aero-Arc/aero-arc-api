@@ -234,6 +234,21 @@ func (s *Store) GetMissionDeploymentByIdempotencyKey(ctx context.Context, key st
 	return getMissionDeploymentByIdempotencyKey(ctx, s.pool, key)
 }
 
+// GetPreviousMissionDeploymentForAircraft returns the immediately preceding
+// database-ordered deployment admission for the same aircraft.
+func (s *Store) GetPreviousMissionDeploymentForAircraft(ctx context.Context, aircraftID, deploymentID string) (domain.MissionDeployment, error) {
+	return getMissionDeployment(ctx, s.pool, `
+		WHERE flight_id IN (SELECT id FROM flight_records WHERE aircraft_id=$1)
+		  AND creation_order < (
+			SELECT current.creation_order
+			FROM mission_deployments AS current
+			JOIN flight_records AS current_flight ON current_flight.id=current.flight_id
+			WHERE current.id=$2 AND current_flight.aircraft_id=$1
+		  )
+		ORDER BY creation_order DESC
+		LIMIT 1`, aircraftID, deploymentID)
+}
+
 // GetCurrentMissionDeploymentForFlight returns the authoritative deployment
 // for the flight's current mission, preferring an unresolved retryable command
 // over newer terminal history.

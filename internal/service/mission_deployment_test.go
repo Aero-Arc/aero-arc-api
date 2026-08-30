@@ -14,26 +14,36 @@ import (
 
 type fakeMissionDeployer struct {
 	contextErr error
+	clearErr   error
 	deployErr  error
 	deployHook func()
 	contexts   []*agentv1.SetOperationContextCommand
+	clears     []*agentv1.ClearOperationContextCommand
+	clearOld   []*agentv1.OperationContext
 	commands   []*agentv1.DeployMissionCommand
 	agentIDs   []string
+	events     []string
 }
 
 func (f *fakeMissionDeployer) EnsureOperationContext(_ context.Context, agentID string, command *agentv1.SetOperationContextCommand) error {
 	f.agentIDs = append(f.agentIDs, agentID)
 	f.contexts = append(f.contexts, command)
+	f.events = append(f.events, "set:"+command.GetContext().GetFlightId())
 	return f.contextErr
 }
 
-func (f *fakeMissionDeployer) ClearOperationContextForReconciliation(_ context.Context, _ string, _ *agentv1.ClearOperationContextCommand, _ *agentv1.OperationContext) error {
-	return nil
+func (f *fakeMissionDeployer) ClearOperationContextForReconciliation(_ context.Context, agentID string, command *agentv1.ClearOperationContextCommand, old *agentv1.OperationContext) error {
+	f.agentIDs = append(f.agentIDs, agentID)
+	f.clears = append(f.clears, command)
+	f.clearOld = append(f.clearOld, old)
+	f.events = append(f.events, "clear:"+command.GetFlightId())
+	return f.clearErr
 }
 
 func (f *fakeMissionDeployer) DeployMission(_ context.Context, agentID string, command *agentv1.DeployMissionCommand) (*agentv1.MissionDeploymentResult, error) {
 	f.agentIDs = append(f.agentIDs, agentID)
 	f.commands = append(f.commands, command)
+	f.events = append(f.events, "deploy:"+command.GetBinding().GetFlightId())
 	if f.deployHook != nil {
 		f.deployHook()
 	}
@@ -118,6 +128,85 @@ func TestDeployCurrentMissionDoesNotDispatchWithoutContextAck(t *testing.T) {
 	if !retry.Replayed || retry.Deployment.Status != domain.MissionDeploymentApplied || len(deployer.commands) != 1 ||
 		deployer.contexts[1].GetCommandId() != contextCommandID || deployer.commands[0].GetCommandId() != first.Deployment.CommandID {
 		t.Fatalf("retry = %#v contexts=%#v commands=%#v", retry, deployer.contexts, deployer.commands)
+	}
+}
+
+func TestDeployCurrentMissionDoesNotStartContextOrMissionEffectAfterExpiry(t *testing.T) {
+	svc, _ := newMissionTestService(t)
+	mission, err := svc.ImportMission(context.Background(), "flight-1", "import-expired-context", validMissionRequest(validWPL110))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployer := &fakeMissionDeployer{contextErr: errors.New("agent offline")}
+	svc.WithMissionDeployer(deployer)
+	first, err := svc.DeployCurrentMission(context.Background(), "flight-1", mission.Mission.ID, mission.Mission.MissionDigest, "deploy-expired-context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Deployment.Status != domain.MissionDeploymentTemporaryError || len(deployer.contexts) != 1 || len(deployer.commands) != 0 {
+		t.Fatalf("first = %#v calls=%#v", first.Deployment, deployer.events)
+	}
+	svc.now = func() time.Time { return first.Deployment.ExpiresAt }
+	deployer.contextErr = nil
+	retry, err := svc.ReconcileMissionDeployment(context.Background(), "flight-1", first.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.Deployment.Status != domain.MissionDeploymentOutcomeUnknown || len(deployer.contexts) != 1 || len(deployer.commands) != 0 ||
+		retry.Deployment.Message != "deployment command expired before its first dispatch; no effect was authorized" {
+		t.Fatalf("expired retry = %#v calls=%#v", retry.Deployment, deployer.events)
+	}
+}
+
+func TestDeployCurrentMissionConditionallyClearsPreviousFlightContext(t *testing.T) {
+	svc, store := newMissionTestService(t)
+	firstMission, err := svc.ImportMission(context.Background(), "flight-1", "first-context-import", validMissionRequest(validWPL110))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployer := &fakeMissionDeployer{}
+	svc.WithMissionDeployer(deployer)
+	if _, err := svc.DeployCurrentMission(context.Background(), "flight-1", firstMission.Mission.ID, firstMission.Mission.MissionDigest, "first-context-deploy"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateFlightRecord(context.Background(), domain.FlightRecord{
+		ID: "flight-2", OperatorID: "operator-1", AircraftID: "aircraft-1", IntentID: "intent-1",
+		IntentVersion: 2, Status: domain.FlightStatusPlanned,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	secondMission, err := svc.ImportMission(context.Background(), "flight-2", "second-context-import", validMissionRequest(validWPL110))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deployer.clearErr = errors.New("clear acknowledgement lost")
+	firstAttempt, err := svc.DeployCurrentMission(context.Background(), "flight-2", secondMission.Mission.ID, secondMission.Mission.MissionDigest, "second-context-deploy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstAttempt.Deployment.Status != domain.MissionDeploymentTemporaryError || len(deployer.clears) != 1 || len(deployer.contexts) != 1 || len(deployer.commands) != 1 {
+		t.Fatalf("first replacement attempt = %#v calls=%#v", firstAttempt.Deployment, deployer.events)
+	}
+	clear := deployer.clears[0]
+	old := deployer.clearOld[0]
+	if clear.GetCommandId() == "" || clear.GetFlightId() != "flight-1" || clear.GetAuthoritative() ||
+		old.GetAircraftId() != "aircraft-1" || old.GetFlightId() != "flight-1" || old.GetIntentId() != "intent-1" || old.GetIntentVersion() != 2 {
+		t.Fatalf("conditional clear = %#v old=%#v", clear, old)
+	}
+
+	deployer.clearErr = nil
+	retry, err := svc.DeployCurrentMission(context.Background(), "flight-2", secondMission.Mission.ID, secondMission.Mission.MissionDigest, "second-context-deploy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retry.Replayed || retry.Deployment.Status != domain.MissionDeploymentApplied || len(deployer.clears) != 2 ||
+		deployer.clears[1].GetCommandId() != clear.GetCommandId() || len(deployer.contexts) != 2 || len(deployer.commands) != 2 {
+		t.Fatalf("replacement retry = %#v calls=%#v", retry, deployer.events)
+	}
+	wantEvents := []string{"set:flight-1", "deploy:flight-1", "clear:flight-1", "clear:flight-1", "set:flight-2", "deploy:flight-2"}
+	if strings.Join(deployer.events, ",") != strings.Join(wantEvents, ",") {
+		t.Fatalf("replacement event order = %#v, want %#v", deployer.events, wantEvents)
 	}
 }
 
