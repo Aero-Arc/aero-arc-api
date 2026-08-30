@@ -13,22 +13,27 @@ import (
 )
 
 type fakeMissionDeployer struct {
-	contextErr error
-	clearErr   error
-	deployErr  error
-	deployHook func()
-	contexts   []*agentv1.SetOperationContextCommand
-	clears     []*agentv1.ClearOperationContextCommand
-	clearOld   []*agentv1.OperationContext
-	commands   []*agentv1.DeployMissionCommand
-	agentIDs   []string
-	events     []string
+	contextErr  error
+	clearErr    error
+	deployErr   error
+	contextHook func()
+	clearHook   func()
+	deployHook  func()
+	contexts    []*agentv1.SetOperationContextCommand
+	clears      []*agentv1.ClearOperationContextCommand
+	clearOld    []*agentv1.OperationContext
+	commands    []*agentv1.DeployMissionCommand
+	agentIDs    []string
+	events      []string
 }
 
 func (f *fakeMissionDeployer) EnsureOperationContext(_ context.Context, agentID string, command *agentv1.SetOperationContextCommand) error {
 	f.agentIDs = append(f.agentIDs, agentID)
 	f.contexts = append(f.contexts, command)
 	f.events = append(f.events, "set:"+command.GetContext().GetFlightId())
+	if f.contextHook != nil {
+		f.contextHook()
+	}
 	return f.contextErr
 }
 
@@ -37,6 +42,9 @@ func (f *fakeMissionDeployer) ClearOperationContextForReconciliation(_ context.C
 	f.clears = append(f.clears, command)
 	f.clearOld = append(f.clearOld, old)
 	f.events = append(f.events, "clear:"+command.GetFlightId())
+	if f.clearHook != nil {
+		f.clearHook()
+	}
 	return f.clearErr
 }
 
@@ -152,10 +160,66 @@ func TestDeployCurrentMissionDoesNotStartContextOrMissionEffectAfterExpiry(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if retry.Deployment.Status != domain.MissionDeploymentOutcomeUnknown || len(deployer.contexts) != 1 || len(deployer.commands) != 0 ||
+	if retry.Deployment.Status != domain.MissionDeploymentOutcomeUnknown || retry.Deployment.DispatchStarted || len(deployer.contexts) != 1 || len(deployer.commands) != 0 ||
 		retry.Deployment.Message != "deployment command expired before its first dispatch; no effect was authorized" {
 		t.Fatalf("expired retry = %#v calls=%#v", retry.Deployment, deployer.events)
 	}
+}
+
+func TestDeployCurrentMissionRechecksExpiryBetweenControlPhases(t *testing.T) {
+	t.Run("context acknowledgement consumes authorization window", func(t *testing.T) {
+		svc, _ := newMissionTestService(t)
+		clock := svc.now()
+		svc.now = func() time.Time { return clock }
+		mission, err := svc.ImportMission(context.Background(), "flight-1", "slow-context-import", validMissionRequest(validWPL110))
+		if err != nil {
+			t.Fatal(err)
+		}
+		deployer := &fakeMissionDeployer{contextHook: func() { clock = clock.Add(missionDeploymentCommandTTL) }}
+		svc.WithMissionDeployer(deployer)
+		result, err := svc.DeployCurrentMission(context.Background(), "flight-1", mission.Mission.ID, mission.Mission.MissionDigest, "slow-context-deploy")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Deployment.Status != domain.MissionDeploymentOutcomeUnknown || result.Deployment.DispatchStarted || len(deployer.contexts) != 1 || len(deployer.commands) != 0 ||
+			result.Deployment.Message != "deployment authorization expired after context acknowledgement; mission was not dispatched" {
+			t.Fatalf("slow context result = %#v calls=%#v", result.Deployment, deployer.events)
+		}
+	})
+
+	t.Run("conditional clear consumes authorization window", func(t *testing.T) {
+		svc, store := newMissionTestService(t)
+		clock := svc.now()
+		svc.now = func() time.Time { return clock }
+		firstMission, err := svc.ImportMission(context.Background(), "flight-1", "slow-clear-first-import", validMissionRequest(validWPL110))
+		if err != nil {
+			t.Fatal(err)
+		}
+		deployer := &fakeMissionDeployer{}
+		svc.WithMissionDeployer(deployer)
+		if _, err := svc.DeployCurrentMission(context.Background(), "flight-1", firstMission.Mission.ID, firstMission.Mission.MissionDigest, "slow-clear-first-deploy"); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CreateFlightRecord(context.Background(), domain.FlightRecord{
+			ID: "flight-2", OperatorID: "operator-1", AircraftID: "aircraft-1", IntentID: "intent-1",
+			IntentVersion: 2, Status: domain.FlightStatusPlanned,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		secondMission, err := svc.ImportMission(context.Background(), "flight-2", "slow-clear-second-import", validMissionRequest(validWPL110))
+		if err != nil {
+			t.Fatal(err)
+		}
+		deployer.clearHook = func() { clock = clock.Add(missionDeploymentCommandTTL) }
+		result, err := svc.DeployCurrentMission(context.Background(), "flight-2", secondMission.Mission.ID, secondMission.Mission.MissionDigest, "slow-clear-second-deploy")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Deployment.Status != domain.MissionDeploymentOutcomeUnknown || result.Deployment.DispatchStarted || len(deployer.clears) != 1 || len(deployer.contexts) != 1 || len(deployer.commands) != 1 ||
+			result.Deployment.Message != "deployment authorization expired after context clear; mission was not dispatched" {
+			t.Fatalf("slow clear result = %#v calls=%#v", result.Deployment, deployer.events)
+		}
+	})
 }
 
 func TestDeployCurrentMissionConditionallyClearsPreviousFlightContext(t *testing.T) {
@@ -283,7 +347,7 @@ func TestDeployCurrentMissionRetainsTransportUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Deployment.Status != domain.MissionDeploymentOutcomeUnknown || result.Deployment.Message == "" || len(deployer.commands) != 1 {
+	if result.Deployment.Status != domain.MissionDeploymentOutcomeUnknown || !result.Deployment.DispatchStarted || result.Deployment.Message == "" || len(deployer.commands) != 1 {
 		t.Fatalf("result = %#v", result)
 	}
 	if _, err := svc.DeployCurrentMission(context.Background(), "flight-1", mission.Mission.ID, mission.Mission.MissionDigest, "another-deploy-key"); !errors.Is(err, durable.ErrVersionConflict) {
@@ -303,7 +367,7 @@ func TestDeployCurrentMissionPersistsUnknownBeforeRelayCall(t *testing.T) {
 		if getErr != nil {
 			t.Fatal(getErr)
 		}
-		if persisted.Status != domain.MissionDeploymentOutcomeUnknown || persisted.AttemptCount != 1 || persisted.Revision != 1 {
+		if persisted.Status != domain.MissionDeploymentOutcomeUnknown || !persisted.DispatchStarted || persisted.AttemptCount != 1 || persisted.Revision != 1 {
 			t.Fatalf("pre-dispatch marker = %#v", persisted)
 		}
 	}
@@ -465,6 +529,9 @@ func TestMissionDeploymentReconciliationWindowFencesPostExpiryEffects(t *testing
 			}
 			if len(deployer.commands) == 2 && deployer.commands[0].GetCommandId() != deployer.commands[1].GetCommandId() {
 				t.Fatalf("post-expiry reconcile changed command ID: %#v", deployer.commands)
+			}
+			if len(deployer.commands) == 2 && len(deployer.contexts) != 1 {
+				t.Fatalf("post-expiry readback changed operation context: %#v", deployer.events)
 			}
 		})
 	}

@@ -78,7 +78,7 @@ func TestMissionPersistsAcrossStoreRestartWithPostGISCoverage(t *testing.T) {
 		IntentVersion: mission.IntentVersion, MissionID: mission.ID, MissionVersion: stored.Version,
 		MissionDigest: mission.MissionDigest, CommandID: "mission-command-1", OperationContextCommandID: "context-command-1",
 		IdempotencyKey: "deployment-integration-key", IdempotencyRequest: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-		Status: domain.MissionDeploymentOutcomeUnknown, Message: "deadline exceeded", AttemptCount: 1,
+		Status: domain.MissionDeploymentOutcomeUnknown, Message: "deadline exceeded", DispatchStarted: true, AttemptCount: 1,
 		IssuedAt: now, ExpiresAt: now.Add(time.Minute), CreatedAt: now, UpdatedAt: now,
 	}
 	if _, err := writer.CreateMissionDeployment(ctx, deployment); err != nil {
@@ -109,7 +109,7 @@ func TestMissionPersistsAcrossStoreRestartWithPostGISCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	if restartedDeployment.CommandID != deployment.CommandID || restartedDeployment.OperationContextCommandID != deployment.OperationContextCommandID ||
-		restartedDeployment.Status != domain.MissionDeploymentOutcomeUnknown || restartedDeployment.AgentID != "agent-1" {
+		restartedDeployment.Status != domain.MissionDeploymentOutcomeUnknown || !restartedDeployment.DispatchStarted || restartedDeployment.AgentID != "agent-1" {
 		t.Fatalf("restarted deployment = %#v", restartedDeployment)
 	}
 	deploymentReplay, err := reader.CreateMissionDeployment(ctx, deployment)

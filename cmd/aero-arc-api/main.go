@@ -278,7 +278,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	conformanceService := service.NewConformanceService(durableStore, telemetryStore)
 
 	apiServer := httpapi.NewWithWorkflows(fleetService, intentService, preflightService, conformanceService, cfg.RequestTimeout, deconflictionService).
-		WithMissionDeploymentControl(2*cfg.RelayControlTimeout+5*time.Second, cfg.MissionDeploymentToken).
+		WithMissionDeploymentControl(missionDeploymentRequestTimeout(cfg.RelayControlTimeout), cfg.MissionDeploymentToken).
 		WithDebug(cfg.Debug)
 	if deconflictionService.PublishingEnabled() {
 		authorizer, err := httpapi.NewUSSJWTAuthorizer(cfg.USSJWTPublicKeyFile, cfg.USSJWTIssuer, cfg.USSJWTAudience)
@@ -338,6 +338,14 @@ func run(ctx context.Context, cfg *config.Config) error {
 
 	slog.Info("aero-arc-api shutdown complete")
 	return nil
+}
+
+func missionDeploymentRequestTimeout(relayControlTimeout time.Duration) time.Duration {
+	// A cross-flight handoff performs conditional clear, exact context set, and
+	// mission deployment sequentially. The outer transport budget covers every
+	// phase plus persistence/placement overhead; authorization remains bounded
+	// independently by the command's two-minute ExpiresAt.
+	return 3*relayControlTimeout + 5*time.Second
 }
 
 func newDurableStore(ctx context.Context, cfg *config.Config) (durable.Store, error) {

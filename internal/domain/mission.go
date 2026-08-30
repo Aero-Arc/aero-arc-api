@@ -82,6 +82,7 @@ type MissionDeployment struct {
 	MissionVersion               int                     `json:"mission_version"`
 	MissionDigest                string                  `json:"mission_digest"`
 	CommandID                    string                  `json:"command_id"`
+	DispatchStarted              bool                    `json:"-"`
 	OperationContextCommandID    string                  `json:"-"`
 	ReconciliationClearCommandID string                  `json:"-"`
 	IdempotencyKey               string                  `json:"-"`

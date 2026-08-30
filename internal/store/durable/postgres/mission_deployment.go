@@ -327,6 +327,7 @@ func getMissionDeployment(ctx context.Context, query deploymentQuerier, clause s
 type missionDeploymentData struct {
 	Deployment                   domain.MissionDeployment `json:"deployment"`
 	AgentID                      string                   `json:"agent_id"`
+	DispatchStarted              bool                     `json:"dispatch_started"`
 	OperationContextCommandID    string                   `json:"operation_context_command_id"`
 	ReconciliationClearCommandID string                   `json:"reconciliation_clear_command_id"`
 }
@@ -334,6 +335,7 @@ type missionDeploymentData struct {
 func encodeMissionDeployment(deployment domain.MissionDeployment) ([]byte, error) {
 	return json.Marshal(missionDeploymentData{
 		Deployment: deployment, AgentID: deployment.AgentID,
+		DispatchStarted:              deployment.DispatchStarted,
 		OperationContextCommandID:    deployment.OperationContextCommandID,
 		ReconciliationClearCommandID: deployment.ReconciliationClearCommandID,
 	})
@@ -346,6 +348,7 @@ func decodeMissionDeployment(raw []byte, deployment *domain.MissionDeployment) e
 	}
 	*deployment = data.Deployment
 	deployment.AgentID = data.AgentID
+	deployment.DispatchStarted = data.DispatchStarted
 	deployment.OperationContextCommandID = data.OperationContextCommandID
 	deployment.ReconciliationClearCommandID = data.ReconciliationClearCommandID
 	return nil
