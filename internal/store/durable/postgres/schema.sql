@@ -237,6 +237,8 @@ CREATE TABLE IF NOT EXISTS mission_items (
     PRIMARY KEY (mission_id, sequence)
 );
 
+CREATE SEQUENCE IF NOT EXISTS mission_deployments_creation_order_seq;
+
 CREATE TABLE IF NOT EXISTS mission_deployments (
     id text PRIMARY KEY,
     flight_id text NOT NULL,
@@ -245,11 +247,30 @@ CREATE TABLE IF NOT EXISTS mission_deployments (
     idempotency_request_hash text NOT NULL CHECK (idempotency_request_hash ~ '^[0-9a-f]{64}$'),
     revision bigint NOT NULL DEFAULT 0 CHECK (revision >= 0),
     status text NOT NULL,
+    creation_order bigint NOT NULL DEFAULT nextval('mission_deployments_creation_order_seq'),
     created_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL,
     data jsonb NOT NULL,
     FOREIGN KEY (flight_id) REFERENCES flight_records (id) ON DELETE RESTRICT
 );
 
-CREATE INDEX IF NOT EXISTS mission_deployments_flight_idx
-    ON mission_deployments (flight_id, created_at DESC);
+ALTER TABLE mission_deployments
+    ADD COLUMN IF NOT EXISTS creation_order bigint;
+
+WITH missing_order AS MATERIALIZED (
+    SELECT id, nextval('mission_deployments_creation_order_seq') AS creation_order
+    FROM mission_deployments
+    WHERE creation_order IS NULL
+    ORDER BY created_at, id
+)
+UPDATE mission_deployments AS deployment
+SET creation_order = missing_order.creation_order
+FROM missing_order
+WHERE deployment.id = missing_order.id;
+
+ALTER TABLE mission_deployments
+    ALTER COLUMN creation_order SET DEFAULT nextval('mission_deployments_creation_order_seq'),
+    ALTER COLUMN creation_order SET NOT NULL;
+
+CREATE INDEX IF NOT EXISTS mission_deployments_flight_order_idx
+    ON mission_deployments (flight_id, creation_order DESC);

@@ -247,7 +247,7 @@ func (s *Store) StartFlightWithCurrentMissionDeployment(ctx context.Context, fli
 	}
 	latest, err := getMissionDeployment(ctx, tx, `
 		WHERE flight_id IN (SELECT id FROM flight_records WHERE aircraft_id=$1)
-		ORDER BY created_at DESC,id DESC
+		ORDER BY creation_order DESC
 		LIMIT 1`, aircraftID)
 	if errors.Is(err, durable.ErrNotFound) {
 		return durable.ErrVersionConflict

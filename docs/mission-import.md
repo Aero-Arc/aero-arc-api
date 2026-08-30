@@ -241,9 +241,11 @@ outcome; it cannot invalidate an authorized command between validation and the
 aircraft effect.
 
 The same aircraft-level fence prevents a planned flight from uploading over an
-active flight. Start rejects any redispatchable outstanding fence and requires
-the aircraft's latest deployment—not any historical success—to belong to the
-starting flight's exact current mission and report `applied` or
+active flight. A database-assigned monotonic creation sequence, rather than
+application wall-clock timestamps, defines the authoritative order across API
+replicas and delayed requests. Start rejects any redispatchable outstanding
+fence and requires the aircraft's latest deployment—not any historical
+success—to belong to the starting flight's exact current mission and report `applied` or
 `already_applied` with the matching digest. A newer rejection, binding/readback
 mismatch, or deployment for another flight invalidates an older success. The
 store also permits at most one active flight per aircraft. Terminal history for

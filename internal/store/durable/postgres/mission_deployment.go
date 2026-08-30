@@ -251,8 +251,7 @@ func (s *Store) GetCurrentMissionDeploymentForFlight(ctx context.Context, flight
 		  AND mission_id=(SELECT id FROM missions WHERE flight_id=$1 ORDER BY version DESC LIMIT 1)
 		ORDER BY
 		  CASE WHEN status IN ($2,$3,$4) THEN 0 ELSE 1 END,
-		  created_at DESC,
-		  id DESC
+		  creation_order DESC
 		LIMIT 1`, flightID, domain.MissionDeploymentPending, domain.MissionDeploymentTemporaryError, domain.MissionDeploymentOutcomeUnknown)
 }
 

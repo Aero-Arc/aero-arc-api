@@ -121,11 +121,15 @@ func TestAircraftMissionLifecycleUsesLatestAuthoritativeDeployment(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, lifecycleDeployment(firstMission, "first-applied", "first-applied-key", domain.MissionDeploymentApplied)); err != nil {
+		firstDeployment := lifecycleDeployment(firstMission, "first-applied", "first-applied-key", domain.MissionDeploymentApplied)
+		firstDeployment.CreatedAt = time.Now().UTC()
+		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, firstDeployment); err != nil {
 			t.Fatal(err)
 		}
 		_, secondMission := addLifecycleFlight(t, store, "flight-2", "mission-2", "mission-key-2")
-		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, lifecycleDeployment(secondMission, "second-applied", "second-applied-key", domain.MissionDeploymentApplied)); err != nil {
+		secondDeployment := lifecycleDeployment(secondMission, "second-applied", "second-applied-key", domain.MissionDeploymentApplied)
+		secondDeployment.CreatedAt = firstDeployment.CreatedAt.Add(-time.Hour)
+		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, secondDeployment); err != nil {
 			t.Fatal(err)
 		}
 		active := flight

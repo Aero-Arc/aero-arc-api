@@ -402,6 +402,59 @@ func TestPostgresMissionImportAndIntentTransitionAreSerialized(t *testing.T) {
 	}
 }
 
+func TestMissionDeploymentCreationOrderMigratesExistingRows(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	resetMissionFleetTables(t, store)
+	now := time.Now().UTC()
+	aircraft := domain.Aircraft{ID: "order-migration-aircraft", OperatorID: "operator-1", AgentID: "agent-1", CreatedAt: now, UpdatedAt: now}
+	if err := store.CreateAircraft(ctx, aircraft); err != nil {
+		t.Fatal(err)
+	}
+	intent := domain.OperationalIntent{ID: "order-migration-intent", Version: 1, OperatorID: "operator-1", AircraftID: aircraft.ID, Status: domain.IntentStatusActive, PlannedStartAt: now, PlannedEndAt: now.Add(time.Hour), UpdatedAt: now}
+	if err := store.CreateOperationalIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	flight := domain.FlightRecord{ID: "order-migration-flight", OperatorID: "operator-1", AircraftID: aircraft.ID, IntentID: intent.ID, IntentVersion: 1, Status: domain.FlightStatusPlanned}
+	if err := store.CreateFlightRecord(ctx, flight); err != nil {
+		t.Fatal(err)
+	}
+	mission, err := store.CreateMissionForPlannedFlight(ctx, postgresLifecycleMission(flight, "order-migration-mission", "order-migration-mission-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := postgresLifecycleDeployment(mission, "order-migration-first", "order-migration-first-key", domain.MissionDeploymentApplied)
+	first.CreatedAt = now
+	if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	second := postgresLifecycleDeployment(mission, "order-migration-second", "order-migration-second-key", domain.MissionDeploymentRejected)
+	second.CreatedAt = now.Add(time.Minute)
+	if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(ctx, `DROP INDEX IF EXISTS mission_deployments_flight_order_idx; ALTER TABLE mission_deployments DROP COLUMN creation_order`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(ctx, schema); err != nil {
+		t.Fatalf("reapply schema migration: %v", err)
+	}
+	var firstOrder, secondOrder int64
+	if err := store.pool.QueryRow(ctx, `SELECT creation_order FROM mission_deployments WHERE id=$1`, first.ID).Scan(&firstOrder); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.pool.QueryRow(ctx, `SELECT creation_order FROM mission_deployments WHERE id=$1`, second.ID).Scan(&secondOrder); err != nil {
+		t.Fatal(err)
+	}
+	if firstOrder <= 0 || secondOrder <= firstOrder {
+		t.Fatalf("backfilled creation order = first:%d second:%d", firstOrder, secondOrder)
+	}
+}
+
 func TestPostgresAircraftMissionLifecycleUsesLatestAuthoritativeDeployment(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, integrationDatabaseURL)
@@ -463,11 +516,15 @@ func TestPostgresAircraftMissionLifecycleUsesLatestAuthoritativeDeployment(t *te
 
 	t.Run("newer deployment for another flight invalidates older success", func(t *testing.T) {
 		flight, mission := setup(t, "cross-latest")
-		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(mission, "cross-latest-first-applied", "cross-latest-first-key", domain.MissionDeploymentApplied)); err != nil {
+		firstDeployment := postgresLifecycleDeployment(mission, "cross-latest-first-applied", "cross-latest-first-key", domain.MissionDeploymentApplied)
+		firstDeployment.CreatedAt = time.Now().UTC()
+		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, firstDeployment); err != nil {
 			t.Fatal(err)
 		}
 		_, secondMission := addFlight(t, flight, "cross-latest")
-		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(secondMission, "cross-latest-second-applied", "cross-latest-second-key", domain.MissionDeploymentApplied)); err != nil {
+		secondDeployment := postgresLifecycleDeployment(secondMission, "cross-latest-second-applied", "cross-latest-second-key", domain.MissionDeploymentApplied)
+		secondDeployment.CreatedAt = firstDeployment.CreatedAt.Add(-time.Hour)
+		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, secondDeployment); err != nil {
 			t.Fatal(err)
 		}
 		active := flight
