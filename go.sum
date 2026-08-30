@@ -11,8 +11,8 @@ github.com/InfluxCommunity/influxdb3-go/v2 v2.13.0/go.mod h1:fXhSEgDgX7iv++4t5cF
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
 github.com/RaveNoX/go-jsoncommentstrip v1.0.0/go.mod h1:78ihd09MekBnJnxpICcwzCMzGrKSKYe4AqU6PDYYpjk=
-github.com/aero-arc/aero-arc-protos v0.0.0-20260830131659-8cbf71853746 h1:dYQp/OirTRYHI1e9QkswtNs9fi5dS9P5aj4OQQzZTQI=
-github.com/aero-arc/aero-arc-protos v0.0.0-20260830131659-8cbf71853746/go.mod h1:fILW3Dz6auXllS5ABRFTt0FTnNC4Mtw3ukvGrJa7zLo=
+github.com/aero-arc/aero-arc-protos v0.0.0-20260830133103-af0b6757de47 h1:9iNhYNrpT45YiuiT5NbhIVDFz0RADC+cxi64J7kLFlc=
+github.com/aero-arc/aero-arc-protos v0.0.0-20260830133103-af0b6757de47/go.mod h1:fILW3Dz6auXllS5ABRFTt0FTnNC4Mtw3ukvGrJa7zLo=
 github.com/andybalholm/brotli v1.2.0 h1:ukwgCxwYrmACq68yiUqwIWnGY0cTPox/M94sVwToPjQ=
 github.com/andybalholm/brotli v1.2.0/go.mod h1:rzTDkvFWvIrjDXZHkuS16NPggd91W3kUSvPlQ1pLaKY=
 github.com/apache/arrow-go/v18 v18.5.1 h1:yaQ6zxMGgf9YCYw4/oaeOU3AULySDlAYDOcnr4LdHdI=
