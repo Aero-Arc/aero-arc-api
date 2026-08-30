@@ -149,10 +149,12 @@ AERO_API_RELAY_CONTROL_TIMEOUT=35s
 AERO_API_RELAY_PLACEMENT_TTL=10s
 ```
 
-`AERO_API_RELAY_CONTROL_TIMEOUT` is the per-RPC transport timeout. The HTTP
-deployment request separately budgets three sequential phases—conditional
-clear, exact context set, and mission deploy—plus five seconds of persistence
-and placement overhead. The 35-second maximum keeps that 110-second transport
+`AERO_API_RELAY_CONTROL_TIMEOUT` bounds one complete logical control phase,
+including Registry placement lookup, connection, and at most one refreshed-
+placement retry after `Unavailable`; attempts do not receive fresh deadlines.
+The HTTP deployment request separately budgets three sequential phases—
+conditional clear, exact context set, and mission deploy—plus five seconds of
+persistence overhead. The 35-second maximum keeps that 110-second transport
 budget inside the independent two-minute mission authorization TTL. The service
 rechecks `expires_at` after clear and context acknowledgement, never begins a
 new mission dispatch after expiry, and performs post-expiry reconciliation as

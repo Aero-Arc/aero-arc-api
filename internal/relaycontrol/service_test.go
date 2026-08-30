@@ -16,11 +16,15 @@ import (
 )
 
 type fakeRegistry struct {
-	relayIDs []string
-	calls    int
+	relayIDs  []string
+	calls     int
+	deadlines []time.Time
 }
 
-func (f *fakeRegistry) GetAgentPlacement(_ context.Context, _ *registryv1.GetAgentPlacementRequest, _ ...grpc.CallOption) (*registryv1.GetAgentPlacementResponse, error) {
+func (f *fakeRegistry) GetAgentPlacement(ctx context.Context, _ *registryv1.GetAgentPlacementRequest, _ ...grpc.CallOption) (*registryv1.GetAgentPlacementResponse, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		f.deadlines = append(f.deadlines, deadline)
+	}
 	i := f.calls
 	if i >= len(f.relayIDs) {
 		i = len(f.relayIDs) - 1
@@ -28,7 +32,10 @@ func (f *fakeRegistry) GetAgentPlacement(_ context.Context, _ *registryv1.GetAge
 	f.calls++
 	return &registryv1.GetAgentPlacementResponse{Placement: &registryv1.AgentPlacement{AgentId: "agent-1", RelayId: f.relayIDs[i]}}, nil
 }
-func (f *fakeRegistry) ListRelays(context.Context, *registryv1.ListRelaysRequest, ...grpc.CallOption) (*registryv1.ListRelaysResponse, error) {
+func (f *fakeRegistry) ListRelays(ctx context.Context, _ *registryv1.ListRelaysRequest, _ ...grpc.CallOption) (*registryv1.ListRelaysResponse, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		f.deadlines = append(f.deadlines, deadline)
+	}
 	return &registryv1.ListRelaysResponse{Relays: []*registryv1.Relay{{RelayId: "relay-1", Address: "relay-one", GrpcPort: 50051}, {RelayId: "relay-2", Address: "relay-two:50052"}}}, nil
 }
 
@@ -53,6 +60,7 @@ type fakeRelayClient struct {
 	clearResult       *agentv1.OperationContextCommandAck
 	clearErr          error
 	block             bool
+	setDeadlines      []time.Time
 }
 
 func TestNewRequiresRelayTransportCredentials(t *testing.T) {
@@ -86,6 +94,9 @@ func (f *fakeRelayClient) DeployMission(_ context.Context, request *relayv1.Depl
 }
 func (f *fakeRelayClient) SetOperationContext(ctx context.Context, r *relayv1.SetOperationContextRequest, _ ...grpc.CallOption) (*relayv1.SetOperationContextResponse, error) {
 	f.setRequests = append(f.setRequests, r)
+	if deadline, ok := ctx.Deadline(); ok {
+		f.setDeadlines = append(f.setDeadlines, deadline)
+	}
 	if f.block {
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -224,6 +235,15 @@ func TestUnavailableInvalidatesPlacementAndRetriesSameCommand(t *testing.T) {
 	}
 	if second.setRequests[0].Command.GetCommandId() != "stable" {
 		t.Fatalf("command changed: %v", second.setRequests[0].Command)
+	}
+	if len(registry.deadlines) != 4 || len(first.setDeadlines) != 1 || len(second.setDeadlines) != 1 {
+		t.Fatalf("phase deadlines = registry:%v first:%v second:%v", registry.deadlines, first.setDeadlines, second.setDeadlines)
+	}
+	phaseDeadline := registry.deadlines[0]
+	for _, deadline := range append(append([]time.Time(nil), registry.deadlines...), first.setDeadlines[0], second.setDeadlines[0]) {
+		if !deadline.Equal(phaseDeadline) {
+			t.Fatalf("placement/retry received fresh deadline: got %s want %s", deadline, phaseDeadline)
+		}
 	}
 }
 
