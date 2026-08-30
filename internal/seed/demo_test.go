@@ -160,7 +160,7 @@ type persistedDuplicateStore struct {
 }
 
 func (s persistedDuplicateStore) CreateAircraft(ctx context.Context, aircraft domain.Aircraft) error {
-	if _, err := s.Store.GetAircraft(ctx, aircraft.ID); err == nil {
+	if _, err := s.GetAircraft(ctx, aircraft.ID); err == nil {
 		return durable.ErrAlreadyExists
 	}
 	return s.Store.CreateAircraft(ctx, aircraft)
