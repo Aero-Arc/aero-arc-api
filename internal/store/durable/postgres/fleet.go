@@ -12,7 +12,18 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// CreateAircraft persists an aircraft used by mission and flight bindings.
+// CreateAircraft persists an aircraft used by mission and flight bindings. It
+// writes the aircraft ID, operator ID, Agent ID, creation/update timestamps,
+// and the complete serialized domain record in one PostgreSQL statement.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL insert lifetime.
+//   - aircraft: is the complete aircraft record to serialize and persist.
+//
+// Returns:
+//   - error: is durable.ErrAlreadyExists for a duplicate aircraft ID, or
+//     reports record serialization, context cancellation, connection, and
+//     other PostgreSQL dependency failures.
 func (s *Store) CreateAircraft(ctx context.Context, aircraft domain.Aircraft) error {
 	raw, err := json.Marshal(aircraft)
 	if err != nil {
