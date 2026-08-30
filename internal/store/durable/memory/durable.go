@@ -30,6 +30,8 @@ type Store struct {
 	missionByIdempotencyKey    map[string]string
 	missionDeployments         map[string]domain.MissionDeployment
 	deploymentByIdempotencyKey map[string]string
+	deploymentCreationOrder    map[string]uint64
+	nextDeploymentOrder        uint64
 	conformanceEvents          []domain.ConformanceEvent
 	conformanceSummaries       map[string]domain.ConformanceSummary
 	evidenceRecords            map[string]domain.EvidenceRecord
@@ -64,6 +66,7 @@ func NewStore() *Store {
 		missionByIdempotencyKey:    make(map[string]string),
 		missionDeployments:         make(map[string]domain.MissionDeployment),
 		deploymentByIdempotencyKey: make(map[string]string),
+		deploymentCreationOrder:    make(map[string]uint64),
 		conformanceSummaries:       make(map[string]domain.ConformanceSummary),
 		evidenceRecords:            make(map[string]domain.EvidenceRecord),
 		personnel:                  make(map[string]domain.OperationsPersonnel),
@@ -1695,8 +1698,10 @@ func (s *Store) createMissionDeploymentLocked(deployment domain.MissionDeploymen
 		return domain.MissionDeployment{}, durable.ErrAlreadyExists
 	}
 	deployment.Revision = 0
+	s.nextDeploymentOrder++
 	s.missionDeployments[deployment.ID] = deployment
 	s.deploymentByIdempotencyKey[deployment.IdempotencyKey] = deployment.ID
+	s.deploymentCreationOrder[deployment.ID] = s.nextDeploymentOrder
 	return deployment, nil
 }
 
@@ -1740,8 +1745,7 @@ func (s *Store) StartFlightWithCurrentMissionDeployment(_ context.Context, fligh
 				return durable.ErrVersionConflict
 			}
 		}
-		if latest == nil || deployment.CreatedAt.After(latest.CreatedAt) ||
-			(deployment.CreatedAt.Equal(latest.CreatedAt) && deployment.ID > latest.ID) {
+		if latest == nil || s.deploymentCreationOrder[deployment.ID] > s.deploymentCreationOrder[latest.ID] {
 			candidate := deployment
 			latest = &candidate
 		}
@@ -1806,7 +1810,7 @@ func (s *Store) GetCurrentMissionDeploymentForFlight(_ context.Context, flightID
 		if deployment.FlightID != flightID || deployment.MissionID != currentMission.ID || deployment.MissionDigest != currentMission.MissionDigest {
 			continue
 		}
-		if current == nil || deploymentPreferredForRestore(deployment, *current) {
+		if current == nil || s.deploymentPreferredForRestore(deployment, *current) {
 			candidate := deployment
 			current = &candidate
 		}
@@ -1817,16 +1821,13 @@ func (s *Store) GetCurrentMissionDeploymentForFlight(_ context.Context, flightID
 	return *current, nil
 }
 
-func deploymentPreferredForRestore(candidate, current domain.MissionDeployment) bool {
+func (s *Store) deploymentPreferredForRestore(candidate, current domain.MissionDeployment) bool {
 	candidateOutstanding := missionDeploymentOutstanding(candidate.Status)
 	currentOutstanding := missionDeploymentOutstanding(current.Status)
 	if candidateOutstanding != currentOutstanding {
 		return candidateOutstanding
 	}
-	if candidate.CreatedAt.Equal(current.CreatedAt) {
-		return candidate.ID > current.ID
-	}
-	return candidate.CreatedAt.After(current.CreatedAt)
+	return s.deploymentCreationOrder[candidate.ID] > s.deploymentCreationOrder[current.ID]
 }
 
 func missionDeploymentOutstanding(status domain.MissionDeploymentStatus) bool {
