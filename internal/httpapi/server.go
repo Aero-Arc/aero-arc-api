@@ -68,7 +68,17 @@ func NewWithWorkflows(fleet *service.FleetService, intents *service.IntentServic
 }
 
 // WithMissionDeploymentControl configures the bounded control-plane timeout
-// and hashes the bearer credential used only by mission deployment routes.
+// and hashes the bearer credential used only by mission deployment routes. A
+// non-positive timeout preserves the existing deadline, while an empty token
+// disables the protected routes.
+//
+// Parameters:
+//   - timeout: replaces the mission deployment request deadline when positive.
+//   - token: is the bearer credential required by mission import, deployment,
+//     status, and reconciliation routes; an empty value disables those routes.
+//
+// Returns:
+//   - result: is the receiver, allowing configuration calls to be chained.
 func (s *Server) WithMissionDeploymentControl(timeout time.Duration, token string) *Server {
 	if timeout > 0 {
 		s.missionDeploymentTimeout = timeout
