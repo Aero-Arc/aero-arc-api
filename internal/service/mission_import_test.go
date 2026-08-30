@@ -178,6 +178,30 @@ func TestMissionAltitudeCMRoundTripsArduPilotFloatSemantics(t *testing.T) {
 	}
 }
 
+func TestMissionAltitudeCMInt32Boundary(t *testing.T) {
+	const upper = float32(1 << 31)
+	lower := -upper
+	for _, test := range []struct {
+		name     string
+		scaledCM float32
+		want     bool
+	}{
+		{name: "inclusive lower bound", scaledCM: lower, want: true},
+		{name: "below lower bound", scaledCM: math.Nextafter32(lower, float32(math.Inf(-1))), want: false},
+		{name: "largest float32 below upper bound", scaledCM: math.Nextafter32(upper, lower), want: true},
+		{name: "exclusive upper bound", scaledCM: upper, want: false},
+		{name: "positive infinity", scaledCM: float32(math.Inf(1)), want: false},
+		{name: "negative infinity", scaledCM: float32(math.Inf(-1)), want: false},
+		{name: "not a number", scaledCM: float32(math.NaN()), want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := missionAltitudeCMInInt32Range(test.scaledCM); got != test.want {
+				t.Errorf("missionAltitudeCMInInt32Range(%v) = %t, want %t", test.scaledCM, got, test.want)
+			}
+		})
+	}
+}
+
 func TestImportMissionCanonicalizesLandParam4BeforeDigest(t *testing.T) {
 	svc, _ := newMissionTestService(t)
 	fromZero, err := svc.ImportMission(context.Background(), "flight-1", "land-param4-zero", validMissionRequest(validWPL110))

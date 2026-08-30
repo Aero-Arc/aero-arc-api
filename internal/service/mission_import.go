@@ -473,7 +473,7 @@ func parseWPLItem(fields []string, expectedSequence int, lineNumber int) (domain
 func missionAltitudeCMRoundTrips(altitudeM float64) bool {
 	canonical := float32(altitudeM)
 	scaled := canonical * float32(100)
-	if scaled < float32(math.MinInt32) || scaled >= float32(math.MaxInt32) {
+	if !missionAltitudeCMInInt32Range(scaled) {
 		return false
 	}
 	// AP_Mission stores packet.z * 100.0f in int32_t, which truncates toward
@@ -482,6 +482,14 @@ func missionAltitudeCMRoundTrips(altitudeM float64) bool {
 	altitudeCM := int32(scaled)
 	readback := float32(altitudeCM) * float32(0.01)
 	return readback == canonical
+}
+
+func missionAltitudeCMInInt32Range(scaled float32) bool {
+	// int32's positive limit is exclusive. Express both limits as exact powers
+	// of two because float32(math.MaxInt32) rounds up to 2^31.
+	const exclusiveUpper = float32(1 << 31)
+	const inclusiveLower = -exclusiveUpper
+	return !math.IsNaN(float64(scaled)) && scaled >= inclusiveLower && scaled < exclusiveUpper
 }
 
 func missionFinding(code string, message string, sequence *int) domain.MissionValidationFinding {
