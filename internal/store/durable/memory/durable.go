@@ -1691,10 +1691,7 @@ func (s *Store) CreateMissionDeploymentForPlannedFlight(_ context.Context, deplo
 		if !exists || existingFlight.AircraftID != flight.AircraftID || existingFlight.Status != domain.FlightStatusPlanned || !missionDeploymentOutstanding(existing.Status) {
 			continue
 		}
-		existingMission := s.currentMissionForFlightLocked(existing.FlightID)
-		if existingMission != nil && existing.MissionID == existingMission.ID {
-			return domain.MissionDeployment{}, durable.ErrVersionConflict
-		}
+		return domain.MissionDeployment{}, durable.ErrVersionConflict
 	}
 	if replay != nil {
 		return *replay, nil
@@ -1777,10 +1774,7 @@ func (s *Store) StartFlightWithCurrentMissionDeployment(_ context.Context, fligh
 			continue
 		}
 		if candidateFlight.Status == domain.FlightStatusPlanned && missionDeploymentOutstanding(deployment.Status) {
-			candidateMission := s.currentMissionForFlightLocked(candidateFlight.ID)
-			if candidateMission != nil && deployment.MissionID == candidateMission.ID {
-				return durable.ErrVersionConflict
-			}
+			return durable.ErrVersionConflict
 		}
 		if latest == nil || s.deploymentCreationOrder[deployment.ID] > s.deploymentCreationOrder[latest.ID] {
 			candidate := deployment
@@ -1855,16 +1849,18 @@ func (s *Store) GetPreviousMissionDeploymentForAircraft(_ context.Context, aircr
 	return *previous, nil
 }
 
-// GetCurrentMissionDeploymentForFlight returns the authoritative deployment
-// for the flight's current mission, preferring an unresolved retryable command
-// over newer terminal history.
+// GetCurrentMissionDeploymentForFlight returns the authoritative deployment to
+// restore for a flight. Any flight-wide uncertain outcome is preferred over
+// pending/temporary work and current-mission terminal history, including when
+// that uncertainty belongs to a superseded mission.
 //
 // Parameters:
 //   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
-//   - flightID: identifies the flight whose current mission is being restored.
+//   - flightID: identifies the flight whose deployment state is being restored.
 //
 // Returns:
-//   - result: is the outstanding or latest deployment for the current mission.
+//   - result: is the newest highest-priority unresolved deployment, or the
+//     latest terminal deployment for the current mission when none is unresolved.
 //   - error: is durable.ErrNotFound when the flight has no mission deployment.
 func (s *Store) GetCurrentMissionDeploymentForFlight(_ context.Context, flightID string) (domain.MissionDeployment, error) {
 	s.mu.RLock()
@@ -1876,12 +1872,13 @@ func (s *Store) GetCurrentMissionDeploymentForFlight(_ context.Context, flightID
 			currentMission = &candidate
 		}
 	}
-	if currentMission == nil {
-		return domain.MissionDeployment{}, durable.ErrNotFound
-	}
 	var current *domain.MissionDeployment
 	for _, deployment := range s.missionDeployments {
-		if deployment.FlightID != flightID || deployment.MissionID != currentMission.ID || deployment.MissionDigest != currentMission.MissionDigest {
+		if deployment.FlightID != flightID {
+			continue
+		}
+		outstanding := missionDeploymentOutstanding(deployment.Status)
+		if !outstanding && (currentMission == nil || deployment.MissionID != currentMission.ID || deployment.MissionDigest != currentMission.MissionDigest) {
 			continue
 		}
 		if current == nil || s.deploymentPreferredForRestore(deployment, *current) {
@@ -1896,12 +1893,27 @@ func (s *Store) GetCurrentMissionDeploymentForFlight(_ context.Context, flightID
 }
 
 func (s *Store) deploymentPreferredForRestore(candidate, current domain.MissionDeployment) bool {
-	candidateOutstanding := missionDeploymentOutstanding(candidate.Status)
-	currentOutstanding := missionDeploymentOutstanding(current.Status)
-	if candidateOutstanding != currentOutstanding {
-		return candidateOutstanding
+	candidatePriority := missionDeploymentRestorePriority(candidate.Status)
+	currentPriority := missionDeploymentRestorePriority(current.Status)
+	if candidatePriority != currentPriority {
+		return candidatePriority < currentPriority
 	}
-	return s.deploymentCreationOrder[candidate.ID] > s.deploymentCreationOrder[current.ID]
+	candidateOrder := s.deploymentCreationOrder[candidate.ID]
+	currentOrder := s.deploymentCreationOrder[current.ID]
+	if candidateOrder != currentOrder {
+		return candidateOrder > currentOrder
+	}
+	return candidate.ID > current.ID
+}
+
+func missionDeploymentRestorePriority(status domain.MissionDeploymentStatus) int {
+	if status == domain.MissionDeploymentOutcomeUnknown {
+		return 0
+	}
+	if status == domain.MissionDeploymentPending || status == domain.MissionDeploymentTemporaryError {
+		return 1
+	}
+	return 2
 }
 
 func missionDeploymentOutstanding(status domain.MissionDeploymentStatus) bool {
@@ -1909,12 +1921,8 @@ func missionDeploymentOutstanding(status domain.MissionDeploymentStatus) bool {
 }
 
 func (s *Store) hasOutstandingMissionDeploymentForFlightLocked(flightID string) bool {
-	currentMission := s.currentMissionForFlightLocked(flightID)
-	if currentMission == nil {
-		return false
-	}
 	for _, deployment := range s.missionDeployments {
-		if deployment.FlightID == flightID && deployment.MissionID == currentMission.ID && missionDeploymentOutstanding(deployment.Status) {
+		if deployment.FlightID == flightID && missionDeploymentOutstanding(deployment.Status) {
 			return true
 		}
 	}

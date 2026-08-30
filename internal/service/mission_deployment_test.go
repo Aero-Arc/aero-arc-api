@@ -34,7 +34,7 @@ type terminalResultConflictStore struct {
 
 func (s *terminalResultConflictStore) UpdateMissionDeployment(ctx context.Context, deployment domain.MissionDeployment, expectedRevision int64) error {
 	if !s.conflicted && !missionDeploymentRetryable(deployment.Status) {
-		current, err := s.Store.GetMissionDeployment(ctx, deployment.ID)
+		current, err := s.GetMissionDeployment(ctx, deployment.ID)
 		if err != nil {
 			return err
 		}

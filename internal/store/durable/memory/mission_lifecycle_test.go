@@ -511,6 +511,78 @@ func TestMissionDeploymentAndStartRaceIsSerialized(t *testing.T) {
 	}
 }
 
+func TestMissionDeploymentRestorePrefersFlightWideUncertainty(t *testing.T) {
+	store, _, mission := missionLifecycleStore(t)
+	ctx := context.Background()
+	firstMission, err := store.CreateMissionForPlannedFlight(ctx, mission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldDeployment, err := store.CreateMissionDeploymentForPlannedFlight(ctx, lifecycleDeployment(firstMission, "old-deployment", "old-deployment-key", domain.MissionDeploymentApplied))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nextMission := mission
+	nextMission.ID = "mission-2"
+	nextMission.MissionDigest = "digest-2"
+	nextMission.IdempotencyKey = "mission-key-2"
+	nextMission.IdempotencyRequest = "mission-request-2"
+	nextMission, err = store.CreateMissionForPlannedFlight(ctx, nextMission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, lifecycleDeployment(nextMission, "current-terminal", "current-terminal-key", domain.MissionDeploymentRejected)); err != nil {
+		t.Fatal(err)
+	}
+
+	oldDeployment.Status = domain.MissionDeploymentOutcomeUnknown
+	oldDeployment.DispatchStarted = true
+	if err := store.UpdateMissionDeployment(ctx, oldDeployment, oldDeployment.Revision); err != nil {
+		t.Fatal(err)
+	}
+	oldDeployment.Revision++
+	restored, err := store.GetCurrentMissionDeploymentForFlight(ctx, mission.FlightID)
+	if err != nil || restored.ID != oldDeployment.ID {
+		t.Fatalf("restore over current terminal = %#v err=%v, want %s", restored, err, oldDeployment.ID)
+	}
+	blockedMission := nextMission
+	blockedMission.ID = "mission-3"
+	blockedMission.IdempotencyKey = "mission-key-3"
+	blockedMission.IdempotencyRequest = "mission-request-3"
+	if _, err := store.CreateMissionForPlannedFlight(ctx, blockedMission); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("superseded uncertainty import fence error = %v", err)
+	}
+
+	oldDeployment.Status = domain.MissionDeploymentApplied
+	if err := store.UpdateMissionDeployment(ctx, oldDeployment, oldDeployment.Revision); err != nil {
+		t.Fatal(err)
+	}
+	oldDeployment.Revision++
+	currentPending, err := store.CreateMissionDeploymentForPlannedFlight(ctx, lifecycleDeployment(nextMission, "current-pending", "current-pending-key", domain.MissionDeploymentPending))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldDeployment.Status = domain.MissionDeploymentOutcomeUnknown
+	if err := store.UpdateMissionDeployment(ctx, oldDeployment, oldDeployment.Revision); err != nil {
+		t.Fatal(err)
+	}
+	oldDeployment.Revision++
+	restored, err = store.GetCurrentMissionDeploymentForFlight(ctx, mission.FlightID)
+	if err != nil || restored.ID != oldDeployment.ID {
+		t.Fatalf("restore over newer pending = %#v err=%v, want %s", restored, err, oldDeployment.ID)
+	}
+
+	oldDeployment.Status = domain.MissionDeploymentApplied
+	if err := store.UpdateMissionDeployment(ctx, oldDeployment, oldDeployment.Revision); err != nil {
+		t.Fatal(err)
+	}
+	restored, err = store.GetCurrentMissionDeploymentForFlight(ctx, mission.FlightID)
+	if err != nil || restored.ID != currentPending.ID {
+		t.Fatalf("restore after resolving old uncertainty = %#v err=%v, want %s", restored, err, currentPending.ID)
+	}
+}
+
 func missionLifecycleStore(t *testing.T) (*Store, domain.FlightRecord, domain.Mission) {
 	t.Helper()
 	store := NewStore()

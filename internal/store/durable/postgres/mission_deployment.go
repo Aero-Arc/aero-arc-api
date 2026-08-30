@@ -136,7 +136,6 @@ func (s *Store) CreateMissionDeploymentForPlannedFlight(ctx context.Context, dep
 			  AND flight.status=$2
 			  AND deployment.id<>$3
 			  AND deployment.status IN ($4,$5,$6)
-			  AND deployment.mission_id=(SELECT id FROM missions WHERE flight_id=flight.id ORDER BY version DESC LIMIT 1)
 		)`, aircraftID, domain.FlightStatusPlanned, replayID,
 		domain.MissionDeploymentPending, domain.MissionDeploymentTemporaryError, domain.MissionDeploymentOutcomeUnknown).Scan(&outstanding); err != nil {
 		return domain.MissionDeployment{}, fmt.Errorf("check outstanding aircraft mission deployment: %w", err)
@@ -177,7 +176,6 @@ func rejectOutstandingMissionDeploymentForIntent(ctx context.Context, tx pgx.Tx,
 			JOIN flight_records AS flight ON flight.id=deployment.flight_id
 			WHERE flight.intent_id=$1
 			  AND deployment.status IN ($2,$3,$4)
-			  AND deployment.mission_id=(SELECT id FROM missions WHERE flight_id=flight.id ORDER BY version DESC LIMIT 1)
 		)`, intentID, domain.MissionDeploymentPending, domain.MissionDeploymentTemporaryError, domain.MissionDeploymentOutcomeUnknown).Scan(&outstanding); err != nil {
 		return fmt.Errorf("check operational intent mission deployment fence: %w", err)
 	}
@@ -195,7 +193,6 @@ func rejectOutstandingMissionDeploymentForFlight(ctx context.Context, tx pgx.Tx,
 			FROM mission_deployments
 			WHERE flight_id=$1
 			  AND status IN ($2,$3,$4)
-			  AND mission_id=(SELECT id FROM missions WHERE flight_id=$1 ORDER BY version DESC LIMIT 1)
 		)`, flightID, domain.MissionDeploymentPending, domain.MissionDeploymentTemporaryError, domain.MissionDeploymentOutcomeUnknown).Scan(&outstanding); err != nil {
 		return fmt.Errorf("check flight mission deployment fence: %w", err)
 	}
@@ -277,24 +274,33 @@ func (s *Store) GetPreviousMissionDeploymentForAircraft(ctx context.Context, air
 		LIMIT 1`, aircraftID, deploymentID)
 }
 
-// GetCurrentMissionDeploymentForFlight returns the authoritative deployment
-// for the flight's current mission, preferring an unresolved retryable command
-// over newer terminal history.
+// GetCurrentMissionDeploymentForFlight returns the authoritative deployment to
+// restore for a flight. Any flight-wide uncertain outcome is preferred over
+// pending/temporary work and current-mission terminal history, including when
+// that uncertainty belongs to a superseded mission.
 //
 // Parameters:
 //   - ctx: controls cancellation and the PostgreSQL read.
-//   - flightID: identifies the flight whose current mission is being restored.
+//   - flightID: identifies the flight whose deployment state is being restored.
 //
 // Returns:
-//   - result: is the outstanding or latest deployment for the current mission.
+//   - result: is the newest highest-priority unresolved deployment, or the
+//     latest terminal deployment for the current mission when none is unresolved.
 //   - error: is durable.ErrNotFound when the flight has no mission deployment.
 func (s *Store) GetCurrentMissionDeploymentForFlight(ctx context.Context, flightID string) (domain.MissionDeployment, error) {
 	return getMissionDeployment(ctx, s.pool, `
-		WHERE flight_id=$1
-		  AND mission_id=(SELECT id FROM missions WHERE flight_id=$1 ORDER BY version DESC LIMIT 1)
+		WHERE flight_id=$1 AND (
+		  status IN ($2,$3,$4)
+		  OR mission_id=(SELECT id FROM missions WHERE flight_id=$1 ORDER BY version DESC LIMIT 1)
+		)
 		ORDER BY
-		  CASE WHEN status IN ($2,$3,$4) THEN 0 ELSE 1 END,
-		  creation_order DESC
+		  CASE
+		    WHEN status=$4 THEN 0
+		    WHEN status IN ($2,$3) THEN 1
+		    ELSE 2
+		  END,
+		  creation_order DESC,
+		  id DESC
 		LIMIT 1`, flightID, domain.MissionDeploymentPending, domain.MissionDeploymentTemporaryError, domain.MissionDeploymentOutcomeUnknown)
 }
 

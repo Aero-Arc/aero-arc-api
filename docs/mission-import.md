@@ -107,18 +107,30 @@ GET /api/v1/flights/{flight_id}/mission-deployments/{deployment_id}
 Authorization: Bearer <mission-control-token>
 ```
 
-After a UI reload, restore the authoritative deployment for the flight's
-current mission without retaining the original idempotency key in the browser:
+After a UI reload, restore the authoritative deployment for the flight without
+retaining the original idempotency key in the browser:
 
 ```http
 GET /api/v1/flights/{flight_id}/mission-deployments/current
 Authorization: Bearer <mission-control-token>
 ```
 
-The read prefers an outstanding `pending`, `temporary_error`, or
-`outcome_unknown` command over terminal history for that exact current mission.
+The read first returns the newest `outcome_unknown` command anywhere in the
+flight's history, even when it belongs to a superseded mission, because that
+uncertainty continues to fence the aircraft until an authoritative terminal
+result or explicit manual resolution. If none exists, it returns the newest
+flight-wide `pending` or `temporary_error` command; only when no unresolved work
+exists does it return the newest terminal result for the exact current mission.
+Durable creation order, followed by deployment ID, breaks ties. Expiry never
+hides unresolved state: an expired undispatched command may be reconciled only
+to record that no first effect remains authorized, while a dispatch-started
+unknown permits same-command readback recovery and never a replacement upload.
+If the restored deployment belongs to a superseded mission, it remains visible
+as an aircraft blocker but reconciliation fails with a binding conflict instead
+of dispatching the old plan; clearing that legacy ambiguity requires explicit
+manual resolution.
 Creation is serialized on the flight and rejects a different client idempotency
-key while that command is outstanding, so a reload or concurrent click cannot
+key while a command is outstanding, so a reload or concurrent click cannot
 create a second unresolved aircraft effect. Reloaded clients use the durable
 deployment ID and reconciliation route instead of inventing a replacement key.
 Retry that durable command with an empty request:

@@ -323,7 +323,6 @@ func (s *Store) StartFlightWithCurrentMissionDeployment(ctx context.Context, fli
 			WHERE candidate.aircraft_id=$1
 			  AND candidate.status=$2
 			  AND deployment.status IN ($3,$4,$5)
-			  AND deployment.mission_id=(SELECT id FROM missions WHERE flight_id=candidate.id ORDER BY version DESC LIMIT 1)
 		)`, aircraftID, domain.FlightStatusPlanned,
 		domain.MissionDeploymentPending, domain.MissionDeploymentTemporaryError, domain.MissionDeploymentOutcomeUnknown).Scan(&outstanding); err != nil {
 		return fmt.Errorf("check uncertain aircraft mission deployment: %w", err)
