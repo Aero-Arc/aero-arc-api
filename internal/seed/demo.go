@@ -123,7 +123,7 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 		},
 	}
 	for _, item := range aircraft {
-		if err := durableStore.CreateAircraft(ctx, item); err != nil {
+		if err := durableStore.CreateAircraft(ctx, item); err != nil && !errors.Is(err, durable.ErrAlreadyExists) {
 			return fmt.Errorf("seed aircraft %s: %w", item.ID, err)
 		}
 	}
@@ -147,7 +147,7 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 		{ID: "install-hawk-2", OperatorID: "operator-demo", AircraftID: "aircraft-hawk-2", BatteryID: "battery-b221", InstalledAt: now.Add(-2 * time.Hour)},
 	}
 	for _, item := range installations {
-		if err := durableStore.RecordBatteryInstallation(ctx, item); err != nil {
+		if err := durableStore.RecordBatteryInstallation(ctx, item); err != nil && !errors.Is(err, durable.ErrAlreadyExists) {
 			return fmt.Errorf("seed battery installation %s: %w", item.ID, err)
 		}
 	}
@@ -347,7 +347,7 @@ func Demo(ctx context.Context, durableStore durable.Store, telemetryStore any, r
 	}
 
 	flight := domain.FlightRecord{ID: "flight-2041-a", OperatorID: "operator-demo", AircraftID: "aircraft-eagle-7", IntentID: "20410000-0000-4000-8000-000000000000", IntentVersion: 3, StartedAt: now.Add(-18 * time.Minute), Origin: "West Yard", Destination: "Pad B", Status: domain.FlightStatusActive, MissionType: "pipeline_patrol", TelemetryURI: "memory://flight-2041-a", SampleCount: 5}
-	if err := durableStore.CreateFlightRecord(ctx, flight); err != nil {
+	if err := durableStore.CreateFlightRecord(ctx, flight); err != nil && !errors.Is(err, durable.ErrAlreadyExists) {
 		return fmt.Errorf("seed flight record %s: %w", flight.ID, err)
 	}
 

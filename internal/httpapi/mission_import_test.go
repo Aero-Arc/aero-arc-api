@@ -179,6 +179,49 @@ func TestMissionDeploymentHTTPRequiresAuthorizationAndNoRoutingPayload(t *testin
 	if statusResponse.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", statusResponse.Code, statusResponse.Body.String())
 	}
+	currentPath := "/api/v1/flights/flight-1/mission-deployments/current"
+	unauthorizedCurrent := httptest.NewRequest(http.MethodGet, currentPath, nil)
+	unauthorizedCurrentResponse := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedCurrentResponse, unauthorizedCurrent)
+	if unauthorizedCurrentResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized current status=%d body=%s", unauthorizedCurrentResponse.Code, unauthorizedCurrentResponse.Body.String())
+	}
+	currentRequest := httptest.NewRequest(http.MethodGet, currentPath, nil)
+	currentRequest.Header.Set("Authorization", "Bearer test-mission-deployment-token")
+	currentResponse := httptest.NewRecorder()
+	handler.ServeHTTP(currentResponse, currentRequest)
+	if currentResponse.Code != http.StatusOK {
+		t.Fatalf("current status=%d body=%s", currentResponse.Code, currentResponse.Body.String())
+	}
+	var current domain.MissionDeployment
+	if err := json.Unmarshal(currentResponse.Body.Bytes(), &current); err != nil {
+		t.Fatal(err)
+	}
+	if current.ID != result.Deployment.ID || bytes.Contains(currentResponse.Body.Bytes(), []byte("idempotency")) || bytes.Contains(currentResponse.Body.Bytes(), []byte("agent_id")) {
+		t.Fatalf("current deployment response=%s", currentResponse.Body.String())
+	}
+	reconcilePath := "/api/v1/flights/flight-1/mission-deployments/" + current.ID + "/reconcile"
+	withReconcilePayload := httptest.NewRequest(http.MethodPost, reconcilePath, bytes.NewBufferString(`{"idempotency_key":"attacker"}`))
+	withReconcilePayload.Header.Set("Authorization", "Bearer test-mission-deployment-token")
+	withReconcilePayloadResponse := httptest.NewRecorder()
+	handler.ServeHTTP(withReconcilePayloadResponse, withReconcilePayload)
+	if withReconcilePayloadResponse.Code != http.StatusBadRequest {
+		t.Fatalf("reconcile payload status=%d body=%s", withReconcilePayloadResponse.Code, withReconcilePayloadResponse.Body.String())
+	}
+	crossFlightReconcile := httptest.NewRequest(http.MethodPost, "/api/v1/flights/another-flight/mission-deployments/"+current.ID+"/reconcile", nil)
+	crossFlightReconcile.Header.Set("Authorization", "Bearer test-mission-deployment-token")
+	crossFlightReconcileResponse := httptest.NewRecorder()
+	handler.ServeHTTP(crossFlightReconcileResponse, crossFlightReconcile)
+	if crossFlightReconcileResponse.Code != http.StatusNotFound {
+		t.Fatalf("cross-flight reconcile status=%d body=%s", crossFlightReconcileResponse.Code, crossFlightReconcileResponse.Body.String())
+	}
+	reconcileRequest := httptest.NewRequest(http.MethodPost, reconcilePath, nil)
+	reconcileRequest.Header.Set("Authorization", "Bearer test-mission-deployment-token")
+	reconcileResponse := httptest.NewRecorder()
+	handler.ServeHTTP(reconcileResponse, reconcileRequest)
+	if reconcileResponse.Code != http.StatusOK || reconcileResponse.Header().Get("Idempotent-Replayed") != "true" {
+		t.Fatalf("reconcile status=%d headers=%v body=%s", reconcileResponse.Code, reconcileResponse.Header(), reconcileResponse.Body.String())
+	}
 }
 
 func TestMissionDeploymentHTTPFailsClosedWhenControlIsUnconfigured(t *testing.T) {

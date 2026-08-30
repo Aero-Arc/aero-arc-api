@@ -229,6 +229,60 @@ func (s *Store) GetCurrentMissionForIntent(ctx context.Context, aircraftID strin
 	return getMission(ctx, s.pool, `WHERE aircraft_id = $1 AND intent_id = $2 AND intent_version = $3 ORDER BY created_at DESC, version DESC LIMIT 1`, aircraftID, intentID, intentVersion)
 }
 
+// GetDeployedMissionForActiveFlight returns the current mission for the exact
+// active flight only when that mission has a verified terminal deployment.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL read.
+//   - aircraftID: identifies the active flight's aircraft.
+//   - intentID: identifies the active flight's operational intent.
+//   - intentVersion: identifies the exact active intent version.
+//
+// Returns:
+//   - result: is the verified mission commanded for the active flight.
+//   - error: is durable.ErrNotFound when no exact active flight or verified current mission exists.
+func (s *Store) GetDeployedMissionForActiveFlight(ctx context.Context, aircraftID string, intentID string, intentVersion int) (domain.Mission, error) {
+	var activeFlightCount int
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM flight_records
+		WHERE aircraft_id=$1 AND intent_id=$2 AND intent_version=$3 AND status=$4`,
+		aircraftID, intentID, intentVersion, domain.FlightStatusActive).Scan(&activeFlightCount); err != nil {
+		return domain.Mission{}, fmt.Errorf("count active flights for commanded mission: %w", err)
+	}
+	if activeFlightCount == 0 {
+		return domain.Mission{}, durable.ErrNotFound
+	}
+	if activeFlightCount > 1 {
+		return domain.Mission{}, durable.ErrVersionConflict
+	}
+	return getMission(ctx, s.pool, `
+		WHERE id = (
+			SELECT mission.id
+			FROM missions AS mission
+			JOIN flight_records AS flight ON flight.id = mission.flight_id
+			WHERE flight.aircraft_id=$1
+			  AND flight.intent_id=$2
+			  AND flight.intent_version=$3
+			  AND flight.status=$4
+			  AND mission.version=(
+				SELECT MAX(current.version)
+				FROM missions AS current
+				WHERE current.flight_id=flight.id
+			  )
+			  AND EXISTS (
+				SELECT 1
+				FROM mission_deployments AS deployment
+				WHERE deployment.flight_id=flight.id
+				  AND deployment.mission_id=mission.id
+				  AND deployment.status IN ($5,$6)
+				  AND deployment.data->'deployment'->>'mission_digest'=mission.mission_digest
+			  )
+			LIMIT 1
+		)`, aircraftID, intentID, intentVersion, domain.FlightStatusActive,
+		domain.MissionDeploymentApplied, domain.MissionDeploymentAlreadyApplied)
+}
+
 type missionQuerier interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 	Query(context.Context, string, ...any) (pgx.Rows, error)

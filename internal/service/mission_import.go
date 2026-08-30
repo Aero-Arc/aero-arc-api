@@ -497,7 +497,7 @@ func canonicalMissionPlan(items []domain.MissionItem) *agentv1.MissionPlan {
 			Sequence: uint32(item.Sequence), Frame: uint32(item.Frame), Command: uint32(item.Command),
 			Current: item.Current, Autocontinue: item.Autocontinue,
 			Param1: item.Param1, Param2: item.Param2, Param3: item.Param3, Param4: item.Param4,
-			LatitudeE7: item.LatitudeE7, LongitudeE7: item.LongitudeE7, AltitudeM: item.AltitudeM,
+			LatitudeE7: item.LatitudeE7, LongitudeE7: item.LongitudeE7, AltitudeM: float32(item.AltitudeM),
 		}
 	}
 	return plan

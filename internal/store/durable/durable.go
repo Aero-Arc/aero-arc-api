@@ -124,11 +124,13 @@ type Store interface {
 	GetMissionByIdempotencyKey(ctx context.Context, key string) (domain.Mission, error)
 	GetCurrentMissionForFlight(ctx context.Context, flightID string) (domain.Mission, error)
 	GetCurrentMissionForIntent(ctx context.Context, aircraftID string, intentID string, intentVersion int) (domain.Mission, error)
+	GetDeployedMissionForActiveFlight(ctx context.Context, aircraftID string, intentID string, intentVersion int) (domain.Mission, error)
 	CheckMissionCoverage(ctx context.Context, volume domain.OperationalVolume, items []domain.MissionItem) (MissionCoverageResult, error)
 	CreateMissionDeployment(ctx context.Context, deployment domain.MissionDeployment) (domain.MissionDeployment, error)
 	CreateMissionDeploymentForPlannedFlight(ctx context.Context, deployment domain.MissionDeployment) (domain.MissionDeployment, error)
 	GetMissionDeployment(ctx context.Context, deploymentID string) (domain.MissionDeployment, error)
 	GetMissionDeploymentByIdempotencyKey(ctx context.Context, key string) (domain.MissionDeployment, error)
+	GetCurrentMissionDeploymentForFlight(ctx context.Context, flightID string) (domain.MissionDeployment, error)
 	UpdateMissionDeployment(ctx context.Context, deployment domain.MissionDeployment, expectedRevision int64) error
 	StartFlightWithCurrentMissionDeployment(ctx context.Context, flight domain.FlightRecord, expectedStatus domain.FlightStatus) error
 

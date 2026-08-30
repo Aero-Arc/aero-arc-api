@@ -1508,6 +1508,56 @@ func (s *Store) GetCurrentMissionForIntent(_ context.Context, aircraftID string,
 	return cloneMission(*current), nil
 }
 
+// GetDeployedMissionForActiveFlight returns the current mission for the exact
+// active flight only when that mission has a verified terminal deployment.
+//
+// Parameters:
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
+//   - aircraftID: identifies the active flight's aircraft.
+//   - intentID: identifies the active flight's operational intent.
+//   - intentVersion: identifies the exact active intent version.
+//
+// Returns:
+//   - result: is a defensive copy of the verified mission commanded for the active flight.
+//   - error: is durable.ErrNotFound when no exact active flight or verified current mission exists.
+func (s *Store) GetDeployedMissionForActiveFlight(_ context.Context, aircraftID string, intentID string, intentVersion int) (domain.Mission, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var activeFlight *domain.FlightRecord
+	for _, flight := range s.flightRecords {
+		if flight.Status != domain.FlightStatusActive || flight.AircraftID != aircraftID || flight.IntentID != intentID || flight.IntentVersion != intentVersion {
+			continue
+		}
+		if activeFlight != nil {
+			return domain.Mission{}, durable.ErrVersionConflict
+		}
+		candidate := flight
+		activeFlight = &candidate
+	}
+	if activeFlight == nil {
+		return domain.Mission{}, durable.ErrNotFound
+	}
+	var current *domain.Mission
+	for _, mission := range s.missions {
+		if mission.FlightID == activeFlight.ID && (current == nil || mission.Version > current.Version) {
+			candidate := mission
+			current = &candidate
+		}
+	}
+	if current == nil {
+		return domain.Mission{}, durable.ErrNotFound
+	}
+	for _, deployment := range s.missionDeployments {
+		if deployment.FlightID != activeFlight.ID || deployment.MissionID != current.ID || deployment.MissionDigest != current.MissionDigest {
+			continue
+		}
+		if deployment.Status == domain.MissionDeploymentApplied || deployment.Status == domain.MissionDeploymentAlreadyApplied {
+			return cloneMission(*current), nil
+		}
+	}
+	return domain.Mission{}, durable.ErrNotFound
+}
+
 func cloneMission(mission domain.Mission) domain.Mission {
 	mission.Items = append([]domain.MissionItem(nil), mission.Items...)
 	mission.ValidationFindings = append([]domain.MissionValidationFinding(nil), mission.ValidationFindings...)
@@ -1550,6 +1600,11 @@ func (s *Store) CreateMissionDeploymentForPlannedFlight(_ context.Context, deplo
 	if currentMission == nil || currentMission.ID != deployment.MissionID || currentMission.MissionDigest != deployment.MissionDigest {
 		return domain.MissionDeployment{}, durable.ErrVersionConflict
 	}
+	for _, existing := range s.missionDeployments {
+		if existing.FlightID == deployment.FlightID && existing.MissionID == deployment.MissionID && missionDeploymentOutstanding(existing.Status) {
+			return domain.MissionDeployment{}, durable.ErrVersionConflict
+		}
+	}
 	return s.createMissionDeploymentLocked(deployment)
 }
 
@@ -1581,6 +1636,11 @@ func (s *Store) StartFlightWithCurrentMissionDeployment(_ context.Context, fligh
 	}
 	if currentFlight.Status != expectedStatus {
 		return durable.ErrVersionConflict
+	}
+	for id, existing := range s.flightRecords {
+		if id != flight.ID && existing.AircraftID == currentFlight.AircraftID && existing.Status == domain.FlightStatusActive {
+			return durable.ErrVersionConflict
+		}
 	}
 	intent, exists := s.latestOperationalIntent(currentFlight.IntentID)
 	if !exists {
@@ -1638,6 +1698,62 @@ func (s *Store) GetMissionDeploymentByIdempotencyKey(_ context.Context, key stri
 		return domain.MissionDeployment{}, durable.ErrNotFound
 	}
 	return s.missionDeployments[id], nil
+}
+
+// GetCurrentMissionDeploymentForFlight returns the authoritative deployment
+// for the flight's current mission, preferring an unresolved retryable command
+// over newer terminal history.
+//
+// Parameters:
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
+//   - flightID: identifies the flight whose current mission is being restored.
+//
+// Returns:
+//   - result: is the outstanding or latest deployment for the current mission.
+//   - error: is durable.ErrNotFound when the flight has no mission deployment.
+func (s *Store) GetCurrentMissionDeploymentForFlight(_ context.Context, flightID string) (domain.MissionDeployment, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var currentMission *domain.Mission
+	for _, mission := range s.missions {
+		if mission.FlightID == flightID && (currentMission == nil || mission.Version > currentMission.Version) {
+			candidate := mission
+			currentMission = &candidate
+		}
+	}
+	if currentMission == nil {
+		return domain.MissionDeployment{}, durable.ErrNotFound
+	}
+	var current *domain.MissionDeployment
+	for _, deployment := range s.missionDeployments {
+		if deployment.FlightID != flightID || deployment.MissionID != currentMission.ID || deployment.MissionDigest != currentMission.MissionDigest {
+			continue
+		}
+		if current == nil || deploymentPreferredForRestore(deployment, *current) {
+			candidate := deployment
+			current = &candidate
+		}
+	}
+	if current == nil {
+		return domain.MissionDeployment{}, durable.ErrNotFound
+	}
+	return *current, nil
+}
+
+func deploymentPreferredForRestore(candidate, current domain.MissionDeployment) bool {
+	candidateOutstanding := missionDeploymentOutstanding(candidate.Status)
+	currentOutstanding := missionDeploymentOutstanding(current.Status)
+	if candidateOutstanding != currentOutstanding {
+		return candidateOutstanding
+	}
+	if candidate.CreatedAt.Equal(current.CreatedAt) {
+		return candidate.ID > current.ID
+	}
+	return candidate.CreatedAt.After(current.CreatedAt)
+}
+
+func missionDeploymentOutstanding(status domain.MissionDeploymentStatus) bool {
+	return status == domain.MissionDeploymentPending || status == domain.MissionDeploymentTemporaryError || status == domain.MissionDeploymentOutcomeUnknown
 }
 
 // UpdateMissionDeployment replaces a deployment after an optimistic revision check.

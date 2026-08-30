@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
@@ -192,6 +194,9 @@ func TestDeployCurrentMissionRetainsTransportUnknown(t *testing.T) {
 	if result.Deployment.Status != domain.MissionDeploymentOutcomeUnknown || result.Deployment.Message == "" || len(deployer.commands) != 1 {
 		t.Fatalf("result = %#v", result)
 	}
+	if _, err := svc.DeployCurrentMission(context.Background(), "flight-1", mission.Mission.ID, mission.Mission.MissionDigest, "another-deploy-key"); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("second unresolved deployment error = %v, want version conflict", err)
+	}
 }
 
 func TestDeployCurrentMissionPersistsUnknownBeforeRelayCall(t *testing.T) {
@@ -265,5 +270,110 @@ func TestGetMissionDeploymentScopesDurableResultToFlight(t *testing.T) {
 	}
 	if _, err := svc.GetMissionDeployment(context.Background(), "", deployed.Deployment.ID); !errors.Is(err, ErrValidation) {
 		t.Fatalf("invalid scope error = %v", err)
+	}
+}
+
+func TestMissionDeploymentRestoreAndReconcileReusesDurableCommand(t *testing.T) {
+	svc, store := newMissionTestService(t)
+	mission, err := svc.ImportMission(context.Background(), "flight-1", "import-for-restore", validMissionRequest(validWPL110))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployer := &fakeMissionDeployer{deployErr: context.DeadlineExceeded}
+	svc.WithMissionDeployer(deployer)
+	first, err := svc.DeployCurrentMission(context.Background(), "flight-1", mission.Mission.ID, mission.Mission.MissionDigest, "restore-deploy-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Deployment.Status != domain.MissionDeploymentOutcomeUnknown {
+		t.Fatalf("first deployment = %#v", first.Deployment)
+	}
+	terminal := first.Deployment
+	terminal.ID = "newer-terminal-deployment"
+	terminal.IdempotencyKey = "newer-terminal-key"
+	terminal.IdempotencyRequest = strings.Repeat("e", 64)
+	terminal.CommandID = "newer-terminal-command"
+	terminal.Status = domain.MissionDeploymentRejected
+	terminal.CreatedAt = first.Deployment.CreatedAt.Add(time.Second)
+	if _, err := store.CreateMissionDeployment(context.Background(), terminal); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := svc.GetCurrentMissionDeployment(context.Background(), "flight-1")
+	if err != nil || restored.ID != first.Deployment.ID {
+		t.Fatalf("restored deployment = %#v err=%v, want outstanding %s", restored, err, first.Deployment.ID)
+	}
+
+	deployer.deployErr = nil
+	reconciled, err := svc.ReconcileMissionDeployment(context.Background(), "flight-1", restored.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reconciled.Replayed || reconciled.Deployment.ID != first.Deployment.ID || reconciled.Deployment.Status != domain.MissionDeploymentApplied {
+		t.Fatalf("reconciled deployment = %#v", reconciled)
+	}
+	if len(deployer.commands) != 2 || deployer.commands[0].GetCommandId() != deployer.commands[1].GetCommandId() ||
+		deployer.commands[1].GetCommandId() != first.Deployment.CommandID {
+		t.Fatalf("reconcile command IDs = %#v", deployer.commands)
+	}
+	if _, err := svc.ReconcileMissionDeployment(context.Background(), "another-flight", restored.ID); !errors.Is(err, durable.ErrNotFound) {
+		t.Fatalf("cross-flight reconcile error = %v", err)
+	}
+	terminalReplay, err := svc.ReconcileMissionDeployment(context.Background(), "flight-1", restored.ID)
+	if err != nil || terminalReplay.Deployment.ID != restored.ID || len(deployer.commands) != 2 {
+		t.Fatalf("terminal reconcile = %#v err=%v calls=%d", terminalReplay, err, len(deployer.commands))
+	}
+}
+
+func TestMissionDeploymentReconciliationWindowFencesPostExpiryEffects(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		retryAt     func(domain.MissionDeployment) time.Time
+		wantCalls   int
+		wantStatus  domain.MissionDeploymentStatus
+		wantMessage string
+	}{
+		{
+			name: "uncertain command retries just before reconciliation deadline",
+			retryAt: func(deployment domain.MissionDeployment) time.Time {
+				return deployment.ReconcileUntil.Add(-time.Nanosecond)
+			},
+			wantCalls:  2,
+			wantStatus: domain.MissionDeploymentApplied,
+		},
+		{
+			name:        "reconciliation closes exactly at deadline",
+			retryAt:     func(deployment domain.MissionDeployment) time.Time { return deployment.ReconcileUntil },
+			wantCalls:   1,
+			wantStatus:  domain.MissionDeploymentOutcomeUnknown,
+			wantMessage: "deployment reconciliation window elapsed with no correlated terminal outcome",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			svc, _ := newMissionTestService(t)
+			mission, err := svc.ImportMission(context.Background(), "flight-1", "window-import", validMissionRequest(validWPL110))
+			if err != nil {
+				t.Fatal(err)
+			}
+			deployer := &fakeMissionDeployer{deployErr: context.DeadlineExceeded}
+			svc.WithMissionDeployer(deployer)
+			first, err := svc.DeployCurrentMission(context.Background(), "flight-1", mission.Mission.ID, mission.Mission.MissionDigest, "window-deploy")
+			if err != nil {
+				t.Fatal(err)
+			}
+			clock := test.retryAt(first.Deployment)
+			svc.now = func() time.Time { return clock }
+			deployer.deployErr = nil
+			reconciled, err := svc.ReconcileMissionDeployment(context.Background(), "flight-1", first.Deployment.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(deployer.commands) != test.wantCalls || reconciled.Deployment.Status != test.wantStatus ||
+				(test.wantMessage != "" && reconciled.Deployment.Message != test.wantMessage) {
+				t.Fatalf("reconciled = %#v calls=%d", reconciled.Deployment, len(deployer.commands))
+			}
+			if len(deployer.commands) == 2 && deployer.commands[0].GetCommandId() != deployer.commands[1].GetCommandId() {
+				t.Fatalf("post-expiry reconcile changed command ID: %#v", deployer.commands)
+			}
+		})
 	}
 }
