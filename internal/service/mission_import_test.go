@@ -124,6 +124,7 @@ func TestImportMissionRejectsMalformedAndUnsupportedWPL(t *testing.T) {
 		{name: "land param4 unsupported", source: strings.Replace(validWPL110, "3\t0\t0\t21\t0\t0\t0\t0", "3\t0\t0\t21\t0\t0\t0\t2", 1), code: "nonzero_parameters_unsupported"},
 		{name: "autocontinue false", source: strings.Replace(validWPL110, "\t25\t1\n3\t", "\t25\t0\n3\t", 1), code: "autocontinue_required"},
 		{name: "altitude not centimeter roundtrippable", source: strings.Replace(validWPL110, "\t25\t1\n3\t", "\t25.123\t1\n3\t", 1), code: "altitude_not_centimeter_roundtrippable"},
+		{name: "altitude changed by ArduPilot float truncation", source: strings.Replace(validWPL110, "\t25\t1\n3\t", "\t16.8\t1\n3\t", 1), code: "altitude_not_centimeter_roundtrippable"},
 		{name: "frame", source: strings.Replace(validWPL110, "2\t0\t0\t16", "2\t0\t3\t16", 1), code: "unsupported_frame"},
 		{name: "sequence", source: strings.Replace(validWPL110, "2\t0\t0\t16", "9\t0\t0\t16", 1), code: "non_contiguous_sequence"},
 		{name: "invalid home command", source: strings.Replace(validWPL110, "0\t1\t0\t16", "0\t1\t0\t22", 1), code: "invalid_home_metadata"},
@@ -147,6 +148,23 @@ func TestImportMissionRejectsMalformedAndUnsupportedWPL(t *testing.T) {
 				t.Fatalf("findings = %#v, want code %s", validationErr.Findings, tt.code)
 			}
 		})
+	}
+}
+
+func TestMissionAltitudeCMRoundTripsArduPilotFloatSemantics(t *testing.T) {
+	for _, test := range []struct {
+		altitudeM float64
+		want      bool
+	}{
+		{altitudeM: 0, want: true},
+		{altitudeM: 20, want: true},
+		{altitudeM: 16.8, want: false},
+		{altitudeM: -16.8, want: false},
+		{altitudeM: 25.123, want: false},
+	} {
+		if got := missionAltitudeCMRoundTrips(test.altitudeM); got != test.want {
+			t.Errorf("missionAltitudeCMRoundTrips(%v) = %t, want %t", test.altitudeM, got, test.want)
+		}
 	}
 }
 

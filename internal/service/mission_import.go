@@ -468,8 +468,17 @@ func parseWPLItem(fields []string, expectedSequence int, lineNumber int) (domain
 }
 
 func missionAltitudeCMRoundTrips(altitudeM float64) bool {
-	altitudeCM := math.Round(altitudeM * 100)
-	return altitudeCM >= -8388608 && altitudeCM <= 8388607 && float32(altitudeCM/100) == float32(altitudeM)
+	canonical := float32(altitudeM)
+	scaled := canonical * float32(100)
+	if scaled < float32(math.MinInt32) || scaled >= float32(math.MaxInt32) {
+		return false
+	}
+	// AP_Mission stores packet.z * 100.0f in int32_t, which truncates toward
+	// zero, then reads it back through int32 * 0.01f. Emulate those float32
+	// operations exactly so the API digest matches Agent readback.
+	altitudeCM := int32(scaled)
+	readback := float32(altitudeCM) * float32(0.01)
+	return readback == canonical
 }
 
 func missionFinding(code string, message string, sequence *int) domain.MissionValidationFinding {
