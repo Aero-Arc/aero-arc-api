@@ -856,6 +856,86 @@ func TestPostgresStartRejectsTerminalIntentInsideFence(t *testing.T) {
 	}
 }
 
+func TestPostgresMissionDeploymentRestorePrefersFlightWideUncertainty(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	resetMissionFleetTables(t, store)
+	now := time.Now().UTC()
+	aircraft := domain.Aircraft{ID: "restore-aircraft", OperatorID: "operator-1", AgentID: "agent-1", CreatedAt: now, UpdatedAt: now}
+	if err := store.CreateAircraft(ctx, aircraft); err != nil {
+		t.Fatal(err)
+	}
+	intent := domain.OperationalIntent{ID: "restore-intent", Version: 1, OperatorID: "operator-1", AircraftID: aircraft.ID, Status: domain.IntentStatusActive, PlannedStartAt: now, PlannedEndAt: now.Add(time.Hour), UpdatedAt: now}
+	if err := store.CreateOperationalIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	flight := domain.FlightRecord{ID: "restore-flight", OperatorID: "operator-1", AircraftID: aircraft.ID, IntentID: intent.ID, IntentVersion: intent.Version, Status: domain.FlightStatusPlanned}
+	if err := store.CreateFlightRecord(ctx, flight); err != nil {
+		t.Fatal(err)
+	}
+	firstMission, err := store.CreateMissionForPlannedFlight(ctx, postgresLifecycleMission(flight, "restore-mission-1", "restore-import-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldDeployment, err := store.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(firstMission, "restore-old-deployment", "restore-old-key", domain.MissionDeploymentApplied))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextMission, err := store.CreateMissionForPlannedFlight(ctx, postgresLifecycleMission(flight, "restore-mission-2", "restore-import-2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(nextMission, "restore-current-terminal", "restore-current-terminal-key", domain.MissionDeploymentRejected)); err != nil {
+		t.Fatal(err)
+	}
+
+	oldDeployment.Status = domain.MissionDeploymentOutcomeUnknown
+	oldDeployment.DispatchStarted = true
+	if err := store.UpdateMissionDeployment(ctx, oldDeployment, oldDeployment.Revision); err != nil {
+		t.Fatal(err)
+	}
+	oldDeployment.Revision++
+	restored, err := store.GetCurrentMissionDeploymentForFlight(ctx, flight.ID)
+	if err != nil || restored.ID != oldDeployment.ID {
+		t.Fatalf("restore over current terminal = %#v err=%v, want %s", restored, err, oldDeployment.ID)
+	}
+	if _, err := store.CreateMissionForPlannedFlight(ctx, postgresLifecycleMission(flight, "restore-mission-3", "restore-import-3")); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("superseded uncertainty import fence error = %v", err)
+	}
+
+	oldDeployment.Status = domain.MissionDeploymentApplied
+	if err := store.UpdateMissionDeployment(ctx, oldDeployment, oldDeployment.Revision); err != nil {
+		t.Fatal(err)
+	}
+	oldDeployment.Revision++
+	currentPending, err := store.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(nextMission, "restore-current-pending", "restore-current-pending-key", domain.MissionDeploymentPending))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldDeployment.Status = domain.MissionDeploymentOutcomeUnknown
+	if err := store.UpdateMissionDeployment(ctx, oldDeployment, oldDeployment.Revision); err != nil {
+		t.Fatal(err)
+	}
+	oldDeployment.Revision++
+	restored, err = store.GetCurrentMissionDeploymentForFlight(ctx, flight.ID)
+	if err != nil || restored.ID != oldDeployment.ID {
+		t.Fatalf("restore over newer pending = %#v err=%v, want %s", restored, err, oldDeployment.ID)
+	}
+
+	oldDeployment.Status = domain.MissionDeploymentApplied
+	if err := store.UpdateMissionDeployment(ctx, oldDeployment, oldDeployment.Revision); err != nil {
+		t.Fatal(err)
+	}
+	restored, err = store.GetCurrentMissionDeploymentForFlight(ctx, flight.ID)
+	if err != nil || restored.ID != currentPending.ID {
+		t.Fatalf("restore after resolving old uncertainty = %#v err=%v, want %s", restored, err, currentPending.ID)
+	}
+}
+
 func resetMissionFleetTables(t *testing.T, store *Store) {
 	t.Helper()
 	if _, err := store.pool.Exec(context.Background(), `TRUNCATE mission_deployments, mission_items, missions, flight_records, aircraft, received_peer_notifications, peer_notifications, operational_intent_publications, conflict_findings, operational_volumes, operational_intents`); err != nil {

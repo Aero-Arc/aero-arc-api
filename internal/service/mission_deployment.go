@@ -364,16 +364,17 @@ func (s *FleetService) GetMissionDeployment(ctx context.Context, flightID, deplo
 }
 
 // GetCurrentMissionDeployment restores the authoritative deployment state for
-// a flight's current immutable mission. Outstanding retryable work is returned
-// ahead of terminal history so a reloaded client cannot accidentally create a
-// second command while the original outcome is unresolved.
+// a flight. Flight-wide unresolved work is returned ahead of current-mission
+// terminal history, even when an uncertain command belongs to a superseded
+// mission, so a reloaded client cannot overlook a retained aircraft fence.
 //
 // Parameters:
 //   - ctx: controls cancellation and deadlines for the durable read.
 //   - flightID: identifies the flight whose current deployment is being restored.
 //
 // Returns:
-//   - deployment: is the outstanding or latest deployment for the current mission.
+//   - deployment: is the highest-priority unresolved flight deployment, or the
+//     latest terminal deployment for the current mission.
 //   - error: reports invalid scope, missing state, cancellation, or persistence failures.
 func (s *FleetService) GetCurrentMissionDeployment(ctx context.Context, flightID string) (domain.MissionDeployment, error) {
 	flightID = strings.TrimSpace(flightID)
