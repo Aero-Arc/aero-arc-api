@@ -228,7 +228,18 @@ func (s *Store) GetMissionByIdempotencyKey(ctx context.Context, key string) (dom
 	return getMissionByIdempotencyKey(ctx, s.pool, key)
 }
 
-// GetMission returns one immutable mission by identity.
+// GetMission loads one immutable mission's metadata and sequence-ordered items
+// by identity.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL metadata/item reads.
+//   - missionID: identifies the immutable mission to load.
+//
+// Returns:
+//   - result: is the complete decoded mission with items ordered by sequence.
+//   - error: is durable.ErrNotFound when the mission is absent, or reports
+//     context cancellation, query, scan, row iteration, metadata decoding, and
+//     item decoding failures.
 func (s *Store) GetMission(ctx context.Context, missionID string) (domain.Mission, error) {
 	return getMission(ctx, s.pool, `WHERE id = $1`, missionID)
 }
