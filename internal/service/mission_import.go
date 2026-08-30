@@ -14,8 +14,8 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	agentv1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/agent/v1"
+	"github.com/aero-arc/aero-arc-protos/missiondigest"
 	"github.com/google/uuid"
-	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -481,13 +481,7 @@ func missionWarning(code string, message string) domain.MissionValidationFinding
 }
 
 func canonicalMissionSHA(items []domain.MissionItem) (string, error) {
-	plan := canonicalMissionPlan(items)
-	canonical, err := proto.MarshalOptions{Deterministic: true}.Marshal(plan)
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(canonical)
-	return hex.EncodeToString(sum[:]), nil
+	return missiondigest.Digest(canonicalMissionPlan(items))
 }
 
 func canonicalMissionPlan(items []domain.MissionItem) *agentv1.MissionPlan {
