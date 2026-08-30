@@ -120,6 +120,12 @@ func (s *FleetService) WithLiveStatePolicy(registryFreshness, telemetryFreshness
 }
 
 // WithMissionDeployer installs the authenticated API-to-Relay mission command transport.
+//
+// Parameters:
+//   - deployer: is the trusted server-side adapter for context and mission commands.
+//
+// Returns:
+//   - result: is the same FleetService for fluent construction.
 func (s *FleetService) WithMissionDeployer(deployer MissionDeployer) *FleetService {
 	s.missionDeployer = deployer
 	return s

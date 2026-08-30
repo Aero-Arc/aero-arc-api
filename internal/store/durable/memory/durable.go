@@ -1402,6 +1402,15 @@ func (s *Store) CreateMission(_ context.Context, mission domain.Mission) (domain
 
 // CreateMissionForPlannedFlight creates a mission while holding the same
 // lifecycle fence used by StartFlight.
+//
+// Parameters:
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
+//   - mission: contains the exact planned-flight, operator, aircraft, intent, and idempotency binding.
+//
+// Returns:
+//   - result: is the stored mission or exact idempotent replay.
+//   - error: reports missing state, stale lifecycle/binding, an outstanding
+//     deployment fence, duplicate identity, or conflicting idempotency reuse.
 func (s *Store) CreateMissionForPlannedFlight(_ context.Context, mission domain.Mission) (domain.Mission, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1604,6 +1613,14 @@ func cloneMission(mission domain.Mission) domain.Mission {
 
 // CreateMissionDeployment atomically records one exact command or returns an
 // existing exact idempotency replay.
+//
+// Parameters:
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
+//   - deployment: contains the immutable command binding and idempotency metadata.
+//
+// Returns:
+//   - result: is the stored deployment or exact idempotent replay.
+//   - error: reports duplicate identity or conflicting idempotency reuse.
 func (s *Store) CreateMissionDeployment(_ context.Context, deployment domain.MissionDeployment) (domain.MissionDeployment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1611,6 +1628,16 @@ func (s *Store) CreateMissionDeployment(_ context.Context, deployment domain.Mis
 }
 
 // CreateMissionDeploymentForPlannedFlight records a command under the flight lifecycle fence.
+//
+// Parameters:
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
+//   - deployment: contains the exact current mission, planned-flight, operator,
+//     aircraft, intent-version, Agent, and idempotency binding.
+//
+// Returns:
+//   - result: is the durably admitted deployment or exact idempotent replay.
+//   - error: reports missing state, stale lifecycle/binding, conflicting
+//     idempotency, an active aircraft flight, or another outstanding aircraft deployment.
 func (s *Store) CreateMissionDeploymentForPlannedFlight(_ context.Context, deployment domain.MissionDeployment) (domain.MissionDeployment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1707,6 +1734,16 @@ func (s *Store) createMissionDeploymentLocked(deployment domain.MissionDeploymen
 
 // StartFlightWithCurrentMissionDeployment atomically requires the current
 // mission to have a verified terminal deployment before activating the flight.
+//
+// Parameters:
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
+//   - flight: contains the requested active state for the existing flight identity.
+//   - expectedStatus: is the required current flight status for optimistic transition.
+//
+// Returns:
+//   - error: is durable.ErrNotFound for missing state or
+//     durable.ErrVersionConflict when lifecycle, active-aircraft, current-intent,
+//     outstanding-deployment, or latest verified mission preconditions fail.
 func (s *Store) StartFlightWithCurrentMissionDeployment(_ context.Context, flight domain.FlightRecord, expectedStatus domain.FlightStatus) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1784,6 +1821,16 @@ func (s *Store) GetMissionDeploymentByIdempotencyKey(_ context.Context, key stri
 // GetPreviousMissionDeploymentForAircraft returns the immediately preceding
 // durable aircraft admission. It is used to conditionally clear an old flight
 // context before dispatch switches the aircraft to another planned flight.
+//
+// Parameters:
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
+//   - aircraftID: scopes durable admission order to one aircraft.
+//   - deploymentID: identifies the current deployment whose predecessor is requested.
+//
+// Returns:
+//   - result: is the highest durable admission order below the current deployment.
+//   - error: is durable.ErrNotFound when the current deployment is outside the
+//     aircraft scope or no predecessor exists.
 func (s *Store) GetPreviousMissionDeploymentForAircraft(_ context.Context, aircraftID, deploymentID string) (domain.MissionDeployment, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1884,6 +1931,15 @@ func (s *Store) hasOutstandingMissionDeploymentForIntentLocked(intentID string) 
 }
 
 // UpdateMissionDeployment replaces a deployment after an optimistic revision check.
+//
+// Parameters:
+//   - ctx: is accepted for interface compatibility; the in-memory operation completes synchronously.
+//   - deployment: is the updated observation for the same immutable command identity.
+//   - expectedRevision: is the required current revision before replacement.
+//
+// Returns:
+//   - error: is durable.ErrNotFound for an unknown deployment or
+//     durable.ErrVersionConflict for stale revision or immutable identity changes.
 func (s *Store) UpdateMissionDeployment(_ context.Context, deployment domain.MissionDeployment, expectedRevision int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

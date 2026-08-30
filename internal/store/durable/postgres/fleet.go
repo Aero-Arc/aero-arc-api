@@ -179,6 +179,18 @@ func (s *Store) ListFlightRecords(ctx context.Context, aircraftID string) ([]dom
 
 // StartFlightWithCurrentMissionDeployment atomically checks the current active
 // intent and exact verified mission deployment under the flight lifecycle lock.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL transaction.
+//   - flight: contains the requested active state for the existing flight identity.
+//   - expectedStatus: is the required current flight status for optimistic transition.
+//
+// Returns:
+//   - error: reports durable.ErrNotFound for missing flight/intent state;
+//     durable.ErrVersionConflict for stale status, another active aircraft
+//     flight, non-current/non-active intent, outstanding aircraft deployment,
+//     or a latest deployment that is not verified for the exact current mission;
+//     and lock, serialization, encoding, or persistence failures.
 func (s *Store) StartFlightWithCurrentMissionDeployment(ctx context.Context, flight domain.FlightRecord, expectedStatus domain.FlightStatus) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
