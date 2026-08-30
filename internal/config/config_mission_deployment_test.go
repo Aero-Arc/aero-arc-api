@@ -24,6 +24,11 @@ func TestRelayMissionControlConfigurationIsAllOrNone(t *testing.T) {
 		t.Fatalf("short token error = %v", err)
 	}
 	cfg.MissionDeploymentToken = "0123456789abcdefghijklmn"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "durable store postgres") {
+		t.Fatalf("in-memory Relay mission control error = %v", err)
+	}
+	cfg.DurableStore = DurableStorePostgres
+	cfg.DatabaseURL = "postgres://aero_arc:aero_arc@postgres/aero_arc?sslmode=disable"
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("complete Relay mission config error = %v", err)
 	}
