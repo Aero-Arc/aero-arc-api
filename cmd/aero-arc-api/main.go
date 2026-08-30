@@ -121,7 +121,7 @@ func newCommand() *cli.Command {
 					&cli.StringFlag{Name: "relay-control-key-file", Usage: "API mTLS client key for Relay control", Sources: cli.EnvVars("AERO_API_RELAY_CONTROL_KEY_FILE")},
 					&cli.StringFlag{Name: "relay-control-server-name", Usage: "TLS name required from discovered Relay servers", Sources: cli.EnvVars("AERO_API_RELAY_CONTROL_SERVER_NAME")},
 					&cli.StringFlag{Name: "mission-deploy-token", Usage: "bearer credential required by mission deployment routes", Sources: cli.EnvVars("AERO_API_MISSION_DEPLOY_TOKEN")},
-					&cli.DurationFlag{Name: "relay-control-timeout", Value: defaults.RelayControlTimeout, Usage: "mission deployment Relay RPC timeout", Sources: cli.EnvVars("AERO_API_RELAY_CONTROL_TIMEOUT")},
+					&cli.DurationFlag{Name: "relay-control-timeout", Value: defaults.RelayControlTimeout, Usage: "mission deployment control-phase timeout including placement and retry", Sources: cli.EnvVars("AERO_API_RELAY_CONTROL_TIMEOUT")},
 					&cli.DurationFlag{Name: "relay-placement-ttl", Value: defaults.RelayPlacementTTL, Usage: "maximum cached Registry Agent placement age", Sources: cli.EnvVars("AERO_API_RELAY_PLACEMENT_TTL")},
 					&cli.DurationFlag{Name: "telemetry-freshness", Value: defaults.TelemetryFreshness, Usage: "maximum telemetry observation age considered fresh", Sources: cli.EnvVars("AERO_API_TELEMETRY_FRESHNESS")},
 					&cli.DurationFlag{Name: "telemetry-latest-lookback", Value: defaults.TelemetryLatestLookback, Usage: "maximum telemetry history scanned for live state", Sources: cli.EnvVars("AERO_API_TELEMETRY_LATEST_LOOKBACK")},

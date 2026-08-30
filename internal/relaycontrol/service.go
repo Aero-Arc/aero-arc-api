@@ -201,18 +201,18 @@ func (s *Service) DeployMission(ctx context.Context, agentID string, command *ag
 }
 
 func (s *Service) call(ctx context.Context, agentID string, invoke func(context.Context, relayv1.RelayControlClient) error) error {
+	phaseCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
 	for attempt := 0; attempt < 2; attempt++ {
-		placement, err := s.resolve(ctx, agentID, attempt > 0)
+		placement, err := s.resolve(phaseCtx, agentID, attempt > 0)
 		if err != nil {
 			return err
 		}
-		client, err := s.pool.Client(ctx, placement.relayID, placement.address)
+		client, err := s.pool.Client(phaseCtx, placement.relayID, placement.address)
 		if err != nil {
 			return fmt.Errorf("connect relay %s: %w", placement.relayID, err)
 		}
-		callCtx, cancel := context.WithTimeout(ctx, s.timeout)
-		err = invoke(callCtx, client)
-		cancel()
+		err = invoke(phaseCtx, client)
 		if status.Code(err) != codes.Unavailable || attempt == 1 {
 			if err != nil {
 				return fmt.Errorf("deliver relay control command: %w", err)
@@ -231,9 +231,7 @@ func (s *Service) resolve(ctx context.Context, agentID string, refresh bool) (ca
 	if !refresh && ok && s.now().Before(cached.expiresAt) {
 		return cached, nil
 	}
-	lookupCtx, cancel := context.WithTimeout(ctx, s.timeout)
-	defer cancel()
-	response, err := s.registry.GetAgentPlacement(lookupCtx, &registryv1.GetAgentPlacementRequest{AgentId: agentID})
+	response, err := s.registry.GetAgentPlacement(ctx, &registryv1.GetAgentPlacementRequest{AgentId: agentID})
 	if err != nil {
 		return cachedPlacement{}, fmt.Errorf("resolve agent placement: %w", err)
 	}
@@ -241,7 +239,7 @@ func (s *Service) resolve(ctx context.Context, agentID string, refresh bool) (ca
 	if placement == nil || placement.GetRelayId() == "" {
 		return cachedPlacement{}, fmt.Errorf("agent %s has no relay placement", agentID)
 	}
-	relays, err := s.registry.ListRelays(lookupCtx, &registryv1.ListRelaysRequest{})
+	relays, err := s.registry.ListRelays(ctx, &registryv1.ListRelaysRequest{})
 	if err != nil {
 		return cachedPlacement{}, fmt.Errorf("list relays: %w", err)
 	}
