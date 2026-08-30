@@ -105,30 +105,18 @@ func (s *FleetService) DeployCurrentMission(ctx context.Context, flightID, expec
 	}
 	commandExpired := !deployment.ExpiresAt.After(now)
 	reconciliationOpen := deployment.ReconcileUntil.After(now)
-	if commandExpired && (!replayed || deployment.Status != domain.MissionDeploymentOutcomeUnknown || !reconciliationOpen) {
+	if commandExpired && (!replayed || deployment.Status != domain.MissionDeploymentOutcomeUnknown || !deployment.DispatchStarted || !reconciliationOpen) {
 		if missionDeploymentRetryable(deployment.Status) {
-			updated := deployment
-			updated.Status = domain.MissionDeploymentOutcomeUnknown
+			message := "deployment command expired before its first dispatch; no effect was authorized"
 			if reconciliationOpen {
-				updated.Message = "deployment command expired before its first dispatch; no effect was authorized"
-			} else {
-				updated.Message = "deployment reconciliation window elapsed with no correlated terminal outcome"
+				return s.persistUndispatchedMissionExpiry(ctx, deployment, replayed, message, now)
 			}
-			updated.UpdatedAt = now
-			if err := s.durable.UpdateMissionDeployment(ctx, updated, deployment.Revision); err != nil {
-				if errors.Is(err, durable.ErrVersionConflict) {
-					current, getErr := s.durable.GetMissionDeployment(ctx, deployment.ID)
-					if getErr == nil {
-						return DeployMissionResult{Deployment: current, Replayed: true}, nil
-					}
-				}
-				return DeployMissionResult{}, fmt.Errorf("persist expired mission deployment: %w", err)
-			}
-			updated.Revision++
-			deployment = updated
+			message = "deployment reconciliation window elapsed with no correlated terminal outcome"
+			return s.persistUndispatchedMissionExpiry(ctx, deployment, replayed, message, now)
 		}
 		return DeployMissionResult{Deployment: deployment, Replayed: replayed}, nil
 	}
+	postExpiryReadback := commandExpired && deployment.DispatchStarted
 
 	// Re-read all authoritative bindings immediately before every first dispatch
 	// or reconciliation retry. A stale UI request can never choose an old mission.
@@ -143,27 +131,61 @@ func (s *FleetService) DeployCurrentMission(ctx context.Context, flightID, expec
 		return DeployMissionResult{}, fmt.Errorf("%w: mission or aircraft placement binding changed before dispatch", durable.ErrVersionConflict)
 	}
 
-	previous, previousErr := s.durable.GetPreviousMissionDeploymentForAircraft(ctx, deployment.AircraftID, deployment.ID)
-	if previousErr != nil && !errors.Is(previousErr, durable.ErrNotFound) {
-		return DeployMissionResult{}, fmt.Errorf("get previous aircraft mission deployment: %w", previousErr)
+	if !postExpiryReadback {
+		previous, previousErr := s.durable.GetPreviousMissionDeploymentForAircraft(ctx, deployment.AircraftID, deployment.ID)
+		if previousErr != nil && !errors.Is(previousErr, durable.ErrNotFound) {
+			return DeployMissionResult{}, fmt.Errorf("get previous aircraft mission deployment: %w", previousErr)
+		}
+		if previousErr == nil && previous.FlightID != deployment.FlightID {
+			oldContext := &agentv1.OperationContext{
+				AircraftId:    previous.AircraftID,
+				FlightId:      previous.FlightID,
+				IntentId:      previous.IntentID,
+				IntentVersion: uint32(previous.IntentVersion),
+			}
+			clearCommand := &agentv1.ClearOperationContextCommand{
+				CommandId: deployment.ReconciliationClearCommandID,
+				FlightId:  previous.FlightID,
+			}
+			if clearErr := s.missionDeployer.ClearOperationContextForReconciliation(ctx, deployment.AgentID, clearCommand, oldContext); clearErr != nil {
+				updated := deployment
+				updated.AttemptCount++
+				updated.UpdatedAt = s.now().UTC()
+				updated.Status = domain.MissionDeploymentTemporaryError
+				updated.Message = "previous operation context was not conditionally cleared; mission was not dispatched: " + clearErr.Error()
+				if err := s.durable.UpdateMissionDeployment(ctx, updated, deployment.Revision); err != nil {
+					if errors.Is(err, durable.ErrVersionConflict) {
+						current, getErr := s.durable.GetMissionDeployment(ctx, deployment.ID)
+						if getErr == nil {
+							return DeployMissionResult{Deployment: current, Replayed: true}, nil
+						}
+					}
+					return DeployMissionResult{}, fmt.Errorf("persist operation context clear failure: %w", err)
+				}
+				updated.Revision++
+				return DeployMissionResult{Deployment: updated, Replayed: replayed}, nil
+			}
+		}
+		if phaseNow := s.now().UTC(); !deployment.ExpiresAt.After(phaseNow) {
+			if deployment.Status == domain.MissionDeploymentOutcomeUnknown {
+				postExpiryReadback = true
+			} else {
+				return s.persistUndispatchedMissionExpiry(ctx, deployment, replayed, "deployment authorization expired after context clear; mission was not dispatched", phaseNow)
+			}
+		}
 	}
-	if previousErr == nil && previous.FlightID != deployment.FlightID {
-		oldContext := &agentv1.OperationContext{
-			AircraftId:    previous.AircraftID,
-			FlightId:      previous.FlightID,
-			IntentId:      previous.IntentID,
-			IntentVersion: uint32(previous.IntentVersion),
+
+	if !postExpiryReadback {
+		contextCommand := &agentv1.SetOperationContextCommand{
+			CommandId: deployment.OperationContextCommandID,
+			Context:   &agentv1.OperationContext{FlightId: flight.ID, IntentId: flight.IntentID, IntentVersion: uint32(flight.IntentVersion), AircraftId: flight.AircraftID},
 		}
-		clearCommand := &agentv1.ClearOperationContextCommand{
-			CommandId: deployment.ReconciliationClearCommandID,
-			FlightId:  previous.FlightID,
-		}
-		if clearErr := s.missionDeployer.ClearOperationContextForReconciliation(ctx, deployment.AgentID, clearCommand, oldContext); clearErr != nil {
+		if contextErr := s.missionDeployer.EnsureOperationContext(ctx, deployment.AgentID, contextCommand); contextErr != nil {
 			updated := deployment
 			updated.AttemptCount++
 			updated.UpdatedAt = s.now().UTC()
 			updated.Status = domain.MissionDeploymentTemporaryError
-			updated.Message = "previous operation context was not conditionally cleared; mission was not dispatched: " + clearErr.Error()
+			updated.Message = "operation context was not acknowledged; mission was not dispatched: " + contextErr.Error()
 			if err := s.durable.UpdateMissionDeployment(ctx, updated, deployment.Revision); err != nil {
 				if errors.Is(err, durable.ErrVersionConflict) {
 					current, getErr := s.durable.GetMissionDeployment(ctx, deployment.ID)
@@ -171,39 +193,20 @@ func (s *FleetService) DeployCurrentMission(ctx context.Context, flightID, expec
 						return DeployMissionResult{Deployment: current, Replayed: true}, nil
 					}
 				}
-				return DeployMissionResult{}, fmt.Errorf("persist operation context clear failure: %w", err)
+				return DeployMissionResult{}, fmt.Errorf("persist operation context failure: %w", err)
 			}
 			updated.Revision++
 			return DeployMissionResult{Deployment: updated, Replayed: replayed}, nil
 		}
-	}
-
-	contextCommand := &agentv1.SetOperationContextCommand{
-		CommandId: deployment.OperationContextCommandID,
-		Context:   &agentv1.OperationContext{FlightId: flight.ID, IntentId: flight.IntentID, IntentVersion: uint32(flight.IntentVersion), AircraftId: flight.AircraftID},
-	}
-	if contextErr := s.missionDeployer.EnsureOperationContext(ctx, deployment.AgentID, contextCommand); contextErr != nil {
-		updated := deployment
-		updated.AttemptCount++
-		updated.UpdatedAt = s.now().UTC()
-		updated.Status = domain.MissionDeploymentTemporaryError
-		updated.Message = "operation context was not acknowledged; mission was not dispatched: " + contextErr.Error()
-		if err := s.durable.UpdateMissionDeployment(ctx, updated, deployment.Revision); err != nil {
-			if errors.Is(err, durable.ErrVersionConflict) {
-				current, getErr := s.durable.GetMissionDeployment(ctx, deployment.ID)
-				if getErr == nil {
-					return DeployMissionResult{Deployment: current, Replayed: true}, nil
-				}
-			}
-			return DeployMissionResult{}, fmt.Errorf("persist operation context failure: %w", err)
+		if phaseNow := s.now().UTC(); !deployment.ExpiresAt.After(phaseNow) && deployment.Status != domain.MissionDeploymentOutcomeUnknown {
+			return s.persistUndispatchedMissionExpiry(ctx, deployment, replayed, "deployment authorization expired after context acknowledgement; mission was not dispatched", phaseNow)
 		}
-		updated.Revision++
-		return DeployMissionResult{Deployment: updated, Replayed: replayed}, nil
 	}
 
 	command := missionDeploymentCommand(deployment, mission)
 	dispatching := deployment
 	dispatching.AttemptCount++
+	dispatching.DispatchStarted = true
 	dispatching.UpdatedAt = s.now().UTC()
 	dispatching.Status = domain.MissionDeploymentOutcomeUnknown
 	dispatching.Message = "mission dispatch began; no correlated Agent outcome has been persisted yet"
@@ -237,6 +240,24 @@ func (s *FleetService) DeployCurrentMission(ctx context.Context, flightID, expec
 			}
 		}
 		return DeployMissionResult{}, fmt.Errorf("persist mission deployment result: %w", err)
+	}
+	updated.Revision++
+	return DeployMissionResult{Deployment: updated, Replayed: replayed}, nil
+}
+
+func (s *FleetService) persistUndispatchedMissionExpiry(ctx context.Context, deployment domain.MissionDeployment, replayed bool, message string, now time.Time) (DeployMissionResult, error) {
+	updated := deployment
+	updated.Status = domain.MissionDeploymentOutcomeUnknown
+	updated.Message = message
+	updated.UpdatedAt = now
+	if err := s.durable.UpdateMissionDeployment(ctx, updated, deployment.Revision); err != nil {
+		if errors.Is(err, durable.ErrVersionConflict) {
+			current, getErr := s.durable.GetMissionDeployment(ctx, deployment.ID)
+			if getErr == nil {
+				return DeployMissionResult{Deployment: current, Replayed: true}, nil
+			}
+		}
+		return DeployMissionResult{}, fmt.Errorf("persist expired mission deployment: %w", err)
 	}
 	updated.Revision++
 	return DeployMissionResult{Deployment: updated, Replayed: replayed}, nil

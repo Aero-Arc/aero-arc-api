@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRelayMissionControlConfigurationIsAllOrNone(t *testing.T) {
@@ -28,5 +29,16 @@ func TestRelayMissionControlConfigurationIsAllOrNone(t *testing.T) {
 	}
 	if !cfg.RelayControlEnabled() {
 		t.Fatal("RelayControlEnabled = false")
+	}
+}
+
+func TestRelayMissionControlTimeoutFitsThreePhaseDeployment(t *testing.T) {
+	cfg := Defaults()
+	if cfg.RelayControlTimeout != 35*time.Second {
+		t.Fatalf("default Relay control timeout = %s", cfg.RelayControlTimeout)
+	}
+	cfg.RelayControlTimeout += time.Nanosecond
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "clear-context-and-deploy") {
+		t.Fatalf("oversized Relay control timeout error = %v", err)
 	}
 }

@@ -145,9 +145,18 @@ AERO_API_RELAY_CONTROL_CERT_FILE=/run/secrets/api-relay-client.pem
 AERO_API_RELAY_CONTROL_KEY_FILE=/run/secrets/api-relay-client-key.pem
 AERO_API_RELAY_CONTROL_SERVER_NAME=relay.internal
 AERO_API_MISSION_DEPLOY_TOKEN='<at-least-24-random-bytes>'
-AERO_API_RELAY_CONTROL_TIMEOUT=45s
+AERO_API_RELAY_CONTROL_TIMEOUT=35s
 AERO_API_RELAY_PLACEMENT_TTL=10s
 ```
+
+`AERO_API_RELAY_CONTROL_TIMEOUT` is the per-RPC transport timeout. The HTTP
+deployment request separately budgets three sequential phases—conditional
+clear, exact context set, and mission deploy—plus five seconds of persistence
+and placement overhead. The 35-second maximum keeps that 110-second transport
+budget inside the independent two-minute mission authorization TTL. The service
+rechecks `expires_at` after clear and context acknowledgement, never begins a
+new mission dispatch after expiry, and performs post-expiry reconciliation as
+readback-only without changing operation context.
 
 Partial TLS configuration, a short/missing control token, or Relay control with
 the in-memory Registry is rejected at startup. Without the complete control

@@ -37,7 +37,7 @@ type Server struct {
 // Returns:
 //   - result: is the *Server value produced by New.
 func New(fleet *service.FleetService, requestTimeout time.Duration) *Server {
-	return &Server{fleet: fleet, requestTimeout: requestTimeout, missionDeploymentTimeout: 95 * time.Second}
+	return &Server{fleet: fleet, requestTimeout: requestTimeout, missionDeploymentTimeout: 110 * time.Second}
 }
 
 // NewWithWorkflows constructs httpapi from the supplied configuration and dependencies.
@@ -59,7 +59,7 @@ func NewWithWorkflows(fleet *service.FleetService, intents *service.IntentServic
 		preflight:                preflightSvc,
 		conformance:              conformance,
 		requestTimeout:           requestTimeout,
-		missionDeploymentTimeout: 95 * time.Second,
+		missionDeploymentTimeout: 110 * time.Second,
 	}
 	if len(deconflictionServices) > 0 {
 		server.deconfliction = deconflictionServices[0]

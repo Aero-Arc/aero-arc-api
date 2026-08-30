@@ -28,7 +28,7 @@ const (
 	defaultRegistryAddress     = "localhost:50051"
 	defaultRegistryDialTimeout = 5 * time.Second
 	defaultRegistryFreshness   = 30 * time.Second
-	defaultRelayControlTimeout = 45 * time.Second
+	defaultRelayControlTimeout = 35 * time.Second
 	defaultRelayPlacementTTL   = 10 * time.Second
 	defaultTelemetryFreshness  = 15 * time.Second
 	defaultTelemetryLookback   = 5 * time.Minute
@@ -268,7 +268,7 @@ func (cfg *Config) Validate() error {
 		return fmt.Errorf("AERO_API_RELAY_CONTROL_TIMEOUT must be > 0")
 	}
 	if cfg.RelayControlTimeout > defaultRelayControlTimeout {
-		return fmt.Errorf("AERO_API_RELAY_CONTROL_TIMEOUT must be <= %s so a context-and-deploy sequence cannot outlive the command expiry", defaultRelayControlTimeout)
+		return fmt.Errorf("AERO_API_RELAY_CONTROL_TIMEOUT must be <= %s so a clear-context-and-deploy sequence cannot outlive the command expiry", defaultRelayControlTimeout)
 	}
 	if cfg.RelayPlacementTTL <= 0 {
 		return fmt.Errorf("AERO_API_RELAY_PLACEMENT_TTL must be > 0")
