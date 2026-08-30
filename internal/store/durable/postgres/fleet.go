@@ -87,20 +87,49 @@ func (s *Store) CreateFlightRecord(ctx context.Context, flight domain.FlightReco
 
 // UpdateFlightRecord replaces a flight under an optimistic status fence.
 func (s *Store) UpdateFlightRecord(ctx context.Context, flight domain.FlightRecord, expectedStatus domain.FlightStatus) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin flight record update: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var currentStatus domain.FlightStatus
+	var currentAircraftID, currentIntentID string
+	if err := tx.QueryRow(ctx, `SELECT status,aircraft_id,intent_id FROM flight_records WHERE id=$1 FOR UPDATE`, flight.ID).
+		Scan(&currentStatus, &currentAircraftID, &currentIntentID); errors.Is(err, pgx.ErrNoRows) {
+		return durable.ErrNotFound
+	} else if err != nil {
+		return fmt.Errorf("lock flight record for update: %w", err)
+	}
+	if currentStatus != expectedStatus {
+		return durable.ErrVersionConflict
+	}
+	if err := lockMissionAircraftLifecycle(ctx, tx, currentAircraftID); err != nil {
+		return err
+	}
+	if err := lockIntent(ctx, tx, currentIntentID); err != nil {
+		return err
+	}
+	if err := rejectOutstandingMissionDeploymentForFlight(ctx, tx, flight.ID); err != nil {
+		return err
+	}
 	raw, err := json.Marshal(flight)
 	if err != nil {
 		return fmt.Errorf("encode flight record: %w", err)
 	}
-	tag, err := s.pool.Exec(ctx, `UPDATE flight_records SET operator_id=$1,aircraft_id=$2,intent_id=$3,intent_version=$4,status=$5,started_at=$6,data=$7 WHERE id=$8 AND status=$9`,
+	tag, err := tx.Exec(ctx, `UPDATE flight_records SET operator_id=$1,aircraft_id=$2,intent_id=$3,intent_version=$4,status=$5,started_at=$6,data=$7 WHERE id=$8 AND status=$9`,
 		flight.OperatorID, flight.AircraftID, flight.IntentID, flight.IntentVersion, flight.Status, flight.StartedAt, raw, flight.ID, expectedStatus)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "flight_records_one_active_aircraft_idx" {
+			return durable.ErrVersionConflict
+		}
 		return fmt.Errorf("update flight record: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		if _, getErr := s.GetFlightRecord(ctx, flight.ID); errors.Is(getErr, durable.ErrNotFound) {
-			return durable.ErrNotFound
-		}
 		return durable.ErrVersionConflict
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit flight record update: %w", err)
 	}
 	return nil
 }
@@ -168,6 +197,9 @@ func (s *Store) StartFlightWithCurrentMissionDeployment(ctx context.Context, fli
 	if currentStatus != expectedStatus {
 		return durable.ErrVersionConflict
 	}
+	if err := lockMissionAircraftLifecycle(ctx, tx, aircraftID); err != nil {
+		return err
+	}
 	var anotherActive bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM flight_records WHERE aircraft_id=$1 AND id<>$2 AND status=$3)`, aircraftID, flight.ID, domain.FlightStatusActive).Scan(&anotherActive); err != nil {
 		return fmt.Errorf("check active aircraft flight: %w", err)
@@ -196,18 +228,35 @@ func (s *Store) StartFlightWithCurrentMissionDeployment(ctx context.Context, fli
 	} else if err != nil {
 		return fmt.Errorf("get current mission for flight start: %w", err)
 	}
-	var pending bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM mission_deployments WHERE flight_id=$1 AND mission_id=$2 AND status IN ('pending','outcome_unknown'))`, flight.ID, missionID).Scan(&pending); err != nil {
-		return fmt.Errorf("check uncertain mission deployment: %w", err)
+	var outstanding bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM mission_deployments AS deployment
+			JOIN flight_records AS candidate ON candidate.id=deployment.flight_id
+			WHERE candidate.aircraft_id=$1
+			  AND candidate.status=$2
+			  AND deployment.status IN ($3,$4,$5)
+			  AND deployment.mission_id=(SELECT id FROM missions WHERE flight_id=candidate.id ORDER BY version DESC LIMIT 1)
+		)`, aircraftID, domain.FlightStatusPlanned,
+		domain.MissionDeploymentPending, domain.MissionDeploymentTemporaryError, domain.MissionDeploymentOutcomeUnknown).Scan(&outstanding); err != nil {
+		return fmt.Errorf("check uncertain aircraft mission deployment: %w", err)
 	}
-	if pending {
+	if outstanding {
 		return durable.ErrVersionConflict
 	}
-	var verified bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM mission_deployments WHERE flight_id=$1 AND mission_id=$2 AND data->'deployment'->>'mission_digest'=$3 AND status IN ('applied','already_applied'))`, flight.ID, missionID, missionDigest).Scan(&verified); err != nil {
-		return fmt.Errorf("check verified mission deployment: %w", err)
+	latest, err := getMissionDeployment(ctx, tx, `
+		WHERE flight_id IN (SELECT id FROM flight_records WHERE aircraft_id=$1)
+		ORDER BY created_at DESC,id DESC
+		LIMIT 1`, aircraftID)
+	if errors.Is(err, durable.ErrNotFound) {
+		return durable.ErrVersionConflict
 	}
-	if !verified {
+	if err != nil {
+		return fmt.Errorf("get latest aircraft mission deployment: %w", err)
+	}
+	if latest.FlightID != flight.ID || latest.MissionID != missionID || latest.MissionDigest != missionDigest ||
+		(latest.Status != domain.MissionDeploymentApplied && latest.Status != domain.MissionDeploymentAlreadyApplied) {
 		return durable.ErrVersionConflict
 	}
 	raw, err := json.Marshal(flight)

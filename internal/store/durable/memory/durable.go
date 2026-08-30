@@ -399,6 +399,9 @@ func (s *Store) ListMaintenanceEvents(_ context.Context, aircraftID string) ([]d
 func (s *Store) CreateOperationalIntent(_ context.Context, intent domain.OperationalIntent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.hasOutstandingMissionDeploymentForIntentLocked(intent.ID) {
+		return durable.ErrVersionConflict
+	}
 	key := operationalIntentKey(intent.ID, intent.Version)
 	if _, exists := s.operationalIntents[key]; exists {
 		return durable.ErrAlreadyExists
@@ -460,6 +463,9 @@ func (s *Store) updateOperationalIntentLocked(intent domain.OperationalIntent, e
 	if current.Version != intent.Version || current.Revision != expectedRevision {
 		return durable.ErrVersionConflict
 	}
+	if s.hasOutstandingMissionDeploymentForIntentLocked(intent.ID) {
+		return durable.ErrVersionConflict
+	}
 	intent.Revision = expectedRevision + 1
 	s.operationalIntents[operationalIntentKey(intent.ID, intent.Version)] = intent
 	if intent.Status == domain.IntentStatusCanceled || intent.Status == domain.IntentStatusComplete {
@@ -499,6 +505,9 @@ func (s *Store) acceptOperationalIntentLocked(intent domain.OperationalIntent, e
 		return durable.ErrNotFound
 	}
 	if current.Version != intent.Version || current.Revision != expectedRevision {
+		return durable.ErrVersionConflict
+	}
+	if s.hasOutstandingMissionDeploymentForIntentLocked(intent.ID) {
 		return durable.ErrVersionConflict
 	}
 	intent.Revision = expectedRevision + 1
@@ -1033,6 +1042,9 @@ func (s *Store) ListOperationalIntentVersions(_ context.Context, intentID string
 func (s *Store) RecordOperationalVolume(_ context.Context, volume domain.OperationalVolume) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.hasOutstandingMissionDeploymentForIntentLocked(volume.IntentID) {
+		return durable.ErrVersionConflict
+	}
 	s.operationalVolumes[operationalVolumeKey(volume)] = volume
 	return nil
 }
@@ -1050,6 +1062,9 @@ func (s *Store) RecordOperationalVolume(_ context.Context, volume domain.Operati
 func (s *Store) ReplaceOperationalVolumes(_ context.Context, intentID string, intentVersion int, volumes []domain.OperationalVolume) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.hasOutstandingMissionDeploymentForIntentLocked(intentID) {
+		return durable.ErrVersionConflict
+	}
 	for _, volume := range volumes {
 		if volume.IntentID != intentID || volume.IntentVersion != intentVersion {
 			return fmt.Errorf("operational volume %q is outside replacement scope", volume.ID)
@@ -1102,6 +1117,9 @@ func (s *Store) ReplaceOperationalIntent(
 		return durable.ErrVersionConflict
 	}
 	if current.Revision != expectedRevision {
+		return durable.ErrVersionConflict
+	}
+	if s.hasOutstandingMissionDeploymentForIntentLocked(intent.ID) {
 		return durable.ErrVersionConflict
 	}
 	if intent.Version == current.Version {
@@ -1314,6 +1332,9 @@ func (s *Store) UpdateFlightRecord(_ context.Context, flight domain.FlightRecord
 	if current.Status != expectedStatus {
 		return durable.ErrVersionConflict
 	}
+	if s.hasOutstandingMissionDeploymentForFlightLocked(current.ID) {
+		return durable.ErrVersionConflict
+	}
 	s.flightRecords[flight.ID] = flight
 	return nil
 }
@@ -1404,6 +1425,9 @@ func (s *Store) CreateMissionForPlannedFlight(_ context.Context, mission domain.
 		mission.IntentVersion != flight.IntentVersion || intent.Version != flight.IntentVersion ||
 		intent.OperatorID != flight.OperatorID || intent.AircraftID != flight.AircraftID ||
 		(intent.Status != domain.IntentStatusAccepted && intent.Status != domain.IntentStatusActive) {
+		return domain.Mission{}, durable.ErrVersionConflict
+	}
+	if s.hasOutstandingMissionDeploymentForFlightLocked(flight.ID) {
 		return domain.Mission{}, durable.ErrVersionConflict
 	}
 	return s.createMissionLocked(mission)
@@ -1587,19 +1611,37 @@ func (s *Store) CreateMissionDeployment(_ context.Context, deployment domain.Mis
 func (s *Store) CreateMissionDeploymentForPlannedFlight(_ context.Context, deployment domain.MissionDeployment) (domain.MissionDeployment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var replay *domain.MissionDeployment
 	if id, exists := s.deploymentByIdempotencyKey[deployment.IdempotencyKey]; exists {
 		existing := s.missionDeployments[id]
 		if existing.IdempotencyRequest != deployment.IdempotencyRequest {
 			return domain.MissionDeployment{}, durable.ErrIdempotencyConflict
 		}
-		return existing, nil
+		if !missionDeploymentOutstanding(existing.Status) {
+			return existing, nil
+		}
+		replay = &existing
 	}
 	flight, exists := s.flightRecords[deployment.FlightID]
 	if !exists {
 		return domain.MissionDeployment{}, durable.ErrNotFound
 	}
-	if flight.Status != domain.FlightStatusPlanned {
+	if flight.Status != domain.FlightStatusPlanned || deployment.AircraftID != flight.AircraftID {
 		return domain.MissionDeployment{}, durable.ErrVersionConflict
+	}
+	intent, exists := s.latestOperationalIntent(flight.IntentID)
+	if !exists {
+		return domain.MissionDeployment{}, durable.ErrNotFound
+	}
+	if deployment.OperatorID != flight.OperatorID || deployment.IntentID != flight.IntentID || deployment.IntentVersion != flight.IntentVersion ||
+		intent.Version != flight.IntentVersion || intent.OperatorID != flight.OperatorID || intent.AircraftID != flight.AircraftID ||
+		(intent.Status != domain.IntentStatusAccepted && intent.Status != domain.IntentStatusActive) {
+		return domain.MissionDeployment{}, durable.ErrVersionConflict
+	}
+	for _, candidate := range s.flightRecords {
+		if candidate.AircraftID == flight.AircraftID && candidate.Status == domain.FlightStatusActive {
+			return domain.MissionDeployment{}, durable.ErrVersionConflict
+		}
 	}
 	var currentMission *domain.Mission
 	for _, mission := range s.missions {
@@ -1612,11 +1654,33 @@ func (s *Store) CreateMissionDeploymentForPlannedFlight(_ context.Context, deplo
 		return domain.MissionDeployment{}, durable.ErrVersionConflict
 	}
 	for _, existing := range s.missionDeployments {
-		if existing.FlightID == deployment.FlightID && existing.MissionID == deployment.MissionID && missionDeploymentOutstanding(existing.Status) {
+		if replay != nil && existing.ID == replay.ID {
+			continue
+		}
+		existingFlight, exists := s.flightRecords[existing.FlightID]
+		if !exists || existingFlight.AircraftID != flight.AircraftID || existingFlight.Status != domain.FlightStatusPlanned || !missionDeploymentOutstanding(existing.Status) {
+			continue
+		}
+		existingMission := s.currentMissionForFlightLocked(existing.FlightID)
+		if existingMission != nil && existing.MissionID == existingMission.ID {
 			return domain.MissionDeployment{}, durable.ErrVersionConflict
 		}
 	}
+	if replay != nil {
+		return *replay, nil
+	}
 	return s.createMissionDeploymentLocked(deployment)
+}
+
+func (s *Store) currentMissionForFlightLocked(flightID string) *domain.Mission {
+	var current *domain.Mission
+	for _, mission := range s.missions {
+		if mission.FlightID == flightID && (current == nil || mission.Version > current.Version) {
+			candidate := mission
+			current = &candidate
+		}
+	}
+	return current
 }
 
 func (s *Store) createMissionDeploymentLocked(deployment domain.MissionDeployment) (domain.MissionDeployment, error) {
@@ -1660,29 +1724,31 @@ func (s *Store) StartFlightWithCurrentMissionDeployment(_ context.Context, fligh
 	if intent.Status != domain.IntentStatusActive || intent.Version != currentFlight.IntentVersion || intent.AircraftID != currentFlight.AircraftID {
 		return durable.ErrVersionConflict
 	}
-	var currentMission *domain.Mission
-	for _, mission := range s.missions {
-		if mission.FlightID == flight.ID && (currentMission == nil || mission.Version > currentMission.Version) {
-			candidate := mission
-			currentMission = &candidate
-		}
-	}
+	currentMission := s.currentMissionForFlightLocked(flight.ID)
 	if currentMission == nil {
 		return durable.ErrVersionConflict
 	}
-	verified := false
+	var latest *domain.MissionDeployment
 	for _, deployment := range s.missionDeployments {
-		if deployment.FlightID != flight.ID || deployment.MissionID != currentMission.ID || deployment.MissionDigest != currentMission.MissionDigest {
+		candidateFlight, exists := s.flightRecords[deployment.FlightID]
+		if !exists || candidateFlight.AircraftID != currentFlight.AircraftID {
 			continue
 		}
-		if deployment.Status == domain.MissionDeploymentPending || deployment.Status == domain.MissionDeploymentOutcomeUnknown {
-			return durable.ErrVersionConflict
+		if candidateFlight.Status == domain.FlightStatusPlanned && missionDeploymentOutstanding(deployment.Status) {
+			candidateMission := s.currentMissionForFlightLocked(candidateFlight.ID)
+			if candidateMission != nil && deployment.MissionID == candidateMission.ID {
+				return durable.ErrVersionConflict
+			}
 		}
-		if deployment.Status == domain.MissionDeploymentApplied || deployment.Status == domain.MissionDeploymentAlreadyApplied {
-			verified = true
+		if latest == nil || deployment.CreatedAt.After(latest.CreatedAt) ||
+			(deployment.CreatedAt.Equal(latest.CreatedAt) && deployment.ID > latest.ID) {
+			candidate := deployment
+			latest = &candidate
 		}
 	}
-	if !verified {
+	if latest == nil || latest.FlightID != flight.ID || latest.MissionID != currentMission.ID ||
+		latest.MissionDigest != currentMission.MissionDigest ||
+		(latest.Status != domain.MissionDeploymentApplied && latest.Status != domain.MissionDeploymentAlreadyApplied) {
 		return durable.ErrVersionConflict
 	}
 	s.flightRecords[flight.ID] = flight
@@ -1765,6 +1831,28 @@ func deploymentPreferredForRestore(candidate, current domain.MissionDeployment) 
 
 func missionDeploymentOutstanding(status domain.MissionDeploymentStatus) bool {
 	return status == domain.MissionDeploymentPending || status == domain.MissionDeploymentTemporaryError || status == domain.MissionDeploymentOutcomeUnknown
+}
+
+func (s *Store) hasOutstandingMissionDeploymentForFlightLocked(flightID string) bool {
+	currentMission := s.currentMissionForFlightLocked(flightID)
+	if currentMission == nil {
+		return false
+	}
+	for _, deployment := range s.missionDeployments {
+		if deployment.FlightID == flightID && deployment.MissionID == currentMission.ID && missionDeploymentOutstanding(deployment.Status) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Store) hasOutstandingMissionDeploymentForIntentLocked(intentID string) bool {
+	for _, flight := range s.flightRecords {
+		if flight.IntentID == intentID && s.hasOutstandingMissionDeploymentForFlightLocked(flight.ID) {
+			return true
+		}
+	}
+	return false
 }
 
 // UpdateMissionDeployment replaces a deployment after an optimistic revision check.

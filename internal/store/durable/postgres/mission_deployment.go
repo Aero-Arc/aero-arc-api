@@ -41,23 +41,57 @@ func (s *Store) CreateMissionDeploymentForPlannedFlight(ctx context.Context, dep
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 3))`, deployment.IdempotencyKey); err != nil {
 		return domain.MissionDeployment{}, fmt.Errorf("lock mission deployment idempotency key: %w", err)
 	}
+	var replay *domain.MissionDeployment
 	existing, err := getMissionDeploymentByIdempotencyKey(ctx, tx, deployment.IdempotencyKey)
 	if err == nil {
 		if existing.IdempotencyRequest != deployment.IdempotencyRequest {
 			return domain.MissionDeployment{}, durable.ErrIdempotencyConflict
 		}
-		return existing, nil
+		if !missionDeploymentOutstanding(existing.Status) {
+			return existing, nil
+		}
+		replay = &existing
 	}
-	if !errors.Is(err, durable.ErrNotFound) {
+	if err != nil && !errors.Is(err, durable.ErrNotFound) {
 		return domain.MissionDeployment{}, err
 	}
 	var flightStatus domain.FlightStatus
-	if err := tx.QueryRow(ctx, `SELECT status FROM flight_records WHERE id=$1 FOR UPDATE`, deployment.FlightID).Scan(&flightStatus); errors.Is(err, pgx.ErrNoRows) {
+	var operatorID, aircraftID, intentID string
+	var intentVersion int
+	if err := tx.QueryRow(ctx, `SELECT status,operator_id,aircraft_id,intent_id,intent_version FROM flight_records WHERE id=$1 FOR UPDATE`, deployment.FlightID).
+		Scan(&flightStatus, &operatorID, &aircraftID, &intentID, &intentVersion); errors.Is(err, pgx.ErrNoRows) {
 		return domain.MissionDeployment{}, durable.ErrNotFound
 	} else if err != nil {
 		return domain.MissionDeployment{}, fmt.Errorf("lock deployment flight: %w", err)
 	}
-	if flightStatus != domain.FlightStatusPlanned {
+	if flightStatus != domain.FlightStatusPlanned || deployment.OperatorID != operatorID || deployment.AircraftID != aircraftID ||
+		deployment.IntentID != intentID || deployment.IntentVersion != intentVersion {
+		return domain.MissionDeployment{}, durable.ErrVersionConflict
+	}
+	if err := lockMissionAircraftLifecycle(ctx, tx, aircraftID); err != nil {
+		return domain.MissionDeployment{}, err
+	}
+	if err := lockIntent(ctx, tx, intentID); err != nil {
+		return domain.MissionDeployment{}, err
+	}
+	var currentIntentVersion int
+	var currentIntentOperator, currentIntentAircraft, currentIntentStatus string
+	if err := tx.QueryRow(ctx, `SELECT version,data->>'operator_id',aircraft_id,data->>'status' FROM operational_intents WHERE id=$1 ORDER BY version DESC LIMIT 1 FOR UPDATE`, intentID).
+		Scan(&currentIntentVersion, &currentIntentOperator, &currentIntentAircraft, &currentIntentStatus); errors.Is(err, pgx.ErrNoRows) {
+		return domain.MissionDeployment{}, durable.ErrNotFound
+	} else if err != nil {
+		return domain.MissionDeployment{}, fmt.Errorf("lock current operational intent for mission deployment: %w", err)
+	}
+	intentStatus := domain.IntentStatus(currentIntentStatus)
+	if currentIntentVersion != intentVersion || currentIntentOperator != operatorID || currentIntentAircraft != aircraftID ||
+		(intentStatus != domain.IntentStatusAccepted && intentStatus != domain.IntentStatusActive) {
+		return domain.MissionDeployment{}, durable.ErrVersionConflict
+	}
+	var activeFlight bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM flight_records WHERE aircraft_id=$1 AND status=$2)`, aircraftID, domain.FlightStatusActive).Scan(&activeFlight); err != nil {
+		return domain.MissionDeployment{}, fmt.Errorf("check active aircraft flight before deployment: %w", err)
+	}
+	if activeFlight {
 		return domain.MissionDeployment{}, durable.ErrVersionConflict
 	}
 	var currentMissionID, currentMissionDigest string
@@ -70,16 +104,30 @@ func (s *Store) CreateMissionDeploymentForPlannedFlight(ctx context.Context, dep
 	if currentMissionID != deployment.MissionID || currentMissionDigest != deployment.MissionDigest {
 		return domain.MissionDeployment{}, durable.ErrVersionConflict
 	}
-	_, outstandingErr := getMissionDeployment(ctx, tx, `
-		WHERE flight_id=$1 AND mission_id=$2 AND status IN ($3,$4,$5)
-		ORDER BY created_at DESC,id DESC
-		LIMIT 1`, deployment.FlightID, deployment.MissionID,
-		domain.MissionDeploymentPending, domain.MissionDeploymentTemporaryError, domain.MissionDeploymentOutcomeUnknown)
-	if outstandingErr == nil {
+	replayID := ""
+	if replay != nil {
+		replayID = replay.ID
+	}
+	var outstanding bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM mission_deployments AS deployment
+			JOIN flight_records AS flight ON flight.id=deployment.flight_id
+			WHERE flight.aircraft_id=$1
+			  AND flight.status=$2
+			  AND deployment.id<>$3
+			  AND deployment.status IN ($4,$5,$6)
+			  AND deployment.mission_id=(SELECT id FROM missions WHERE flight_id=flight.id ORDER BY version DESC LIMIT 1)
+		)`, aircraftID, domain.FlightStatusPlanned, replayID,
+		domain.MissionDeploymentPending, domain.MissionDeploymentTemporaryError, domain.MissionDeploymentOutcomeUnknown).Scan(&outstanding); err != nil {
+		return domain.MissionDeployment{}, fmt.Errorf("check outstanding aircraft mission deployment: %w", err)
+	}
+	if outstanding {
 		return domain.MissionDeployment{}, durable.ErrVersionConflict
 	}
-	if !errors.Is(outstandingErr, durable.ErrNotFound) {
-		return domain.MissionDeployment{}, outstandingErr
+	if replay != nil {
+		return *replay, nil
 	}
 	deployment, err = createMissionDeployment(ctx, tx, deployment)
 	if err != nil {
@@ -89,6 +137,54 @@ func (s *Store) CreateMissionDeploymentForPlannedFlight(ctx context.Context, dep
 		return domain.MissionDeployment{}, fmt.Errorf("commit planned-flight mission deployment: %w", err)
 	}
 	return deployment, nil
+}
+
+func lockMissionAircraftLifecycle(ctx context.Context, tx pgx.Tx, aircraftID string) error {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 4))`, aircraftID); err != nil {
+		return fmt.Errorf("lock aircraft mission lifecycle %q: %w", aircraftID, err)
+	}
+	return nil
+}
+
+func missionDeploymentOutstanding(status domain.MissionDeploymentStatus) bool {
+	return status == domain.MissionDeploymentPending || status == domain.MissionDeploymentTemporaryError || status == domain.MissionDeploymentOutcomeUnknown
+}
+
+func rejectOutstandingMissionDeploymentForIntent(ctx context.Context, tx pgx.Tx, intentID string) error {
+	var outstanding bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM mission_deployments AS deployment
+			JOIN flight_records AS flight ON flight.id=deployment.flight_id
+			WHERE flight.intent_id=$1
+			  AND deployment.status IN ($2,$3,$4)
+			  AND deployment.mission_id=(SELECT id FROM missions WHERE flight_id=flight.id ORDER BY version DESC LIMIT 1)
+		)`, intentID, domain.MissionDeploymentPending, domain.MissionDeploymentTemporaryError, domain.MissionDeploymentOutcomeUnknown).Scan(&outstanding); err != nil {
+		return fmt.Errorf("check operational intent mission deployment fence: %w", err)
+	}
+	if outstanding {
+		return durable.ErrVersionConflict
+	}
+	return nil
+}
+
+func rejectOutstandingMissionDeploymentForFlight(ctx context.Context, tx pgx.Tx, flightID string) error {
+	var outstanding bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM mission_deployments
+			WHERE flight_id=$1
+			  AND status IN ($2,$3,$4)
+			  AND mission_id=(SELECT id FROM missions WHERE flight_id=$1 ORDER BY version DESC LIMIT 1)
+		)`, flightID, domain.MissionDeploymentPending, domain.MissionDeploymentTemporaryError, domain.MissionDeploymentOutcomeUnknown).Scan(&outstanding); err != nil {
+		return fmt.Errorf("check flight mission deployment fence: %w", err)
+	}
+	if outstanding {
+		return durable.ErrVersionConflict
+	}
+	return nil
 }
 
 func createMissionDeployment(ctx context.Context, tx pgx.Tx, deployment domain.MissionDeployment) (domain.MissionDeployment, error) {
