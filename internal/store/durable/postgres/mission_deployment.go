@@ -70,6 +70,17 @@ func (s *Store) CreateMissionDeploymentForPlannedFlight(ctx context.Context, dep
 	if currentMissionID != deployment.MissionID || currentMissionDigest != deployment.MissionDigest {
 		return domain.MissionDeployment{}, durable.ErrVersionConflict
 	}
+	_, outstandingErr := getMissionDeployment(ctx, tx, `
+		WHERE flight_id=$1 AND mission_id=$2 AND status IN ($3,$4,$5)
+		ORDER BY created_at DESC,id DESC
+		LIMIT 1`, deployment.FlightID, deployment.MissionID,
+		domain.MissionDeploymentPending, domain.MissionDeploymentTemporaryError, domain.MissionDeploymentOutcomeUnknown)
+	if outstandingErr == nil {
+		return domain.MissionDeployment{}, durable.ErrVersionConflict
+	}
+	if !errors.Is(outstandingErr, durable.ErrNotFound) {
+		return domain.MissionDeployment{}, outstandingErr
+	}
 	deployment, err = createMissionDeployment(ctx, tx, deployment)
 	if err != nil {
 		return domain.MissionDeployment{}, err
@@ -125,6 +136,28 @@ func (s *Store) GetMissionDeployment(ctx context.Context, deploymentID string) (
 // GetMissionDeploymentByIdempotencyKey returns one deployment request replay.
 func (s *Store) GetMissionDeploymentByIdempotencyKey(ctx context.Context, key string) (domain.MissionDeployment, error) {
 	return getMissionDeploymentByIdempotencyKey(ctx, s.pool, key)
+}
+
+// GetCurrentMissionDeploymentForFlight returns the authoritative deployment
+// for the flight's current mission, preferring an unresolved retryable command
+// over newer terminal history.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL read.
+//   - flightID: identifies the flight whose current mission is being restored.
+//
+// Returns:
+//   - result: is the outstanding or latest deployment for the current mission.
+//   - error: is durable.ErrNotFound when the flight has no mission deployment.
+func (s *Store) GetCurrentMissionDeploymentForFlight(ctx context.Context, flightID string) (domain.MissionDeployment, error) {
+	return getMissionDeployment(ctx, s.pool, `
+		WHERE flight_id=$1
+		  AND mission_id=(SELECT id FROM missions WHERE flight_id=$1 ORDER BY version DESC LIMIT 1)
+		ORDER BY
+		  CASE WHEN status IN ($2,$3,$4) THEN 0 ELSE 1 END,
+		  created_at DESC,
+		  id DESC
+		LIMIT 1`, flightID, domain.MissionDeploymentPending, domain.MissionDeploymentTemporaryError, domain.MissionDeploymentOutcomeUnknown)
 }
 
 // UpdateMissionDeployment persists an observed result with optimistic concurrency.

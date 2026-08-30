@@ -199,6 +199,9 @@ CREATE TABLE IF NOT EXISTS flight_records (
 
 CREATE INDEX IF NOT EXISTS flight_records_aircraft_idx
     ON flight_records (aircraft_id, started_at DESC, id);
+CREATE UNIQUE INDEX IF NOT EXISTS flight_records_one_active_aircraft_idx
+    ON flight_records (aircraft_id)
+    WHERE status = 'active';
 
 CREATE TABLE IF NOT EXISTS missions (
     id text PRIMARY KEY,

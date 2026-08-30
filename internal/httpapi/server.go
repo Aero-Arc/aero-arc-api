@@ -162,7 +162,9 @@ func (s *Server) Handler() http.Handler {
 	api.POST("/flights/{flight_id}/missions/import", s.handleImportMission)
 	api.GET("/flights/{flight_id}/missions/current", s.handleGetCurrentMission)
 	api.POST("/flights/{flight_id}/missions/{mission_id}/deploy", s.handleDeployCurrentMission)
+	api.GET("/flights/{flight_id}/mission-deployments/current", s.handleGetCurrentMissionDeployment)
 	api.GET("/flights/{flight_id}/mission-deployments/{deployment_id}", s.handleGetMissionDeployment)
+	api.POST("/flights/{flight_id}/mission-deployments/{deployment_id}/reconcile", s.handleReconcileMissionDeployment)
 	api.GET("/flights/{flight_id}/replay", s.handleGetFlightReplay)
 
 	if s.workflowsAvailable() {

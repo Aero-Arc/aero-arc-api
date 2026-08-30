@@ -5,7 +5,7 @@ go 1.26.2
 require (
 	github.com/Aero-Arc/dss-clients v0.0.0-20260727090752-3dbacffe9489
 	github.com/InfluxCommunity/influxdb3-go/v2 v2.13.0
-	github.com/aero-arc/aero-arc-protos v0.0.0-20260827000821-5dda92b25784
+	github.com/aero-arc/aero-arc-protos v0.0.0-20260830085136-dad5746d1275
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
@@ -13,6 +13,7 @@ require (
 	github.com/testcontainers/testcontainers-go v0.40.0
 	github.com/urfave/cli/v3 v3.9.0
 	google.golang.org/grpc v1.79.1
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -89,6 +90,5 @@ require (
 	golang.org/x/tools v0.41.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

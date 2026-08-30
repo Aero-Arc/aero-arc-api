@@ -313,6 +313,59 @@ func (s *Server) handleGetMissionDeployment(c *mach.Context) {
 	writeJSON(c, http.StatusOK, deployment)
 }
 
+func (s *Server) handleGetCurrentMissionDeployment(c *mach.Context) {
+	if !s.missionDeploymentControlEnabled() {
+		writeError(c, http.StatusServiceUnavailable, "secure Relay mission control is not configured")
+		return
+	}
+	if !s.authorizeMissionDeployment(c) {
+		writeError(c, http.StatusUnauthorized, "valid mission deployment authorization is required")
+		return
+	}
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	deployment, err := s.fleet.GetCurrentMissionDeployment(ctx, c.Param("flight_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, deployment)
+}
+
+func (s *Server) handleReconcileMissionDeployment(c *mach.Context) {
+	if !s.missionDeploymentControlEnabled() {
+		writeError(c, http.StatusServiceUnavailable, "secure Relay mission control is not configured")
+		return
+	}
+	if !s.authorizeMissionDeployment(c) {
+		writeError(c, http.StatusUnauthorized, "valid mission deployment authorization is required")
+		return
+	}
+	defer func() { _ = c.Request.Body.Close() }()
+	var probe [1]byte
+	if count, err := c.Request.Body.Read(probe[:]); count != 0 || (err != nil && !errors.Is(err, io.EOF)) {
+		writeError(c, http.StatusBadRequest, "mission deployment reconciliation request must have an empty body")
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Context(), s.missionDeploymentTimeout)
+	defer cancel()
+	result, err := s.fleet.ReconcileMissionDeployment(ctx, c.Param("flight_id"), c.Param("deployment_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	status := http.StatusOK
+	if missionDeploymentPending(result.Deployment.Status) {
+		status = http.StatusAccepted
+	}
+	c.Response.Header().Set("Idempotent-Replayed", "true")
+	writeJSON(c, status, result)
+}
+
+func missionDeploymentPending(status domain.MissionDeploymentStatus) bool {
+	return status == domain.MissionDeploymentPending || status == domain.MissionDeploymentTemporaryError || status == domain.MissionDeploymentOutcomeUnknown
+}
+
 func (s *Server) handleCreateAircraft(c *mach.Context) {
 	var aircraft domain.Aircraft
 	if err := decodeJSON(c, &aircraft); err != nil {

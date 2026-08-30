@@ -97,11 +97,17 @@ func (s *FleetService) DeployCurrentMission(ctx context.Context, flightID, expec
 	if replayed && !missionDeploymentRetryable(deployment.Status) {
 		return DeployMissionResult{Deployment: deployment, Replayed: true}, nil
 	}
-	if !deployment.ExpiresAt.After(now) {
+	commandExpired := !deployment.ExpiresAt.After(now)
+	reconciliationOpen := deployment.ReconcileUntil.After(now)
+	if commandExpired && (!replayed || !missionDeploymentRetryable(deployment.Status) || !reconciliationOpen) {
 		if missionDeploymentRetryable(deployment.Status) {
 			updated := deployment
 			updated.Status = domain.MissionDeploymentOutcomeUnknown
-			updated.Message = "deployment command expired before its outcome could be reconciled"
+			if reconciliationOpen {
+				updated.Message = "deployment command expired before its first dispatch; no effect was authorized"
+			} else {
+				updated.Message = "deployment reconciliation window elapsed with no correlated terminal outcome"
+			}
 			updated.UpdatedAt = now
 			if err := s.durable.UpdateMissionDeployment(ctx, updated, deployment.Revision); err != nil {
 				if errors.Is(err, durable.ErrVersionConflict) {
@@ -118,8 +124,10 @@ func (s *FleetService) DeployCurrentMission(ctx context.Context, flightID, expec
 		return DeployMissionResult{Deployment: deployment, Replayed: replayed}, nil
 	}
 
-	// Re-read all authoritative bindings immediately before every dispatch or
-	// reconciliation retry. A stale UI request can never choose an old mission.
+	// Re-read all authoritative bindings immediately before every first dispatch
+	// or reconciliation retry. A stale UI request can never choose an old mission.
+	// The Agent independently fences a first effect at ExpiresAt while allowing
+	// the same durably uncertain command to recover through ReconcileUntil.
 	flight, mission, aircraft, err = s.validateMissionDeploymentBinding(ctx, flightID)
 	if err != nil {
 		return DeployMissionResult{}, err
@@ -206,6 +214,57 @@ func (s *FleetService) GetMissionDeployment(ctx context.Context, flightID, deplo
 		return domain.MissionDeployment{}, durable.ErrNotFound
 	}
 	return deployment, nil
+}
+
+// GetCurrentMissionDeployment restores the authoritative deployment state for
+// a flight's current immutable mission. Outstanding retryable work is returned
+// ahead of terminal history so a reloaded client cannot accidentally create a
+// second command while the original outcome is unresolved.
+//
+// Parameters:
+//   - ctx: controls cancellation and deadlines for the durable read.
+//   - flightID: identifies the flight whose current deployment is being restored.
+//
+// Returns:
+//   - deployment: is the outstanding or latest deployment for the current mission.
+//   - error: reports invalid scope, missing state, cancellation, or persistence failures.
+func (s *FleetService) GetCurrentMissionDeployment(ctx context.Context, flightID string) (domain.MissionDeployment, error) {
+	flightID = strings.TrimSpace(flightID)
+	if flightID == "" {
+		return domain.MissionDeployment{}, fmt.Errorf("%w: flight_id is required", ErrValidation)
+	}
+	deployment, err := s.durable.GetCurrentMissionDeploymentForFlight(ctx, flightID)
+	if err != nil {
+		return domain.MissionDeployment{}, fmt.Errorf("get current mission deployment: %w", err)
+	}
+	if deployment.FlightID != flightID {
+		return domain.MissionDeployment{}, durable.ErrNotFound
+	}
+	return deployment, nil
+}
+
+// ReconcileMissionDeployment safely retries one server-owned deployment after
+// restoring it by identity. Mission bytes, routing, command IDs, and the
+// original idempotency key remain durable server state and are never accepted
+// from the caller.
+//
+// Parameters:
+//   - ctx: controls the Relay reconciliation attempt and durable writes.
+//   - flightID: scopes the deployment to its owning flight.
+//   - deploymentID: identifies the durable deployment restored by the client.
+//
+// Returns:
+//   - result: is the original terminal result or the updated retry result.
+//   - error: reports invalid scope, stale mission binding, unavailable control, or dependency failures.
+func (s *FleetService) ReconcileMissionDeployment(ctx context.Context, flightID, deploymentID string) (DeployMissionResult, error) {
+	deployment, err := s.GetMissionDeployment(ctx, strings.TrimSpace(flightID), strings.TrimSpace(deploymentID))
+	if err != nil {
+		return DeployMissionResult{}, err
+	}
+	if !missionDeploymentRetryable(deployment.Status) {
+		return DeployMissionResult{Deployment: deployment, Replayed: true}, nil
+	}
+	return s.DeployCurrentMission(ctx, deployment.FlightID, deployment.MissionID, deployment.MissionDigest, deployment.IdempotencyKey)
 }
 
 func (s *FleetService) validateMissionDeploymentBinding(ctx context.Context, flightID string) (domain.FlightRecord, domain.Mission, domain.Aircraft, error) {

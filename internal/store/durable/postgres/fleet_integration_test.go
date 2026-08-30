@@ -63,6 +63,10 @@ func TestAircraftFlightAndMissionFencePersistAcrossRestart(t *testing.T) {
 	if err != nil || restartedFlight.IntentVersion != flight.IntentVersion || restartedFlight.Status != domain.FlightStatusPlanned {
 		t.Fatalf("flight = %#v err=%v", restartedFlight, err)
 	}
+	restoredDeployment, err := reader.GetCurrentMissionDeploymentForFlight(ctx, flight.ID)
+	if err != nil || restoredDeployment.ID != deployment.ID {
+		t.Fatalf("restored deployment = %#v err=%v, want %s", restoredDeployment, err, deployment.ID)
+	}
 	for name, get := range map[string]func() (domain.Mission, error){
 		"identity":    func() (domain.Mission, error) { return reader.GetMission(ctx, mission.ID) },
 		"idempotency": func() (domain.Mission, error) { return reader.GetMissionByIdempotencyKey(ctx, mission.IdempotencyKey) },
@@ -82,6 +86,31 @@ func TestAircraftFlightAndMissionFencePersistAcrossRestart(t *testing.T) {
 	active.Status, active.StartedAt = domain.FlightStatusActive, now.Add(time.Minute)
 	if err := reader.StartFlightWithCurrentMissionDeployment(ctx, active, domain.FlightStatusPlanned); err != nil {
 		t.Fatal(err)
+	}
+	commanded, err := reader.GetDeployedMissionForActiveFlight(ctx, aircraft.ID, intent.ID, intent.Version)
+	if err != nil || commanded.ID != mission.ID {
+		t.Fatalf("commanded mission = %#v err=%v, want %s", commanded, err, mission.ID)
+	}
+	futureFlight := flight
+	futureFlight.ID = "persist-future-flight"
+	if err := reader.CreateFlightRecord(ctx, futureFlight); err != nil {
+		t.Fatal(err)
+	}
+	futureMission, err := reader.CreateMissionForPlannedFlight(ctx, postgresLifecycleMission(futureFlight, "persist-future-mission", "persist-future-import-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(futureMission, "persist-future-deployment", "persist-future-deploy-key", domain.MissionDeploymentApplied)); err != nil {
+		t.Fatal(err)
+	}
+	commanded, err = reader.GetDeployedMissionForActiveFlight(ctx, aircraft.ID, intent.ID, intent.Version)
+	if err != nil || commanded.ID != mission.ID {
+		t.Fatalf("commanded mission after future import = %#v err=%v, want %s", commanded, err, mission.ID)
+	}
+	futureActive := futureFlight
+	futureActive.Status, futureActive.StartedAt = domain.FlightStatusActive, now.Add(2*time.Minute)
+	if err := reader.StartFlightWithCurrentMissionDeployment(ctx, futureActive, domain.FlightStatusPlanned); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("second active flight error = %v, want version conflict", err)
 	}
 	if replay, err := reader.CreateMissionForPlannedFlight(ctx, mission); err != nil || replay.ID != mission.ID {
 		t.Fatalf("post-start import replay = %#v err=%v", replay, err)
@@ -409,6 +438,9 @@ func TestPostgresStartScopesUncertaintyToExactCurrentMission(t *testing.T) {
 	pending, err := store.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(current, "scope-current-pending", "scope-current-pending-key", domain.MissionDeploymentPending))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(current, "scope-second-pending", "scope-second-pending-key", domain.MissionDeploymentPending)); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("second unresolved deployment error = %v, want version conflict", err)
 	}
 	active := flight
 	active.Status, active.StartedAt = domain.FlightStatusActive, now.Add(time.Minute)

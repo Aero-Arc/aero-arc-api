@@ -38,7 +38,7 @@ func TestImportMissionIsIntentBoundImmutableAndIdempotent(t *testing.T) {
 	if len(first.Mission.SourceSHA256) != 64 || len(first.Mission.MissionDigest) != 64 || first.Mission.SourceSHA256 == first.Mission.MissionDigest {
 		t.Fatalf("hashes = source %q mission %q", first.Mission.SourceSHA256, first.Mission.MissionDigest)
 	}
-	if first.Mission.MissionDigest != "8e9dfdf14e3388200366a7da35ca04ed35ff2e31831f70d9add3b938652cd8cf" {
+	if first.Mission.MissionDigest != "4432d98126ab510d4db5d7358a4e4ffc7e5a734fead607c184fc7d3424278bd8" {
 		t.Fatalf("mission digest = %q; does not match deterministic schema-version 1 MissionPlan protobuf", first.Mission.MissionDigest)
 	}
 	if got := first.Mission.Items[0].LatitudeE7; got != -353632620 {

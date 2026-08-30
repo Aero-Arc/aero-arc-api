@@ -803,7 +803,7 @@ func (s *FleetService) GetAircraftMapView(ctx context.Context, aircraftID string
 	}
 	view.OperationalVolumes = volumesForVersion(volumes, intent.Version)
 
-	mission, err := s.durable.GetCurrentMissionForIntent(ctx, aircraft.ID, intent.ID, intent.Version)
+	mission, err := s.durable.GetDeployedMissionForActiveFlight(ctx, aircraft.ID, intent.ID, intent.Version)
 	if err == nil {
 		view.CommandedMission = &mission
 	} else if !errors.Is(err, durable.ErrNotFound) {

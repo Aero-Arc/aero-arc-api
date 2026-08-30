@@ -78,12 +78,49 @@ the same command ID, binding, plan, issued time, and expiry. Exact terminal
 retries return the original record with `Idempotent-Replayed: true`; reusing an
 idempotency key after the current mission changes returns `409`.
 
+`expires_at` fences the Agent's first aircraft effect. It does not prevent
+readback recovery for a command the Agent had already durably marked
+`effect_started` or `outcome_unknown`. The API may resend that exact immutable
+command through `reconcile_until`; the Agent rejects a post-expiry first effect
+but can finish readback reconciliation for an existing uncertain WAL record.
+At `reconcile_until` the API stops redispatching and retains
+`outcome_unknown` for explicit operational resolution.
+
 Read one deployment result, scoped to its flight:
 
 ```http
 GET /api/v1/flights/{flight_id}/mission-deployments/{deployment_id}
 Authorization: Bearer <mission-control-token>
 ```
+
+After a UI reload, restore the authoritative deployment for the flight's
+current mission without retaining the original idempotency key in the browser:
+
+```http
+GET /api/v1/flights/{flight_id}/mission-deployments/current
+Authorization: Bearer <mission-control-token>
+```
+
+The read prefers an outstanding `pending`, `temporary_error`, or
+`outcome_unknown` command over terminal history for that exact current mission.
+Creation is serialized on the flight and rejects a different client idempotency
+key while that command is outstanding, so a reload or concurrent click cannot
+create a second unresolved aircraft effect. Reloaded clients use the durable
+deployment ID and reconciliation route instead of inventing a replacement key.
+Retry that durable command with an empty request:
+
+```http
+POST /api/v1/flights/{flight_id}/mission-deployments/{deployment_id}/reconcile
+Authorization: Bearer <mission-control-token>
+Content-Length: 0
+```
+
+The retry accepts no idempotency key, mission bytes, binding, command ID, Agent,
+Relay, or address. The API loads all of them from the scoped durable deployment,
+revalidates the current flight/mission/intent/aircraft binding, refreshes
+Registry placement, and reuses the original command IDs. A terminal deployment
+is returned without redispatch. A deployment ID from another flight returns
+`404`.
 
 Configure the outbound control plane as one all-or-none mTLS identity:
 
@@ -108,8 +145,11 @@ not compile it into a public web bundle; inject it only into a trusted/local Ops
 session.
 
 `GET /api/v1/aircraft/{aircraft_id}/map` includes that route as
-`commanded_mission` only when its aircraft, intent ID, and intent version exactly
-match the active intent. It remains visually and structurally distinct from
+`commanded_mission` only when it is the current mission of the exact active
+flight, its aircraft and intent-version binding match the active intent, and an
+`applied` or `already_applied` deployment verifies the same mission digest. A
+new import for another planned flight cannot replace the active route. The
+commanded route remains visually and structurally distinct from
 `operational_volumes` (authorized area) and `replay_samples` (observed track).
 
 ## Validation and canonical form
@@ -181,9 +221,9 @@ the durable flight record. A new import or deployment cannot commit after start,
 and start cannot pass an exact current mission with a `pending` or
 `outcome_unknown` deployment. Start requires an `applied` or `already_applied`
 result for the exact current mission and rechecks the linked active intent
-version and aircraft inside the same transaction. Uncertainty belonging only to
-an older mission version does not poison a newer, independently verified current
-mission.
+version and aircraft inside the same transaction. The store also permits at most
+one active flight per aircraft. Uncertainty belonging only to an older mission
+version does not poison a newer, independently verified current mission.
 
 ## Deliberate deferrals
 

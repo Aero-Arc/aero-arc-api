@@ -168,6 +168,13 @@ func (s *Store) StartFlightWithCurrentMissionDeployment(ctx context.Context, fli
 	if currentStatus != expectedStatus {
 		return durable.ErrVersionConflict
 	}
+	var anotherActive bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM flight_records WHERE aircraft_id=$1 AND id<>$2 AND status=$3)`, aircraftID, flight.ID, domain.FlightStatusActive).Scan(&anotherActive); err != nil {
+		return fmt.Errorf("check active aircraft flight: %w", err)
+	}
+	if anotherActive {
+		return durable.ErrVersionConflict
+	}
 	if err := lockIntent(ctx, tx, intentID); err != nil {
 		return err
 	}
@@ -209,6 +216,10 @@ func (s *Store) StartFlightWithCurrentMissionDeployment(ctx context.Context, fli
 	}
 	tag, err := tx.Exec(ctx, `UPDATE flight_records SET status=$1,started_at=$2,data=$3 WHERE id=$4 AND status=$5`, flight.Status, flight.StartedAt, raw, flight.ID, expectedStatus)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "flight_records_one_active_aircraft_idx" {
+			return durable.ErrVersionConflict
+		}
 		return fmt.Errorf("activate flight: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
