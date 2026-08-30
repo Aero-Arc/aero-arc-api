@@ -110,12 +110,32 @@ func (s *Store) CreateMissionForPlannedFlight(ctx context.Context, mission domai
 		return domain.Mission{}, err
 	}
 	var status domain.FlightStatus
-	if err := tx.QueryRow(ctx, `SELECT status FROM flight_records WHERE id=$1 FOR UPDATE`, mission.FlightID).Scan(&status); errors.Is(err, pgx.ErrNoRows) {
+	var operatorID, aircraftID, intentID string
+	var intentVersion int
+	if err := tx.QueryRow(ctx, `SELECT status,operator_id,aircraft_id,intent_id,intent_version FROM flight_records WHERE id=$1 FOR UPDATE`, mission.FlightID).
+		Scan(&status, &operatorID, &aircraftID, &intentID, &intentVersion); errors.Is(err, pgx.ErrNoRows) {
 		return domain.Mission{}, durable.ErrNotFound
 	} else if err != nil {
 		return domain.Mission{}, fmt.Errorf("lock mission flight: %w", err)
 	}
-	if status != domain.FlightStatusPlanned {
+	if status != domain.FlightStatusPlanned || mission.OperatorID != operatorID || mission.AircraftID != aircraftID ||
+		mission.IntentID != intentID || mission.IntentVersion != intentVersion {
+		return domain.Mission{}, durable.ErrVersionConflict
+	}
+	if err := lockIntent(ctx, tx, intentID); err != nil {
+		return domain.Mission{}, err
+	}
+	var currentIntentVersion int
+	var currentIntentOperator, currentIntentAircraft, currentIntentStatus string
+	if err := tx.QueryRow(ctx, `SELECT version,data->>'operator_id',aircraft_id,data->>'status' FROM operational_intents WHERE id=$1 ORDER BY version DESC LIMIT 1 FOR UPDATE`, intentID).
+		Scan(&currentIntentVersion, &currentIntentOperator, &currentIntentAircraft, &currentIntentStatus); errors.Is(err, pgx.ErrNoRows) {
+		return domain.Mission{}, durable.ErrNotFound
+	} else if err != nil {
+		return domain.Mission{}, fmt.Errorf("lock current operational intent for mission import: %w", err)
+	}
+	intentStatus := domain.IntentStatus(currentIntentStatus)
+	if currentIntentVersion != intentVersion || currentIntentOperator != operatorID || currentIntentAircraft != aircraftID ||
+		(intentStatus != domain.IntentStatusAccepted && intentStatus != domain.IntentStatusActive) {
 		return domain.Mission{}, durable.ErrVersionConflict
 	}
 	mission, err = createMission(ctx, tx, mission)

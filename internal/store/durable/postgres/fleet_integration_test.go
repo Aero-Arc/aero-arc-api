@@ -345,6 +345,63 @@ func TestPostgresMissionImportAndStartRaceIsSerialized(t *testing.T) {
 	}
 }
 
+func TestPostgresMissionImportAndIntentTransitionAreSerialized(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	resetMissionFleetTables(t, store)
+	now := time.Now().UTC()
+	aircraft := domain.Aircraft{ID: "intent-race-aircraft", OperatorID: "operator-1", AgentID: "agent-1", CreatedAt: now, UpdatedAt: now}
+	if err := store.CreateAircraft(ctx, aircraft); err != nil {
+		t.Fatal(err)
+	}
+	intent := domain.OperationalIntent{ID: "intent-race-intent", Version: 1, OperatorID: "operator-1", AircraftID: aircraft.ID, Status: domain.IntentStatusActive, PlannedStartAt: now, PlannedEndAt: now.Add(time.Hour), UpdatedAt: now}
+	if err := store.CreateOperationalIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	flight := domain.FlightRecord{ID: "intent-race-flight", OperatorID: "operator-1", AircraftID: aircraft.ID, IntentID: intent.ID, IntentVersion: intent.Version, Status: domain.FlightStatusPlanned}
+	if err := store.CreateFlightRecord(ctx, flight); err != nil {
+		t.Fatal(err)
+	}
+
+	// Hold an uncommitted terminal transition under the same intent lock used by
+	// mission creation. The concurrent import must wait, observe the committed
+	// terminal state, and fail without inserting a mission.
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockIntent(ctx, tx, intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	terminal := intent
+	terminal.Status = domain.IntentStatusComplete
+	completedAt := now.Add(time.Minute)
+	terminal.CompletedAt = &completedAt
+	terminal.UpdatedAt = completedAt
+	if err := updateOperationalIntentTx(ctx, tx, terminal, intent.Revision); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, createErr := store.CreateMissionForPlannedFlight(ctx, postgresLifecycleMission(flight, "intent-race-mission", "intent-race-key"))
+		result <- createErr
+	}()
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if createErr := <-result; !errors.Is(createErr, durable.ErrVersionConflict) {
+		t.Fatalf("mission import after concurrent terminal transition error = %v", createErr)
+	}
+	if _, err := store.GetCurrentMissionForFlight(ctx, flight.ID); !errors.Is(err, durable.ErrNotFound) {
+		t.Fatalf("mission persisted across terminal intent fence: %v", err)
+	}
+}
+
 func TestPostgresMissionDeploymentAndStartRaceIsSerialized(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, integrationDatabaseURL)
