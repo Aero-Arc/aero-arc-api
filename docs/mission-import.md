@@ -209,7 +209,8 @@ This slice intentionally accepts only:
   waypoint/takeoff parameter 4 are positive zero, while LAND parameter 4 is `+1`
 - operational altitudes that remain bit-identical after ArduPilot's exact
   float32 multiply, int32 truncation-toward-zero, and float32 centimeter
-  readback path
+  readback path. Before integer conversion, the float32 centimeter product must
+  satisfy `-2147483648 <= altitude_m * 100 < 2147483648`.
 
 Relative and terrain frames are rejected because the API cannot safely resolve
 them into the operational volume's altitude reference. The exact intent version
