@@ -34,6 +34,25 @@ type DeployMissionResult struct {
 
 // DeployCurrentMission durably identifies and dispatches the exact current
 // mission. The caller supplies neither mission bytes nor control-plane routing.
+// Stale mission identity/digest preconditions fail before any new aircraft
+// effect, while an exact idempotency replay reuses all durable command state.
+// Retryable replays reconcile the same command; after expiry only a command
+// whose dispatch-start marker was persisted may perform readback-only recovery.
+//
+// Parameters:
+//   - ctx: bounds authoritative binding reads, durable writes, placement, and
+//     Relay delivery.
+//   - flightID: identifies the planned flight whose current immutable mission is eligible.
+//   - expectedMissionID: is the reviewed current mission identity and must still match exactly.
+//   - expectedDigest: is the reviewed canonical mission digest and must still match exactly.
+//   - idempotencyKey: identifies one stable deployment request and its server-owned commands.
+//
+// Returns:
+//   - result: contains the durable deployment and reports whether it was an idempotent replay.
+//   - error: reports validation, stale binding/version, conflicting idempotency,
+//     unavailable control configuration, or durable dependency failures. Relay
+//     delivery/acknowledgement failures with successfully persisted state are
+//     returned as retryable deployment statuses for reconciliation.
 func (s *FleetService) DeployCurrentMission(ctx context.Context, flightID, expectedMissionID, expectedDigest, idempotencyKey string) (DeployMissionResult, error) {
 	flightID, expectedMissionID = strings.TrimSpace(flightID), strings.TrimSpace(expectedMissionID)
 	expectedDigest, idempotencyKey = strings.TrimSpace(expectedDigest), strings.TrimSpace(idempotencyKey)
