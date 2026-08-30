@@ -299,6 +299,9 @@ func (cfg *Config) Validate() error {
 	if configuredRelayTLS > 0 && cfg.RegistryMode != "grpc" {
 		return fmt.Errorf("relay mission control requires registry mode grpc")
 	}
+	if configuredRelayTLS > 0 && cfg.DurableStore != DurableStorePostgres {
+		return fmt.Errorf("relay mission control requires durable store postgres")
+	}
 	if cfg.TelemetryFreshness <= 0 {
 		return fmt.Errorf("AERO_API_TELEMETRY_FRESHNESS must be > 0")
 	}

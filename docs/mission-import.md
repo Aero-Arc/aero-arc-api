@@ -139,6 +139,8 @@ is returned without redispatch. A deployment ID from another flight returns
 Configure the outbound control plane as one all-or-none mTLS identity:
 
 ```bash
+AERO_API_DURABLE_STORE=postgres
+AERO_API_DATABASE_URL='postgres://aero_arc:aero_arc@postgres/aero_arc?sslmode=disable'
 AERO_API_REGISTRY_MODE=grpc
 AERO_API_RELAY_CONTROL_CA_FILE=/run/secrets/relay-ca.pem
 AERO_API_RELAY_CONTROL_CERT_FILE=/run/secrets/api-relay-client.pem
@@ -160,14 +162,16 @@ rechecks `expires_at` after clear and context acknowledgement, never begins a
 new mission dispatch after expiry, and performs post-expiry reconciliation as
 readback-only without changing operation context.
 
-Partial TLS configuration, a short/missing control token, or Relay control with
-the in-memory Registry is rejected at startup. Without the complete control
-configuration, import and deployment fail closed with `503`; current-mission
-reads remain available. Import, deployment, and deployment-status reads require
-the same dedicated bearer token. This is a bounded first-slice control guard
-because the API does not yet have operator identity/session authorization. Do
-not compile it into a public web bundle; inject it only into a trusted/local Ops
-session.
+Partial TLS configuration, a short/missing control token, Relay control with
+the in-memory Registry, or Relay control without the PostgreSQL durable store is
+rejected at startup. Real aircraft commands are never enabled with process-local
+mission, command-ID, idempotency, or uncertainty state. Without the complete
+control configuration, import and deployment fail closed with `503`;
+current-mission reads remain available. Import, deployment, and
+deployment-status reads require the same dedicated bearer token. This is a
+bounded first-slice control guard because the API does not yet have operator
+identity/session authorization. Do not compile it into a public web bundle;
+inject it only into a trusted/local Ops session.
 
 `GET /api/v1/aircraft/{aircraft_id}/map` includes that route as
 `commanded_mission` only when it is the current mission of the exact active
