@@ -27,6 +27,32 @@ type fakeMissionDeployer struct {
 	events      []string
 }
 
+type terminalResultConflictStore struct {
+	durable.Store
+	conflicted bool
+}
+
+func (s *terminalResultConflictStore) UpdateMissionDeployment(ctx context.Context, deployment domain.MissionDeployment, expectedRevision int64) error {
+	if !s.conflicted && !missionDeploymentRetryable(deployment.Status) {
+		current, err := s.Store.GetMissionDeployment(ctx, deployment.ID)
+		if err != nil {
+			return err
+		}
+		competingMarker := current
+		competingMarker.AttemptCount++
+		competingMarker.DispatchStarted = true
+		competingMarker.Status = domain.MissionDeploymentOutcomeUnknown
+		competingMarker.Message = "concurrent retry dispatch began"
+		competingMarker.UpdatedAt = current.UpdatedAt.Add(time.Millisecond)
+		if err := s.Store.UpdateMissionDeployment(ctx, competingMarker, expectedRevision); err != nil {
+			return err
+		}
+		s.conflicted = true
+		return durable.ErrVersionConflict
+	}
+	return s.Store.UpdateMissionDeployment(ctx, deployment, expectedRevision)
+}
+
 func (f *fakeMissionDeployer) EnsureOperationContext(_ context.Context, agentID string, command *agentv1.SetOperationContextCommand) error {
 	f.agentIDs = append(f.agentIDs, agentID)
 	f.contexts = append(f.contexts, command)
@@ -445,6 +471,41 @@ func TestDeployCurrentMissionPersistsUnknownBeforeRelayCall(t *testing.T) {
 	}
 	if result.Deployment.Status != domain.MissionDeploymentApplied || result.Deployment.AttemptCount != 1 || result.Deployment.Revision != 2 {
 		t.Fatalf("deployment = %#v", result.Deployment)
+	}
+}
+
+func TestMissionDeploymentPersistsTerminalResultAcrossConcurrentRetryMarker(t *testing.T) {
+	svc, store := newMissionTestService(t)
+	mission, err := svc.ImportMission(context.Background(), "flight-1", "import-terminal-race", validMissionRequest(validWPL110))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflictStore := &terminalResultConflictStore{Store: store}
+	svc.durable = conflictStore
+	deployer := &fakeMissionDeployer{deployErr: errors.New("response lost")}
+	svc.WithMissionDeployer(deployer)
+	uncertain, err := svc.DeployCurrentMission(context.Background(), "flight-1", mission.Mission.ID, mission.Mission.MissionDigest, "terminal-race")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uncertain.Deployment.Status != domain.MissionDeploymentOutcomeUnknown {
+		t.Fatalf("initial deployment = %#v", uncertain.Deployment)
+	}
+
+	deployer.deployErr = nil
+	reconciled, err := svc.ReconcileMissionDeployment(context.Background(), "flight-1", uncertain.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !conflictStore.conflicted || reconciled.Deployment.Status != domain.MissionDeploymentApplied || reconciled.Deployment.AttemptCount != 3 {
+		t.Fatalf("reconciled deployment = %#v conflict=%t", reconciled.Deployment, conflictStore.conflicted)
+	}
+	persisted, err := store.GetMissionDeployment(context.Background(), uncertain.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Status != domain.MissionDeploymentApplied || persisted.AttemptCount != 3 || !persisted.DispatchStarted {
+		t.Fatalf("persisted deployment = %#v", persisted)
 	}
 }
 

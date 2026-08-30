@@ -5,7 +5,7 @@ go 1.26.2
 require (
 	github.com/Aero-Arc/dss-clients v0.0.0-20260727090752-3dbacffe9489
 	github.com/InfluxCommunity/influxdb3-go/v2 v2.13.0
-	github.com/aero-arc/aero-arc-protos v0.0.0-20260830131659-8cbf71853746
+	github.com/aero-arc/aero-arc-protos v0.0.0-20260830133103-af0b6757de47
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0

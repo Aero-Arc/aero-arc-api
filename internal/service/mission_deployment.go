@@ -261,17 +261,63 @@ func (s *FleetService) DeployCurrentMission(ctx context.Context, flightID, expec
 		updated.Status = domain.MissionDeploymentOutcomeUnknown
 		updated.Message = resultErr.Error()
 	}
-	if err := s.durable.UpdateMissionDeployment(ctx, updated, deployment.Revision); err != nil {
-		if errors.Is(err, durable.ErrVersionConflict) {
-			current, getErr := s.durable.GetMissionDeployment(ctx, deployment.ID)
-			if getErr == nil {
-				return DeployMissionResult{Deployment: current, Replayed: true}, nil
-			}
-		}
+	persisted, err := s.persistCorrelatedMissionDeploymentResult(ctx, updated, deployment.Revision)
+	if err != nil {
 		return DeployMissionResult{}, fmt.Errorf("persist mission deployment result: %w", err)
 	}
-	updated.Revision++
-	return DeployMissionResult{Deployment: updated, Replayed: replayed}, nil
+	return DeployMissionResult{Deployment: persisted, Replayed: replayed}, nil
+}
+
+func (s *FleetService) persistCorrelatedMissionDeploymentResult(ctx context.Context, desired domain.MissionDeployment, expectedRevision int64) (domain.MissionDeployment, error) {
+	for {
+		if err := s.durable.UpdateMissionDeployment(ctx, desired, expectedRevision); err == nil {
+			desired.Revision = expectedRevision + 1
+			return desired, nil
+		} else if !errors.Is(err, durable.ErrVersionConflict) {
+			return domain.MissionDeployment{}, err
+		}
+
+		current, err := s.durable.GetMissionDeployment(ctx, desired.ID)
+		if err != nil {
+			return domain.MissionDeployment{}, err
+		}
+		if !sameMissionDeploymentCommand(current, desired) {
+			return domain.MissionDeployment{}, durable.ErrVersionConflict
+		}
+		if !missionDeploymentRetryable(current.Status) {
+			return current, nil
+		}
+		if missionDeploymentRetryable(desired.Status) {
+			return current, nil
+		}
+
+		// A concurrent retry may durably advance the dispatch marker while this
+		// request is waiting for a correlated terminal Agent result. Preserve
+		// that newer attempt evidence, but do not discard the known outcome.
+		current.Status = desired.Status
+		current.Message = desired.Message
+		current.UploadedItemCount = desired.UploadedItemCount
+		current.OnboardMissionDigest = desired.OnboardMissionDigest
+		current.MAVLinkMissionAckType = desired.MAVLinkMissionAckType
+		current.CompletedAt = desired.CompletedAt
+		if desired.UpdatedAt.After(current.UpdatedAt) {
+			current.UpdatedAt = desired.UpdatedAt
+		}
+		desired = current
+		expectedRevision = current.Revision
+	}
+}
+
+func sameMissionDeploymentCommand(left, right domain.MissionDeployment) bool {
+	return left.ID == right.ID && left.OperatorID == right.OperatorID &&
+		left.FlightID == right.FlightID && left.AircraftID == right.AircraftID && left.AgentID == right.AgentID &&
+		left.IntentID == right.IntentID && left.IntentVersion == right.IntentVersion &&
+		left.MissionID == right.MissionID && left.MissionVersion == right.MissionVersion && left.MissionDigest == right.MissionDigest &&
+		left.CommandID == right.CommandID && left.OperationContextCommandID == right.OperationContextCommandID &&
+		left.ReconciliationClearCommandID == right.ReconciliationClearCommandID &&
+		left.IdempotencyKey == right.IdempotencyKey && left.IdempotencyRequest == right.IdempotencyRequest &&
+		left.IssuedAt.Equal(right.IssuedAt) && left.ExpiresAt.Equal(right.ExpiresAt) &&
+		left.ReconcileUntil.Equal(right.ReconcileUntil) && left.CreatedAt.Equal(right.CreatedAt)
 }
 
 func (s *FleetService) persistUndispatchedMissionExpiry(ctx context.Context, deployment domain.MissionDeployment, replayed bool, message string, now time.Time) (DeployMissionResult, error) {
