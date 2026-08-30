@@ -129,7 +129,8 @@ func TestDeployCurrentMissionRejectsConflictingIdempotencyAndLifecycle(t *testin
 	}
 	deployer := &fakeMissionDeployer{}
 	svc.WithMissionDeployer(deployer)
-	if _, err := svc.DeployCurrentMission(context.Background(), "flight-1", firstMission.Mission.ID, firstMission.Mission.MissionDigest, "stable-deploy-key"); err != nil {
+	firstDeployment, err := svc.DeployCurrentMission(context.Background(), "flight-1", firstMission.Mission.ID, firstMission.Mission.MissionDigest, "stable-deploy-key")
+	if err != nil {
 		t.Fatal(err)
 	}
 	changed := validMissionRequest(validWPL110)
@@ -141,9 +142,11 @@ func TestDeployCurrentMissionRejectsConflictingIdempotencyAndLifecycle(t *testin
 	if _, err := svc.DeployCurrentMission(context.Background(), "flight-1", secondMission.Mission.ID, secondMission.Mission.MissionDigest, "stable-deploy-key"); !errors.Is(err, durable.ErrIdempotencyConflict) {
 		t.Fatalf("conflicting deployment error = %v", err)
 	}
-	originalReplay, err := svc.DeployCurrentMission(context.Background(), "flight-1", firstMission.Mission.ID, firstMission.Mission.MissionDigest, "stable-deploy-key")
-	if err != nil || !originalReplay.Replayed || originalReplay.Deployment.MissionID != firstMission.Mission.ID {
-		t.Fatalf("exact original deployment replay = %#v err=%v", originalReplay, err)
+	if _, err := svc.DeployCurrentMission(context.Background(), "flight-1", firstMission.Mission.ID, firstMission.Mission.MissionDigest, "stable-deploy-key"); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("superseded original deployment replay error = %v", err)
+	}
+	if _, err := svc.ReconcileMissionDeployment(context.Background(), "flight-1", firstDeployment.Deployment.ID); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("superseded terminal deployment reconciliation error = %v", err)
 	}
 	flight, err := store.GetFlightRecord(context.Background(), "flight-1")
 	if err != nil {

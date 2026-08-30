@@ -55,6 +55,9 @@ func (s *FleetService) DeployCurrentMission(ctx context.Context, flightID, expec
 			return DeployMissionResult{}, durable.ErrIdempotencyConflict
 		}
 		if !missionDeploymentRetryable(existing.Status) {
+			if err := s.validateCurrentMissionDeploymentReplay(ctx, existing); err != nil {
+				return DeployMissionResult{}, err
+			}
 			return DeployMissionResult{Deployment: existing, Replayed: true}, nil
 		}
 	} else if !errors.Is(lookupErr, durable.ErrNotFound) {
@@ -95,6 +98,9 @@ func (s *FleetService) DeployCurrentMission(ctx context.Context, flightID, expec
 		return DeployMissionResult{}, durable.ErrIdempotencyConflict
 	}
 	if replayed && !missionDeploymentRetryable(deployment.Status) {
+		if err := s.validateCurrentMissionDeploymentReplay(ctx, deployment); err != nil {
+			return DeployMissionResult{}, err
+		}
 		return DeployMissionResult{Deployment: deployment, Replayed: true}, nil
 	}
 	commandExpired := !deployment.ExpiresAt.After(now)
@@ -262,9 +268,30 @@ func (s *FleetService) ReconcileMissionDeployment(ctx context.Context, flightID,
 		return DeployMissionResult{}, err
 	}
 	if !missionDeploymentRetryable(deployment.Status) {
+		if err := s.validateCurrentMissionDeploymentReplay(ctx, deployment); err != nil {
+			return DeployMissionResult{}, err
+		}
 		return DeployMissionResult{Deployment: deployment, Replayed: true}, nil
 	}
 	return s.DeployCurrentMission(ctx, deployment.FlightID, deployment.MissionID, deployment.MissionDigest, deployment.IdempotencyKey)
+}
+
+// validateCurrentMissionDeploymentReplay permits a terminal result to replay
+// across later lifecycle transitions, but never after another immutable mission
+// has become current for the flight. This keeps an old successful command from
+// masquerading as the deployment result for a newly imported route.
+func (s *FleetService) validateCurrentMissionDeploymentReplay(ctx context.Context, deployment domain.MissionDeployment) error {
+	mission, err := s.GetCurrentMission(ctx, deployment.FlightID)
+	if err != nil {
+		return err
+	}
+	if mission.ID != deployment.MissionID || mission.Version != deployment.MissionVersion ||
+		mission.MissionDigest != deployment.MissionDigest || mission.OperatorID != deployment.OperatorID ||
+		mission.AircraftID != deployment.AircraftID || mission.IntentID != deployment.IntentID ||
+		mission.IntentVersion != deployment.IntentVersion {
+		return fmt.Errorf("%w: terminal deployment belongs to a superseded mission binding", durable.ErrVersionConflict)
+	}
+	return nil
 }
 
 func (s *FleetService) validateMissionDeploymentBinding(ctx context.Context, flightID string) (domain.FlightRecord, domain.Mission, domain.Aircraft, error) {

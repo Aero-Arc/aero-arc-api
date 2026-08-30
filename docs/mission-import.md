@@ -214,11 +214,17 @@ Aircraft, flight, mission, mission-item, and deployment records used by this
 slice are stored in PostgreSQL. Foreign keys prevent missions and deployments
 from referring to nonexistent aircraft or flights. Exact import and deployment
 idempotency replays remain available after an API restart and after the flight
-has started; conflicting key reuse is still rejected.
+has started; conflicting key reuse is still rejected. A terminal deployment
+replay is returned only while its exact immutable mission remains current for
+the flight, so an old successful result cannot be mistaken for a replacement
+mission's deployment.
 
 Mission import, creation of a deployment attempt, and flight start serialize on
-the durable flight record. A new import or deployment cannot commit after start,
-and start cannot pass an exact current mission with a `pending` or
+the durable flight record. Mission import also locks and rechecks the exact
+current accepted or active intent version and aircraft binding in the same
+transaction, so it cannot commit after cancellation, completion, or
+supersession. A new import or deployment cannot commit after start, and start
+cannot pass an exact current mission with a `pending` or
 `outcome_unknown` deployment. Start requires an `applied` or `already_applied`
 result for the exact current mission and rechecks the linked active intent
 version and aircraft inside the same transaction. The store also permits at most

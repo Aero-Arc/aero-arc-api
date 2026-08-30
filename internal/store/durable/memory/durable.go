@@ -1395,6 +1395,17 @@ func (s *Store) CreateMissionForPlannedFlight(_ context.Context, mission domain.
 	if flight.Status != domain.FlightStatusPlanned {
 		return domain.Mission{}, durable.ErrVersionConflict
 	}
+	intent, exists := s.latestOperationalIntent(flight.IntentID)
+	if !exists {
+		return domain.Mission{}, durable.ErrNotFound
+	}
+	if mission.FlightID != flight.ID || mission.OperatorID != flight.OperatorID ||
+		mission.AircraftID != flight.AircraftID || mission.IntentID != flight.IntentID ||
+		mission.IntentVersion != flight.IntentVersion || intent.Version != flight.IntentVersion ||
+		intent.OperatorID != flight.OperatorID || intent.AircraftID != flight.AircraftID ||
+		(intent.Status != domain.IntentStatusAccepted && intent.Status != domain.IntentStatusActive) {
+		return domain.Mission{}, durable.ErrVersionConflict
+	}
 	return s.createMissionLocked(mission)
 }
 

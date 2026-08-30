@@ -50,6 +50,49 @@ func TestMissionLifecycleFenceReplaysCommittedRequestsAfterStart(t *testing.T) {
 	}
 }
 
+func TestMissionImportFenceRejectsTerminalAndSupersededIntent(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(domain.OperationalIntent) domain.OperationalIntent
+	}{
+		{
+			name: "terminal intent",
+			mutate: func(intent domain.OperationalIntent) domain.OperationalIntent {
+				intent.Status = domain.IntentStatusComplete
+				return intent
+			},
+		},
+		{
+			name: "superseded intent version",
+			mutate: func(intent domain.OperationalIntent) domain.OperationalIntent {
+				intent.Version++
+				intent.Status = domain.IntentStatusAccepted
+				return intent
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, flight, mission := missionLifecycleStore(t)
+			ctx := context.Background()
+			intent, err := store.GetOperationalIntent(ctx, flight.IntentID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			intent = test.mutate(intent)
+			if intent.Version == flight.IntentVersion {
+				if err := store.UpdateOperationalIntent(ctx, intent, intent.Revision); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := store.CreateOperationalIntent(ctx, intent); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.CreateMissionForPlannedFlight(ctx, mission); !errors.Is(err, durable.ErrVersionConflict) {
+				t.Fatalf("mission import error = %v", err)
+			}
+		})
+	}
+}
+
 func TestStartFlightScopesUncertaintyToExactCurrentMission(t *testing.T) {
 	store, flight, mission := missionLifecycleStore(t)
 	ctx := context.Background()
