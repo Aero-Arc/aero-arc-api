@@ -100,8 +100,8 @@ func TestAircraftFlightAndMissionFencePersistAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := reader.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(futureMission, "persist-future-deployment", "persist-future-deploy-key", domain.MissionDeploymentApplied)); err != nil {
-		t.Fatal(err)
+	if _, err := reader.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(futureMission, "persist-future-deployment", "persist-future-deploy-key", domain.MissionDeploymentApplied)); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("future deployment against active aircraft error = %v", err)
 	}
 	commanded, err = reader.GetDeployedMissionForActiveFlight(ctx, aircraft.ID, intent.ID, intent.Version)
 	if err != nil || commanded.ID != mission.ID {
@@ -402,6 +402,230 @@ func TestPostgresMissionImportAndIntentTransitionAreSerialized(t *testing.T) {
 	}
 }
 
+func TestPostgresAircraftMissionLifecycleUsesLatestAuthoritativeDeployment(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+
+	setup := func(t *testing.T, prefix string) (domain.FlightRecord, domain.Mission) {
+		t.Helper()
+		resetMissionFleetTables(t, store)
+		now := time.Now().UTC()
+		aircraft := domain.Aircraft{ID: prefix + "-aircraft", OperatorID: "operator-1", AgentID: "agent-1", CreatedAt: now, UpdatedAt: now}
+		if err := store.CreateAircraft(ctx, aircraft); err != nil {
+			t.Fatal(err)
+		}
+		intent := domain.OperationalIntent{ID: prefix + "-intent", Version: 1, OperatorID: "operator-1", AircraftID: aircraft.ID, Status: domain.IntentStatusActive, PlannedStartAt: now, PlannedEndAt: now.Add(time.Hour), UpdatedAt: now}
+		if err := store.CreateOperationalIntent(ctx, intent); err != nil {
+			t.Fatal(err)
+		}
+		flight := domain.FlightRecord{ID: prefix + "-flight-1", OperatorID: "operator-1", AircraftID: aircraft.ID, IntentID: intent.ID, IntentVersion: intent.Version, Status: domain.FlightStatusPlanned}
+		if err := store.CreateFlightRecord(ctx, flight); err != nil {
+			t.Fatal(err)
+		}
+		mission, err := store.CreateMissionForPlannedFlight(ctx, postgresLifecycleMission(flight, prefix+"-mission-1", prefix+"-mission-key-1"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return flight, mission
+	}
+	addFlight := func(t *testing.T, first domain.FlightRecord, prefix string) (domain.FlightRecord, domain.Mission) {
+		t.Helper()
+		flight := first
+		flight.ID = prefix + "-flight-2"
+		if err := store.CreateFlightRecord(ctx, flight); err != nil {
+			t.Fatal(err)
+		}
+		mission, err := store.CreateMissionForPlannedFlight(ctx, postgresLifecycleMission(flight, prefix+"-mission-2", prefix+"-mission-key-2"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return flight, mission
+	}
+
+	t.Run("newer mismatch invalidates older success", func(t *testing.T) {
+		flight, mission := setup(t, "mismatch")
+		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(mission, "mismatch-older-applied", "mismatch-older-key", domain.MissionDeploymentApplied)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(mission, "mismatch-newer-result", "mismatch-newer-key", domain.MissionDeploymentOnboardMissionMismatch)); err != nil {
+			t.Fatal(err)
+		}
+		active := flight
+		active.Status = domain.FlightStatusActive
+		if err := store.StartFlightWithCurrentMissionDeployment(ctx, active, domain.FlightStatusPlanned); !errors.Is(err, durable.ErrVersionConflict) {
+			t.Fatalf("start after newer mismatch error = %v", err)
+		}
+	})
+
+	t.Run("newer deployment for another flight invalidates older success", func(t *testing.T) {
+		flight, mission := setup(t, "cross-latest")
+		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(mission, "cross-latest-first-applied", "cross-latest-first-key", domain.MissionDeploymentApplied)); err != nil {
+			t.Fatal(err)
+		}
+		_, secondMission := addFlight(t, flight, "cross-latest")
+		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(secondMission, "cross-latest-second-applied", "cross-latest-second-key", domain.MissionDeploymentApplied)); err != nil {
+			t.Fatal(err)
+		}
+		active := flight
+		active.Status = domain.FlightStatusActive
+		if err := store.StartFlightWithCurrentMissionDeployment(ctx, active, domain.FlightStatusPlanned); !errors.Is(err, durable.ErrVersionConflict) {
+			t.Fatalf("start after another flight deployment error = %v", err)
+		}
+	})
+
+	t.Run("active flight blocks another flight deployment", func(t *testing.T) {
+		flight, mission := setup(t, "active-fence")
+		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(mission, "active-fence-applied", "active-fence-applied-key", domain.MissionDeploymentApplied)); err != nil {
+			t.Fatal(err)
+		}
+		_, secondMission := addFlight(t, flight, "active-fence")
+		active := flight
+		active.Status = domain.FlightStatusActive
+		if err := store.StartFlightWithCurrentMissionDeployment(ctx, active, domain.FlightStatusPlanned); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(secondMission, "active-fence-unsafe", "active-fence-unsafe-key", domain.MissionDeploymentPending)); !errors.Is(err, durable.ErrVersionConflict) {
+			t.Fatalf("deployment against active aircraft error = %v", err)
+		}
+	})
+
+	t.Run("cross-flight deployment and start serialize", func(t *testing.T) {
+		flight, mission := setup(t, "cross-race")
+		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(mission, "cross-race-applied", "cross-race-applied-key", domain.MissionDeploymentApplied)); err != nil {
+			t.Fatal(err)
+		}
+		_, secondMission := addFlight(t, flight, "cross-race")
+		candidate := postgresLifecycleDeployment(secondMission, "cross-race-candidate", "cross-race-candidate-key", domain.MissionDeploymentPending)
+		active := flight
+		active.Status = domain.FlightStatusActive
+		ready := make(chan struct{})
+		var group sync.WaitGroup
+		var deploymentErr, startErr error
+		group.Add(2)
+		go func() {
+			defer group.Done()
+			<-ready
+			_, deploymentErr = store.CreateMissionDeploymentForPlannedFlight(ctx, candidate)
+		}()
+		go func() {
+			defer group.Done()
+			<-ready
+			startErr = store.StartFlightWithCurrentMissionDeployment(ctx, active, domain.FlightStatusPlanned)
+		}()
+		close(ready)
+		group.Wait()
+		if deploymentErr == nil && startErr == nil {
+			t.Fatal("cross-flight deployment and start both committed")
+		}
+		if deploymentErr != nil && !errors.Is(deploymentErr, durable.ErrVersionConflict) {
+			t.Fatalf("deployment error = %v", deploymentErr)
+		}
+		if startErr != nil && !errors.Is(startErr, durable.ErrVersionConflict) {
+			t.Fatalf("start error = %v", startErr)
+		}
+	})
+
+	t.Run("deployment and replacement mission serialize", func(t *testing.T) {
+		flight, mission := setup(t, "binding-race-mission")
+		deployment := postgresLifecycleDeployment(mission, "binding-race-deployment", "binding-race-deployment-key", domain.MissionDeploymentPending)
+		replacement := postgresLifecycleMission(flight, "binding-race-replacement", "binding-race-replacement-key")
+		ready := make(chan struct{})
+		var group sync.WaitGroup
+		var deploymentErr, replacementErr error
+		group.Add(2)
+		go func() {
+			defer group.Done()
+			<-ready
+			_, deploymentErr = store.CreateMissionDeploymentForPlannedFlight(ctx, deployment)
+		}()
+		go func() {
+			defer group.Done()
+			<-ready
+			_, replacementErr = store.CreateMissionForPlannedFlight(ctx, replacement)
+		}()
+		close(ready)
+		group.Wait()
+		assertPostgresMissionBindingRace(t, deploymentErr, replacementErr)
+	})
+
+	t.Run("deployment and terminal intent transition serialize", func(t *testing.T) {
+		flight, mission := setup(t, "binding-race-intent")
+		deployment := postgresLifecycleDeployment(mission, "binding-race-intent-deployment", "binding-race-intent-deployment-key", domain.MissionDeploymentPending)
+		intent, err := store.GetOperationalIntent(ctx, flight.IntentID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		intent.Status = domain.IntentStatusComplete
+		completedAt := time.Now().UTC()
+		intent.CompletedAt = &completedAt
+		intent.UpdatedAt = completedAt
+		ready := make(chan struct{})
+		var group sync.WaitGroup
+		var deploymentErr, transitionErr error
+		group.Add(2)
+		go func() {
+			defer group.Done()
+			<-ready
+			_, deploymentErr = store.CreateMissionDeploymentForPlannedFlight(ctx, deployment)
+		}()
+		go func() {
+			defer group.Done()
+			<-ready
+			transitionErr = store.UpdateOperationalIntent(ctx, intent, intent.Revision)
+		}()
+		close(ready)
+		group.Wait()
+		assertPostgresMissionBindingRace(t, deploymentErr, transitionErr)
+	})
+
+	t.Run("outcome unknown fence survives reconciliation deadline", func(t *testing.T) {
+		flight, mission := setup(t, "expired-unknown")
+		deployment := postgresLifecycleDeployment(mission, "expired-unknown-deployment", "expired-unknown-deployment-key", domain.MissionDeploymentOutcomeUnknown)
+		deployment.ExpiresAt = time.Now().Add(-time.Hour)
+		deployment.ReconcileUntil = time.Now().Add(-time.Minute)
+		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, deployment); err != nil {
+			t.Fatal(err)
+		}
+		replacement := postgresLifecycleMission(flight, "expired-unknown-replacement", "expired-unknown-replacement-key")
+		if _, err := store.CreateMissionForPlannedFlight(ctx, replacement); !errors.Is(err, durable.ErrVersionConflict) {
+			t.Fatalf("replacement after reconciliation deadline error = %v", err)
+		}
+		intent, err := store.GetOperationalIntent(ctx, flight.IntentID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		intent.Status = domain.IntentStatusComplete
+		if err := store.UpdateOperationalIntent(ctx, intent, intent.Revision); !errors.Is(err, durable.ErrVersionConflict) {
+			t.Fatalf("terminal intent after reconciliation deadline error = %v", err)
+		}
+		active := flight
+		active.Status = domain.FlightStatusActive
+		if err := store.UpdateFlightRecord(ctx, active, domain.FlightStatusPlanned); !errors.Is(err, durable.ErrVersionConflict) {
+			t.Fatalf("flight mutation after reconciliation deadline error = %v", err)
+		}
+	})
+}
+
+func assertPostgresMissionBindingRace(t *testing.T, deploymentErr, mutationErr error) {
+	t.Helper()
+	if deploymentErr == nil && mutationErr == nil {
+		t.Fatal("mission deployment and binding mutation both committed")
+	}
+	if deploymentErr != nil && mutationErr != nil {
+		t.Fatalf("mission deployment and binding mutation both failed: deployment=%v mutation=%v", deploymentErr, mutationErr)
+	}
+	if deploymentErr != nil && !errors.Is(deploymentErr, durable.ErrVersionConflict) {
+		t.Fatalf("deployment error = %v", deploymentErr)
+	}
+	if mutationErr != nil && !errors.Is(mutationErr, durable.ErrVersionConflict) {
+		t.Fatalf("binding mutation error = %v", mutationErr)
+	}
+}
+
 func TestPostgresMissionDeploymentAndStartRaceIsSerialized(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, integrationDatabaseURL)
@@ -460,7 +684,7 @@ func TestPostgresMissionDeploymentAndStartRaceIsSerialized(t *testing.T) {
 	}
 }
 
-func TestPostgresStartScopesUncertaintyToExactCurrentMission(t *testing.T) {
+func TestPostgresStartScopesTerminalHistoryToExactCurrentMission(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, integrationDatabaseURL)
 	if err != nil {
@@ -485,7 +709,13 @@ func TestPostgresStartScopesUncertaintyToExactCurrentMission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(oldMission, "scope-old-unknown", "scope-old-unknown-key", domain.MissionDeploymentOutcomeUnknown)); err != nil {
+	oldDeployment, err := store.CreateMissionDeploymentForPlannedFlight(ctx, postgresLifecycleDeployment(oldMission, "scope-old-unknown", "scope-old-unknown-key", domain.MissionDeploymentOutcomeUnknown))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldDeployment.Status = domain.MissionDeploymentRejected
+	oldDeployment.UpdatedAt = now.Add(time.Second)
+	if err := store.UpdateMissionDeployment(ctx, oldDeployment, oldDeployment.Revision); err != nil {
 		t.Fatal(err)
 	}
 	current, err := store.CreateMissionForPlannedFlight(ctx, postgresLifecycleMission(flight, "scope-current", "scope-current-key"))
@@ -513,7 +743,7 @@ func TestPostgresStartScopesUncertaintyToExactCurrentMission(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.StartFlightWithCurrentMissionDeployment(ctx, active, domain.FlightStatusPlanned); err != nil {
-		t.Fatalf("historical uncertainty blocked verified current mission: %v", err)
+		t.Fatalf("historical terminal result blocked verified current mission: %v", err)
 	}
 }
 

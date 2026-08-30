@@ -93,14 +93,244 @@ func TestMissionImportFenceRejectsTerminalAndSupersededIntent(t *testing.T) {
 	}
 }
 
-func TestStartFlightScopesUncertaintyToExactCurrentMission(t *testing.T) {
+func TestAircraftMissionLifecycleUsesLatestAuthoritativeDeployment(t *testing.T) {
+	t.Run("newer mismatch invalidates older success", func(t *testing.T) {
+		store, flight, mission := missionLifecycleStore(t)
+		ctx := context.Background()
+		current, err := store.CreateMissionForPlannedFlight(ctx, mission)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, lifecycleDeployment(current, "older-applied", "older-applied-key", domain.MissionDeploymentApplied)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, lifecycleDeployment(current, "newer-mismatch", "newer-mismatch-key", domain.MissionDeploymentOnboardMissionMismatch)); err != nil {
+			t.Fatal(err)
+		}
+		active := flight
+		active.Status = domain.FlightStatusActive
+		if err := store.StartFlightWithCurrentMissionDeployment(ctx, active, domain.FlightStatusPlanned); !errors.Is(err, durable.ErrVersionConflict) {
+			t.Fatalf("start after newer mismatch error = %v", err)
+		}
+	})
+
+	t.Run("newer deployment for another flight invalidates older success", func(t *testing.T) {
+		store, flight, mission := missionLifecycleStore(t)
+		ctx := context.Background()
+		firstMission, err := store.CreateMissionForPlannedFlight(ctx, mission)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, lifecycleDeployment(firstMission, "first-applied", "first-applied-key", domain.MissionDeploymentApplied)); err != nil {
+			t.Fatal(err)
+		}
+		_, secondMission := addLifecycleFlight(t, store, "flight-2", "mission-2", "mission-key-2")
+		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, lifecycleDeployment(secondMission, "second-applied", "second-applied-key", domain.MissionDeploymentApplied)); err != nil {
+			t.Fatal(err)
+		}
+		active := flight
+		active.Status = domain.FlightStatusActive
+		if err := store.StartFlightWithCurrentMissionDeployment(ctx, active, domain.FlightStatusPlanned); !errors.Is(err, durable.ErrVersionConflict) {
+			t.Fatalf("start after another flight deployment error = %v", err)
+		}
+	})
+
+	t.Run("active flight blocks another flight deployment", func(t *testing.T) {
+		store, flight, mission := missionLifecycleStore(t)
+		ctx := context.Background()
+		firstMission, err := store.CreateMissionForPlannedFlight(ctx, mission)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, lifecycleDeployment(firstMission, "active-applied", "active-applied-key", domain.MissionDeploymentApplied)); err != nil {
+			t.Fatal(err)
+		}
+		_, secondMission := addLifecycleFlight(t, store, "flight-2", "mission-2", "mission-key-2")
+		active := flight
+		active.Status = domain.FlightStatusActive
+		if err := store.StartFlightWithCurrentMissionDeployment(ctx, active, domain.FlightStatusPlanned); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, lifecycleDeployment(secondMission, "unsafe-deployment", "unsafe-deployment-key", domain.MissionDeploymentPending)); !errors.Is(err, durable.ErrVersionConflict) {
+			t.Fatalf("deployment against active aircraft error = %v", err)
+		}
+	})
+}
+
+func TestCrossFlightDeploymentAndStartRaceIsSerialized(t *testing.T) {
+	for iteration := 0; iteration < 50; iteration++ {
+		store, flight, mission := missionLifecycleStore(t)
+		ctx := context.Background()
+		firstMission, err := store.CreateMissionForPlannedFlight(ctx, mission)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, lifecycleDeployment(firstMission, "applied", "applied-key", domain.MissionDeploymentApplied)); err != nil {
+			t.Fatal(err)
+		}
+		_, secondMission := addLifecycleFlight(t, store, "flight-2", "mission-2", "mission-key-2")
+		candidate := lifecycleDeployment(secondMission, fmt.Sprintf("cross-deployment-%d", iteration), fmt.Sprintf("cross-key-%d", iteration), domain.MissionDeploymentPending)
+		active := flight
+		active.Status = domain.FlightStatusActive
+		var deploymentErr, startErr error
+		ready := make(chan struct{})
+		var group sync.WaitGroup
+		group.Add(2)
+		go func() {
+			defer group.Done()
+			<-ready
+			_, deploymentErr = store.CreateMissionDeploymentForPlannedFlight(ctx, candidate)
+		}()
+		go func() {
+			defer group.Done()
+			<-ready
+			startErr = store.StartFlightWithCurrentMissionDeployment(ctx, active, domain.FlightStatusPlanned)
+		}()
+		close(ready)
+		group.Wait()
+		if deploymentErr == nil && startErr == nil {
+			t.Fatal("cross-flight deployment and start both committed")
+		}
+		if deploymentErr != nil && !errors.Is(deploymentErr, durable.ErrVersionConflict) {
+			t.Fatalf("deployment error = %v", deploymentErr)
+		}
+		if startErr != nil && !errors.Is(startErr, durable.ErrVersionConflict) {
+			t.Fatalf("start error = %v", startErr)
+		}
+	}
+}
+
+func TestMissionDispatchFenceSerializesBindingMutations(t *testing.T) {
+	t.Run("replacement mission", func(t *testing.T) {
+		for iteration := 0; iteration < 50; iteration++ {
+			store, _, mission := missionLifecycleStore(t)
+			ctx := context.Background()
+			current, err := store.CreateMissionForPlannedFlight(ctx, mission)
+			if err != nil {
+				t.Fatal(err)
+			}
+			deployment := lifecycleDeployment(current, fmt.Sprintf("dispatch-fence-%d", iteration), fmt.Sprintf("dispatch-fence-key-%d", iteration), domain.MissionDeploymentPending)
+			replacement := mission
+			replacement.ID = fmt.Sprintf("replacement-%d", iteration)
+			replacement.IdempotencyKey = fmt.Sprintf("replacement-key-%d", iteration)
+			replacement.IdempotencyRequest = fmt.Sprintf("replacement-request-%d", iteration)
+			var deploymentErr, replacementErr error
+			ready := make(chan struct{})
+			var group sync.WaitGroup
+			group.Add(2)
+			go func() {
+				defer group.Done()
+				<-ready
+				_, deploymentErr = store.CreateMissionDeploymentForPlannedFlight(ctx, deployment)
+			}()
+			go func() {
+				defer group.Done()
+				<-ready
+				_, replacementErr = store.CreateMissionForPlannedFlight(ctx, replacement)
+			}()
+			close(ready)
+			group.Wait()
+			assertExactlyOneMissionBindingMutation(t, deploymentErr, replacementErr)
+		}
+	})
+
+	t.Run("terminal intent transition", func(t *testing.T) {
+		for iteration := 0; iteration < 50; iteration++ {
+			store, flight, mission := missionLifecycleStore(t)
+			ctx := context.Background()
+			current, err := store.CreateMissionForPlannedFlight(ctx, mission)
+			if err != nil {
+				t.Fatal(err)
+			}
+			deployment := lifecycleDeployment(current, fmt.Sprintf("intent-fence-%d", iteration), fmt.Sprintf("intent-fence-key-%d", iteration), domain.MissionDeploymentPending)
+			intent, err := store.GetOperationalIntent(ctx, flight.IntentID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			intent.Status = domain.IntentStatusComplete
+			var deploymentErr, transitionErr error
+			ready := make(chan struct{})
+			var group sync.WaitGroup
+			group.Add(2)
+			go func() {
+				defer group.Done()
+				<-ready
+				_, deploymentErr = store.CreateMissionDeploymentForPlannedFlight(ctx, deployment)
+			}()
+			go func() {
+				defer group.Done()
+				<-ready
+				transitionErr = store.UpdateOperationalIntent(ctx, intent, intent.Revision)
+			}()
+			close(ready)
+			group.Wait()
+			assertExactlyOneMissionBindingMutation(t, deploymentErr, transitionErr)
+		}
+	})
+}
+
+func TestOutcomeUnknownDispatchFenceDoesNotExpire(t *testing.T) {
+	store, flight, mission := missionLifecycleStore(t)
+	ctx := context.Background()
+	current, err := store.CreateMissionForPlannedFlight(ctx, mission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment := lifecycleDeployment(current, "expired-unknown", "expired-unknown-key", domain.MissionDeploymentOutcomeUnknown)
+	deployment.ExpiresAt = time.Now().Add(-time.Hour)
+	deployment.ReconcileUntil = time.Now().Add(-time.Minute)
+	if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, deployment); err != nil {
+		t.Fatal(err)
+	}
+	replacement := mission
+	replacement.ID, replacement.IdempotencyKey, replacement.IdempotencyRequest = "blocked-replacement", "blocked-replacement-key", "blocked-replacement-request"
+	if _, err := store.CreateMissionForPlannedFlight(ctx, replacement); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("replacement after reconciliation deadline error = %v", err)
+	}
+	intent, err := store.GetOperationalIntent(ctx, flight.IntentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent.Status = domain.IntentStatusComplete
+	if err := store.UpdateOperationalIntent(ctx, intent, intent.Revision); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("terminal intent after reconciliation deadline error = %v", err)
+	}
+	active := flight
+	active.Status = domain.FlightStatusActive
+	if err := store.UpdateFlightRecord(ctx, active, domain.FlightStatusPlanned); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("flight mutation after reconciliation deadline error = %v", err)
+	}
+}
+
+func assertExactlyOneMissionBindingMutation(t *testing.T, deploymentErr, mutationErr error) {
+	t.Helper()
+	if deploymentErr == nil && mutationErr == nil {
+		t.Fatal("mission deployment and binding mutation both committed")
+	}
+	if deploymentErr != nil && mutationErr != nil {
+		t.Fatalf("mission deployment and binding mutation both failed: deployment=%v mutation=%v", deploymentErr, mutationErr)
+	}
+	if deploymentErr != nil && !errors.Is(deploymentErr, durable.ErrVersionConflict) {
+		t.Fatalf("deployment error = %v", deploymentErr)
+	}
+	if mutationErr != nil && !errors.Is(mutationErr, durable.ErrVersionConflict) {
+		t.Fatalf("binding mutation error = %v", mutationErr)
+	}
+}
+
+func TestStartFlightScopesTerminalHistoryToExactCurrentMission(t *testing.T) {
 	store, flight, mission := missionLifecycleStore(t)
 	ctx := context.Background()
 	oldMission, err := store.CreateMissionForPlannedFlight(ctx, mission)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateMissionDeploymentForPlannedFlight(ctx, lifecycleDeployment(oldMission, "old-unknown", "old-unknown-key", domain.MissionDeploymentOutcomeUnknown)); err != nil {
+	oldDeployment, err := store.CreateMissionDeploymentForPlannedFlight(ctx, lifecycleDeployment(oldMission, "old-unknown", "old-unknown-key", domain.MissionDeploymentOutcomeUnknown))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldDeployment.Status = domain.MissionDeploymentRejected
+	if err := store.UpdateMissionDeployment(ctx, oldDeployment, oldDeployment.Revision); err != nil {
 		t.Fatal(err)
 	}
 	newMission := mission
@@ -115,7 +345,7 @@ func TestStartFlightScopesUncertaintyToExactCurrentMission(t *testing.T) {
 	active := flight
 	active.Status = domain.FlightStatusActive
 	if err := store.StartFlightWithCurrentMissionDeployment(ctx, active, domain.FlightStatusPlanned); err != nil {
-		t.Fatalf("historical uncertainty blocked verified current mission: %v", err)
+		t.Fatalf("historical terminal result blocked verified current mission: %v", err)
 	}
 }
 
@@ -296,6 +526,30 @@ func missionLifecycleStore(t *testing.T) (*Store, domain.FlightRecord, domain.Mi
 	return store, flight, mission
 }
 
+func addLifecycleFlight(t *testing.T, store *Store, flightID, missionID, missionKey string) (domain.FlightRecord, domain.Mission) {
+	t.Helper()
+	ctx := context.Background()
+	flight := domain.FlightRecord{ID: flightID, OperatorID: "operator-1", AircraftID: "aircraft-1", IntentID: "intent-1", IntentVersion: 1, Status: domain.FlightStatusPlanned}
+	if err := store.CreateFlightRecord(ctx, flight); err != nil {
+		t.Fatal(err)
+	}
+	mission, err := store.CreateMissionForPlannedFlight(ctx, domain.Mission{
+		ID: missionID, OperatorID: "operator-1", FlightID: flight.ID, AircraftID: flight.AircraftID,
+		IntentID: flight.IntentID, IntentVersion: flight.IntentVersion, MissionDigest: missionID + "-digest",
+		IdempotencyKey: missionKey, IdempotencyRequest: missionKey + "-request",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return flight, mission
+}
+
 func lifecycleDeployment(mission domain.Mission, id, key string, status domain.MissionDeploymentStatus) domain.MissionDeployment {
-	return domain.MissionDeployment{ID: id, FlightID: mission.FlightID, MissionID: mission.ID, MissionDigest: mission.MissionDigest, IdempotencyKey: key, IdempotencyRequest: key + "-request", Status: status}
+	now := time.Now().UTC()
+	return domain.MissionDeployment{
+		ID: id, OperatorID: mission.OperatorID, FlightID: mission.FlightID, AircraftID: mission.AircraftID,
+		IntentID: mission.IntentID, IntentVersion: mission.IntentVersion, MissionID: mission.ID, MissionVersion: mission.Version,
+		MissionDigest: mission.MissionDigest, IdempotencyKey: key, IdempotencyRequest: key + "-request",
+		Status: status, CreatedAt: now, UpdatedAt: now,
+	}
 }

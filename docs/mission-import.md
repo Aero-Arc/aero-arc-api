@@ -84,7 +84,11 @@ readback recovery for a command the Agent had already durably marked
 command through `reconcile_until`; the Agent rejects a post-expiry first effect
 but can finish readback reconciliation for an existing uncertain WAL record.
 At `reconcile_until` the API stops redispatching and retains
-`outcome_unknown` for explicit operational resolution.
+`outcome_unknown` for explicit operational resolution. That unresolved record
+continues to fence replacement missions, intent/volume mutations, another
+aircraft deployment, and flight start indefinitely; expiry never silently
+authorizes a conflicting effect. Clearing it requires an authoritative
+correlated outcome or an explicit future manual-resolution workflow.
 
 Read one deployment result, scoped to its flight:
 
@@ -221,17 +225,27 @@ replay is returned only while its exact immutable mission remains current for
 the flight, so an old successful result cannot be mistaken for a replacement
 mission's deployment.
 
-Mission import, creation of a deployment attempt, and flight start serialize on
-the durable flight record. Mission import also locks and rechecks the exact
-current accepted or active intent version and aircraft binding in the same
-transaction, so it cannot commit after cancellation, completion, or
-supersession. A new import or deployment cannot commit after start, and start
-cannot pass an exact current mission with a `pending` or
-`outcome_unknown` deployment. Start requires an `applied` or `already_applied`
-result for the exact current mission and rechecks the linked active intent
-version and aircraft inside the same transaction. The store also permits at most
-one active flight per aircraft. Uncertainty belonging only to an older mission
-version does not poison a newer, independently verified current mission.
+Mission import, deployment creation, binding mutations, and flight start share
+durable flight, aircraft, and intent fences in a single lock order. Deployment
+creation rechecks the exact current planned flight, immutable mission, and
+accepted-or-active intent before committing a retryable deployment record. That
+record is the dispatch authorization fence: while it remains `pending`,
+`temporary_error`, or `outcome_unknown`, replacement import, intent or volume
+mutation, conflicting deployment, and start fail with `409`. Therefore a
+binding mutation either commits before deployment creation and makes its final
+recheck fail, or waits behind the durable deployment fence until a terminal
+outcome; it cannot invalidate an authorized command between validation and the
+aircraft effect.
+
+The same aircraft-level fence prevents a planned flight from uploading over an
+active flight. Start rejects any redispatchable outstanding fence and requires
+the aircraft's latest deployment—not any historical success—to belong to the
+starting flight's exact current mission and report `applied` or
+`already_applied` with the matching digest. A newer rejection, binding/readback
+mismatch, or deployment for another flight invalidates an older success. The
+store also permits at most one active flight per aircraft. Terminal history for
+an older mission version does not poison a newer, independently verified
+current mission.
 
 ## Deliberate deferrals
 

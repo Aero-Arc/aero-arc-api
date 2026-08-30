@@ -138,6 +138,9 @@ func (s *Store) CreateMissionForPlannedFlight(ctx context.Context, mission domai
 		(intentStatus != domain.IntentStatusAccepted && intentStatus != domain.IntentStatusActive) {
 		return domain.Mission{}, durable.ErrVersionConflict
 	}
+	if err := rejectOutstandingMissionDeploymentForFlight(ctx, tx, mission.FlightID); err != nil {
+		return domain.Mission{}, err
+	}
 	mission, err = createMission(ctx, tx, mission)
 	if err != nil {
 		return domain.Mission{}, err
@@ -367,24 +370,38 @@ func getMission(ctx context.Context, query missionQuerier, clause string, args .
 // Returns:
 //   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) CreateOperationalIntent(ctx context.Context, intent domain.OperationalIntent) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin operational intent create: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockIntent(ctx, tx, intent.ID); err != nil {
+		return err
+	}
+	if err := rejectOutstandingMissionDeploymentForIntent(ctx, tx, intent.ID); err != nil {
+		return err
+	}
 	intent.Revision = 0
 	raw, err := json.Marshal(intent)
 	if err != nil {
 		return fmt.Errorf("encode operational intent: %w", err)
 	}
-	_, err = s.pool.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO operational_intents (
 			id, version, revision, aircraft_id, planned_start_at, planned_end_at, updated_at, data
 		) VALUES ($1, $2, 0, $3, $4, $5, $6, $7)`,
 		intent.ID, intent.Version, intent.AircraftID, intent.PlannedStartAt, intent.PlannedEndAt, intent.UpdatedAt, raw)
-	if err == nil {
-		return nil
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return durable.ErrAlreadyExists
+		}
+		return fmt.Errorf("create operational intent: %w", err)
 	}
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		return durable.ErrAlreadyExists
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit operational intent create: %w", err)
 	}
-	return fmt.Errorf("create operational intent: %w", err)
+	return nil
 }
 
 // UpdateOperationalIntent updates the selected Store state while enforcing its consistency checks.
@@ -465,6 +482,9 @@ func (s *Store) ActivateOperationalIntent(ctx context.Context, intent domain.Ope
 }
 
 func updateOperationalIntentTx(ctx context.Context, tx pgx.Tx, intent domain.OperationalIntent, expectedRevision int64) error {
+	if err := rejectOutstandingMissionDeploymentForIntent(ctx, tx, intent.ID); err != nil {
+		return err
+	}
 	raw, err := json.Marshal(intent)
 	if err != nil {
 		return fmt.Errorf("encode operational intent: %w", err)
@@ -558,6 +578,9 @@ func (s *Store) AcceptOperationalIntent(ctx context.Context, intent domain.Opera
 }
 
 func acceptOperationalIntentTx(ctx context.Context, tx pgx.Tx, intent domain.OperationalIntent, expectedRevision int64) error {
+	if err := rejectOutstandingMissionDeploymentForIntent(ctx, tx, intent.ID); err != nil {
+		return err
+	}
 	var currentVersion int
 	var currentRevision int64
 	err := tx.QueryRow(ctx, `SELECT version, revision FROM operational_intents WHERE id = $1 ORDER BY version DESC LIMIT 1`, intent.ID).Scan(&currentVersion, &currentRevision)
@@ -683,6 +706,9 @@ func (s *Store) RecordOperationalVolume(ctx context.Context, volume domain.Opera
 	if err := lockIntent(ctx, tx, volume.IntentID); err != nil {
 		return err
 	}
+	if err := rejectOutstandingMissionDeploymentForIntent(ctx, tx, volume.IntentID); err != nil {
+		return err
+	}
 	if err := upsertVolume(ctx, tx, volume); err != nil {
 		return err
 	}
@@ -712,6 +738,9 @@ func (s *Store) ReplaceOperationalVolumes(ctx context.Context, id string, versio
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if err := lockIntent(ctx, tx, id); err != nil {
+		return err
+	}
+	if err := rejectOutstandingMissionDeploymentForIntent(ctx, tx, id); err != nil {
 		return err
 	}
 	if err := replaceVolumes(ctx, tx, id, version, volumes); err != nil {
@@ -749,6 +778,9 @@ func (s *Store) ReplaceOperationalIntent(ctx context.Context, expectedVersion in
 	// A transaction-scoped advisory lock gives every replica the same lock for
 	// this intent, including when a new version row is inserted.
 	if err := lockIntent(ctx, tx, intent.ID); err != nil {
+		return err
+	}
+	if err := rejectOutstandingMissionDeploymentForIntent(ctx, tx, intent.ID); err != nil {
 		return err
 	}
 	var currentVersion int
