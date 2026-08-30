@@ -38,8 +38,8 @@ func TestImportMissionIsIntentBoundImmutableAndIdempotent(t *testing.T) {
 	if len(first.Mission.SourceSHA256) != 64 || len(first.Mission.MissionDigest) != 64 || first.Mission.SourceSHA256 == first.Mission.MissionDigest {
 		t.Fatalf("hashes = source %q mission %q", first.Mission.SourceSHA256, first.Mission.MissionDigest)
 	}
-	if first.Mission.MissionDigest != "4432d98126ab510d4db5d7358a4e4ffc7e5a734fead607c184fc7d3424278bd8" {
-		t.Fatalf("mission digest = %q; does not match deterministic schema-version 1 MissionPlan protobuf", first.Mission.MissionDigest)
+	if first.Mission.MissionDigest != "4644193f31efc8212b3e84a9266646ed0e3f22748d21bbc89933aa84b765571b" {
+		t.Fatalf("mission digest = %q; does not match schema-version 1 canonical bytes", first.Mission.MissionDigest)
 	}
 	if got := first.Mission.Items[0].LatitudeE7; got != -353632620 {
 		t.Fatalf("latitude_e7 = %d", got)
@@ -89,6 +89,19 @@ func TestImportMissionIsIntentBoundImmutableAndIdempotent(t *testing.T) {
 	lateReplay, err := svc.ImportMission(context.Background(), "flight-1", "mission-request-1", req)
 	if err != nil || !lateReplay.Replayed || lateReplay.Mission.ID != first.Mission.ID {
 		t.Fatalf("post-transition idempotent replay = %#v, err=%v", lateReplay, err)
+	}
+}
+
+func TestCanonicalMissionDigestMatchesContractGoldenVector(t *testing.T) {
+	digest, err := canonicalMissionSHA([]domain.MissionItem{{
+		Sequence: 0, Frame: 0, Command: 16, Autocontinue: true,
+		LatitudeE7: -353632620, LongitudeE7: 1491652370, AltitudeM: 20.1,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digest != "6efa96b36af29a800d53ee7d7baf57d4b24f00d9ce2b408327281e74824acf4f" {
+		t.Fatalf("canonical digest = %q; does not match the published schema-version 1 golden vector", digest)
 	}
 }
 

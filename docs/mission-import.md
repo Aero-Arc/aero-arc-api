@@ -199,8 +199,10 @@ field. Other values that ArduPilot would normalize—including nonzero parameter
 disabled autocontinue, or sub-centimeter altitude—are rejected before
 persistence so an Agent readback cannot false-mismatch the API digest.
 `source_sha256` still hashes the exact uploaded source. `mission_digest` is
-SHA-256 over deterministic protobuf serialization of the published
-schema-version `1` `MissionPlan` contract.
+SHA-256 over the published schema-version `1` fixed-width canonical byte
+encoding. The encoder uses an explicit domain prefix, item count, network-byte
+order integers, IEEE-754 bit patterns, and one-byte booleans, so the digest is
+stable across protobuf implementations and runtimes.
 
 The API does not require E7 coordinates to survive legacy MAVLink float32
 latitude/longitude conversion. `MISSION_ITEM_INT` preserves the canonical E7
