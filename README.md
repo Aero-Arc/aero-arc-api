@@ -333,11 +333,17 @@ POST /api/v1/operational-intents/{intent_id}/flights
 
 The API derives `aircraft_id`, `intent_id`, `intent_version`, and the effective
 operator from authoritative records and creates a `planned` flight. After the
-exact linked intent version becomes active, start the flight with an empty
-`POST /api/v1/flights/{flight_id}/start`. Starting assigns server time to
-`started_at`; retrying an already-active flight is idempotent. Starting against
-an accepted, superseded, completed, or otherwise non-active intent returns
-`409`.
+exact linked intent version becomes active and the exact current mission has an
+`applied` or `already_applied` deployment, start the flight with an empty
+`POST /api/v1/flights/{flight_id}/start`. Import, deployment creation, and start
+share durable flight, aircraft, and intent lifecycle fences. A retryable
+deployment blocks replacement binding mutations until a terminal correlated
+outcome, an active flight blocks another upload for its aircraft, and start
+requires the aircraft's latest authoritative deployment to be the exact current
+mission with matching applied readback. Starting assigns server time to
+`started_at`; retrying an already-active flight is idempotent. Starting without
+a verified current mission deployment, or against an accepted, superseded,
+completed, or otherwise non-active intent, returns `409`.
 
 These operator-console routes follow the API's current local, unauthenticated
 single-operator deployment posture. They enforce operator consistency between

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -370,6 +371,22 @@ func TestFleetServiceBootstrapsBatteryAndFlightLifecycle(t *testing.T) {
 	intent.Status = domain.IntentStatusActive
 	intent.UpdatedAt = now
 	must(t, store.UpdateOperationalIntent(ctx, intent, 0))
+	mission, err := store.CreateMission(ctx, domain.Mission{
+		ID: "mission-1", OperatorID: "operator-1", FlightID: "flight-1", AircraftID: "aircraft-1",
+		IntentID: "intent-1", IntentVersion: 3, SourceFormat: domain.MissionSourceFormatQGCWPL110,
+		SourceSHA256: strings.Repeat("a", 64), MissionDigest: strings.Repeat("b", 64),
+		IdempotencyKey: "start-test-mission", IdempotencyRequest: strings.Repeat("c", 64), CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.CreateMissionDeployment(ctx, domain.MissionDeployment{
+		ID: "deployment-1", FlightID: "flight-1", MissionID: mission.ID, MissionDigest: mission.MissionDigest,
+		IdempotencyKey: "start-test-deployment", IdempotencyRequest: strings.Repeat("d", 64), Status: domain.MissionDeploymentApplied,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	started, err := svc.StartFlight(ctx, "flight-1")
 	if err != nil {
 		t.Fatalf("StartFlight returned error: %v", err)
@@ -725,6 +742,41 @@ func TestFleetServiceComposesAircraftMapView(t *testing.T) {
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}))
+	activeFlight := domain.FlightRecord{
+		ID: "flight-1", OperatorID: "operator-1", AircraftID: "aircraft-1",
+		IntentID: "intent-1", IntentVersion: 2, Status: domain.FlightStatusActive, StartedAt: now,
+	}
+	must(t, durable.CreateFlightRecord(ctx, activeFlight))
+	mission, err := durable.CreateMission(ctx, domain.Mission{
+		ID: "mission-1", OperatorID: "operator-1", FlightID: "flight-1", AircraftID: "aircraft-1", IntentID: "intent-1", IntentVersion: 2,
+		SourceFormat: domain.MissionSourceFormatQGCWPL110, SourceSHA256: strings.Repeat("a", 64), MissionDigest: strings.Repeat("b", 64),
+		IdempotencyKey: "map-mission", IdempotencyRequest: strings.Repeat("c", 64), CreatedAt: now,
+		Items: []domain.MissionItem{{Sequence: 0, Frame: 0, Command: 16, LatitudeE7: 355000000, LongitudeE7: -975000000, AltitudeM: 50}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = durable.CreateMissionDeployment(ctx, domain.MissionDeployment{
+		ID: "deployment-1", FlightID: activeFlight.ID, MissionID: mission.ID,
+		MissionDigest: mission.MissionDigest, IdempotencyKey: "map-deployment",
+		IdempotencyRequest: strings.Repeat("d", 64), Status: domain.MissionDeploymentApplied,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plannedFlight := activeFlight
+	plannedFlight.ID = "flight-2"
+	plannedFlight.Status = domain.FlightStatusPlanned
+	plannedFlight.StartedAt = time.Time{}
+	must(t, durable.CreateFlightRecord(ctx, plannedFlight))
+	if _, err := durable.CreateMission(ctx, domain.Mission{
+		ID: "mission-2", OperatorID: "operator-1", FlightID: plannedFlight.ID, AircraftID: "aircraft-1", IntentID: "intent-1", IntentVersion: 2,
+		SourceFormat: domain.MissionSourceFormatQGCWPL110, SourceSHA256: strings.Repeat("e", 64), MissionDigest: strings.Repeat("f", 64),
+		IdempotencyKey: "map-planned-mission", IdempotencyRequest: strings.Repeat("1", 64), CreatedAt: now.Add(time.Minute),
+		Items: []domain.MissionItem{{Sequence: 0, Frame: 0, Command: 21, LatitudeE7: 355100000, LongitudeE7: -975100000, AltitudeM: 10}},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	must(t, durable.UpsertConformanceSummary(ctx, domain.ConformanceSummary{
 		ID:                  "conformance-1",
 		OperatorID:          "operator-1",
@@ -768,6 +820,9 @@ func TestFleetServiceComposesAircraftMapView(t *testing.T) {
 	}
 	if len(view.OperationalVolumes) != 1 || view.OperationalVolumes[0].ID != "volume-1" {
 		t.Fatalf("volumes = %#v, want volume-1", view.OperationalVolumes)
+	}
+	if view.CommandedMission == nil || view.CommandedMission.ID != mission.ID || len(view.CommandedMission.Items) != 1 {
+		t.Fatalf("commanded mission = %#v, want mission-1", view.CommandedMission)
 	}
 	if view.ConformanceSummary == nil || view.ConformanceSummary.Status != domain.ConformanceStatusConforming {
 		t.Fatalf("summary = %#v, want conforming", view.ConformanceSummary)
@@ -820,6 +875,40 @@ func TestFleetServiceAircraftMapViewWithoutActiveIntent(t *testing.T) {
 	}
 	if len(view.ConformanceEvents) != 0 {
 		t.Fatalf("events = %#v, want empty", view.ConformanceEvents)
+	}
+}
+
+func TestFleetServiceAircraftMapViewOmitsUnverifiedActiveFlightMission(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	durable := durablememory.NewStore()
+	telemetry := telemetrymemory.NewStore()
+	replay := replaymemory.NewStore()
+	registry := newTestRegistry()
+
+	must(t, durable.CreateAircraft(ctx, domain.Aircraft{ID: "aircraft-1", AgentID: "agent-1"}))
+	must(t, durable.CreateOperationalIntent(ctx, domain.OperationalIntent{
+		ID: "intent-1", AircraftID: "aircraft-1", Version: 1, Status: domain.IntentStatusActive,
+		PlannedStartAt: now, PlannedEndAt: now.Add(time.Hour), UpdatedAt: now,
+	}))
+	must(t, durable.CreateFlightRecord(ctx, domain.FlightRecord{
+		ID: "flight-1", AircraftID: "aircraft-1", IntentID: "intent-1", IntentVersion: 1,
+		Status: domain.FlightStatusActive, StartedAt: now,
+	}))
+	if _, err := durable.CreateMission(ctx, domain.Mission{
+		ID: "mission-1", FlightID: "flight-1", AircraftID: "aircraft-1", IntentID: "intent-1", IntentVersion: 1,
+		MissionDigest: strings.Repeat("a", 64), IdempotencyKey: "unverified-map-mission",
+		IdempotencyRequest: strings.Repeat("b", 64), CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	view, err := NewFleetService(durable, telemetry, replay, registry).GetAircraftMapView(ctx, "aircraft-1", 100)
+	if err != nil {
+		t.Fatalf("GetAircraftMapView returned error: %v", err)
+	}
+	if view.CommandedMission != nil {
+		t.Fatalf("commanded mission = %#v, want nil without verified deployment", view.CommandedMission)
 	}
 }
 

@@ -28,6 +28,8 @@ const (
 	defaultRegistryAddress     = "localhost:50051"
 	defaultRegistryDialTimeout = 5 * time.Second
 	defaultRegistryFreshness   = 30 * time.Second
+	defaultRelayControlTimeout = 35 * time.Second
+	defaultRelayPlacementTTL   = 10 * time.Second
 	defaultTelemetryFreshness  = 15 * time.Second
 	defaultTelemetryLookback   = 5 * time.Minute
 	defaultRequestTimeout      = 3 * time.Second
@@ -63,6 +65,13 @@ type Config struct {
 	RegistryAddress          string
 	RegistryDialTimeout      time.Duration
 	RegistryFreshness        time.Duration
+	RelayControlCAFile       string
+	RelayControlCertFile     string
+	RelayControlKeyFile      string
+	RelayControlServerName   string
+	MissionDeploymentToken   string
+	RelayControlTimeout      time.Duration
+	RelayPlacementTTL        time.Duration
 	TelemetryFreshness       time.Duration
 	TelemetryLatestLookback  time.Duration
 	RequestTimeout           time.Duration
@@ -85,6 +94,8 @@ func Defaults() *Config {
 		RegistryAddress:         defaultRegistryAddress,
 		RegistryDialTimeout:     defaultRegistryDialTimeout,
 		RegistryFreshness:       defaultRegistryFreshness,
+		RelayControlTimeout:     defaultRelayControlTimeout,
+		RelayPlacementTTL:       defaultRelayPlacementTTL,
 		TelemetryFreshness:      defaultTelemetryFreshness,
 		TelemetryLatestLookback: defaultTelemetryLookback,
 		RequestTimeout:          defaultRequestTimeout,
@@ -125,6 +136,11 @@ func Load() (*Config, error) {
 	applyStringEnv("AERO_API_REPLAY_STORE", &cfg.ReplayStore)
 	applyStringEnv("AERO_API_REGISTRY_MODE", &cfg.RegistryMode)
 	applyStringEnv("AERO_API_REGISTRY_ADDR", &cfg.RegistryAddress)
+	applyStringEnv("AERO_API_RELAY_CONTROL_CA_FILE", &cfg.RelayControlCAFile)
+	applyStringEnv("AERO_API_RELAY_CONTROL_CERT_FILE", &cfg.RelayControlCertFile)
+	applyStringEnv("AERO_API_RELAY_CONTROL_KEY_FILE", &cfg.RelayControlKeyFile)
+	applyStringEnv("AERO_API_RELAY_CONTROL_SERVER_NAME", &cfg.RelayControlServerName)
+	applyStringEnv("AERO_API_MISSION_DEPLOY_TOKEN", &cfg.MissionDeploymentToken)
 	applyStringEnv("AERO_API_SEED", &cfg.Seed)
 	if err := applyBoolEnv("AERO_API_DEBUG", &cfg.Debug); err != nil {
 		return nil, err
@@ -136,6 +152,12 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if err := applyDurationEnv("AERO_API_REGISTRY_FRESHNESS", &cfg.RegistryFreshness); err != nil {
+		return nil, err
+	}
+	if err := applyDurationEnv("AERO_API_RELAY_CONTROL_TIMEOUT", &cfg.RelayControlTimeout); err != nil {
+		return nil, err
+	}
+	if err := applyDurationEnv("AERO_API_RELAY_PLACEMENT_TTL", &cfg.RelayPlacementTTL); err != nil {
 		return nil, err
 	}
 	if err := applyDurationEnv("AERO_API_TELEMETRY_FRESHNESS", &cfg.TelemetryFreshness); err != nil {
@@ -242,6 +264,44 @@ func (cfg *Config) Validate() error {
 	if cfg.RegistryFreshness <= 0 {
 		return fmt.Errorf("AERO_API_REGISTRY_FRESHNESS must be > 0")
 	}
+	if cfg.RelayControlTimeout <= 0 {
+		return fmt.Errorf("AERO_API_RELAY_CONTROL_TIMEOUT must be > 0")
+	}
+	if cfg.RelayControlTimeout > defaultRelayControlTimeout {
+		return fmt.Errorf("AERO_API_RELAY_CONTROL_TIMEOUT must be <= %s so a clear-context-and-deploy sequence cannot outlive the command expiry", defaultRelayControlTimeout)
+	}
+	if cfg.RelayPlacementTTL <= 0 {
+		return fmt.Errorf("AERO_API_RELAY_PLACEMENT_TTL must be > 0")
+	}
+	relayTLSValues := []string{cfg.RelayControlCAFile, cfg.RelayControlCertFile, cfg.RelayControlKeyFile, cfg.RelayControlServerName}
+	configuredRelayTLS := 0
+	for _, value := range relayTLSValues {
+		if strings.TrimSpace(value) != "" {
+			configuredRelayTLS++
+		}
+	}
+	if configuredRelayTLS != 0 && configuredRelayTLS != len(relayTLSValues) {
+		return fmt.Errorf("AERO_API_RELAY_CONTROL_CA_FILE, AERO_API_RELAY_CONTROL_CERT_FILE, AERO_API_RELAY_CONTROL_KEY_FILE, and AERO_API_RELAY_CONTROL_SERVER_NAME must be configured together")
+	}
+	if configuredRelayTLS > 0 && len(cfg.MissionDeploymentToken) < 24 {
+		return fmt.Errorf("AERO_API_MISSION_DEPLOY_TOKEN must be at least 24 bytes when Relay mission control is configured")
+	}
+	if cfg.MissionDeploymentToken != "" {
+		for _, character := range cfg.MissionDeploymentToken {
+			if character < 0x21 || character > 0x7e {
+				return fmt.Errorf("AERO_API_MISSION_DEPLOY_TOKEN must contain visible ASCII characters without whitespace")
+			}
+		}
+	}
+	if configuredRelayTLS == 0 && cfg.MissionDeploymentToken != "" {
+		return fmt.Errorf("AERO_API_MISSION_DEPLOY_TOKEN requires complete Relay control mTLS configuration")
+	}
+	if configuredRelayTLS > 0 && cfg.RegistryMode != "grpc" {
+		return fmt.Errorf("relay mission control requires registry mode grpc")
+	}
+	if configuredRelayTLS > 0 && cfg.DurableStore != DurableStorePostgres {
+		return fmt.Errorf("relay mission control requires durable store postgres")
+	}
 	if cfg.TelemetryFreshness <= 0 {
 		return fmt.Errorf("AERO_API_TELEMETRY_FRESHNESS must be > 0")
 	}
@@ -287,6 +347,11 @@ func (cfg *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// RelayControlEnabled reports whether the complete outbound mTLS identity is configured.
+func (cfg *Config) RelayControlEnabled() bool {
+	return strings.TrimSpace(cfg.RelayControlCAFile) != ""
 }
 
 func applyStringEnv(key string, dst *string) {

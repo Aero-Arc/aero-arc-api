@@ -4,11 +4,18 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider"
 	"github.com/Aero-Arc/aero-arc-api/internal/config"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 )
+
+func TestMissionDeploymentRequestTimeoutBudgetsAllControlPhases(t *testing.T) {
+	if got := missionDeploymentRequestTimeout(35 * time.Second); got != 110*time.Second {
+		t.Fatalf("mission deployment request timeout = %s, want 1m50s", got)
+	}
+}
 
 func TestNewDurableStoreIsIndependentFromAirspaceConfiguration(t *testing.T) {
 	cfg := config.Defaults()

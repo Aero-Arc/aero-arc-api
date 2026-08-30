@@ -25,7 +25,7 @@ func TestAuthoritativeSpatialReadCheckSlice(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(observer.Close)
-	if _, err := store.pool.Exec(ctx, `TRUNCATE received_peer_notifications, peer_notifications, operational_intent_publications, conflict_findings, operational_volumes, operational_intents`); err != nil {
+	if _, err := store.pool.Exec(ctx, `TRUNCATE mission_deployments, mission_items, missions, flight_records, aircraft, received_peer_notifications, peer_notifications, operational_intent_publications, conflict_findings, operational_volumes, operational_intents`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -674,7 +674,7 @@ func integrationStores(t *testing.T) (context.Context, *Store, *Store) {
 		t.Fatal(err)
 	}
 	t.Cleanup(second.Close)
-	if _, err := first.pool.Exec(ctx, `TRUNCATE received_peer_notifications, peer_notifications, operational_intent_publications, conflict_findings, operational_volumes, operational_intents`); err != nil {
+	if _, err := first.pool.Exec(ctx, `TRUNCATE mission_deployments, mission_items, missions, flight_records, aircraft, received_peer_notifications, peer_notifications, operational_intent_publications, conflict_findings, operational_volumes, operational_intents`); err != nil {
 		t.Fatal(err)
 	}
 	return ctx, first, second

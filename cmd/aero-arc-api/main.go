@@ -17,6 +17,7 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/config"
 	"github.com/Aero-Arc/aero-arc-api/internal/httpapi"
 	"github.com/Aero-Arc/aero-arc-api/internal/registry"
+	"github.com/Aero-Arc/aero-arc-api/internal/relaycontrol"
 	"github.com/Aero-Arc/aero-arc-api/internal/seed"
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
 	"github.com/Aero-Arc/aero-arc-api/internal/service/deconfliction"
@@ -115,6 +116,13 @@ func newCommand() *cli.Command {
 						Sources: cli.EnvVars("AERO_API_REGISTRY_DIAL_TIMEOUT"),
 					},
 					&cli.DurationFlag{Name: "registry-freshness", Value: defaults.RegistryFreshness, Usage: "maximum registry heartbeat age considered connected", Sources: cli.EnvVars("AERO_API_REGISTRY_FRESHNESS")},
+					&cli.StringFlag{Name: "relay-control-ca-file", Usage: "PEM CA used to authenticate Relay control servers", Sources: cli.EnvVars("AERO_API_RELAY_CONTROL_CA_FILE")},
+					&cli.StringFlag{Name: "relay-control-cert-file", Usage: "API mTLS client certificate for Relay control", Sources: cli.EnvVars("AERO_API_RELAY_CONTROL_CERT_FILE")},
+					&cli.StringFlag{Name: "relay-control-key-file", Usage: "API mTLS client key for Relay control", Sources: cli.EnvVars("AERO_API_RELAY_CONTROL_KEY_FILE")},
+					&cli.StringFlag{Name: "relay-control-server-name", Usage: "TLS name required from discovered Relay servers", Sources: cli.EnvVars("AERO_API_RELAY_CONTROL_SERVER_NAME")},
+					&cli.StringFlag{Name: "mission-deploy-token", Usage: "bearer credential required by mission deployment routes", Sources: cli.EnvVars("AERO_API_MISSION_DEPLOY_TOKEN")},
+					&cli.DurationFlag{Name: "relay-control-timeout", Value: defaults.RelayControlTimeout, Usage: "mission deployment control-phase timeout including placement and retry", Sources: cli.EnvVars("AERO_API_RELAY_CONTROL_TIMEOUT")},
+					&cli.DurationFlag{Name: "relay-placement-ttl", Value: defaults.RelayPlacementTTL, Usage: "maximum cached Registry Agent placement age", Sources: cli.EnvVars("AERO_API_RELAY_PLACEMENT_TTL")},
 					&cli.DurationFlag{Name: "telemetry-freshness", Value: defaults.TelemetryFreshness, Usage: "maximum telemetry observation age considered fresh", Sources: cli.EnvVars("AERO_API_TELEMETRY_FRESHNESS")},
 					&cli.DurationFlag{Name: "telemetry-latest-lookback", Value: defaults.TelemetryLatestLookback, Usage: "maximum telemetry history scanned for live state", Sources: cli.EnvVars("AERO_API_TELEMETRY_LATEST_LOOKBACK")},
 					&cli.DurationFlag{
@@ -162,6 +170,13 @@ func newCommand() *cli.Command {
 						RegistryAddress:          cmd.String("registry-addr"),
 						RegistryDialTimeout:      cmd.Duration("registry-dial-timeout"),
 						RegistryFreshness:        cmd.Duration("registry-freshness"),
+						RelayControlCAFile:       cmd.String("relay-control-ca-file"),
+						RelayControlCertFile:     cmd.String("relay-control-cert-file"),
+						RelayControlKeyFile:      cmd.String("relay-control-key-file"),
+						RelayControlServerName:   cmd.String("relay-control-server-name"),
+						MissionDeploymentToken:   cmd.String("mission-deploy-token"),
+						RelayControlTimeout:      cmd.Duration("relay-control-timeout"),
+						RelayPlacementTTL:        cmd.Duration("relay-placement-ttl"),
 						TelemetryFreshness:       cmd.Duration("telemetry-freshness"),
 						TelemetryLatestLookback:  cmd.Duration("telemetry-latest-lookback"),
 						RequestTimeout:           cmd.Duration("request-timeout"),
@@ -230,6 +245,24 @@ func run(ctx context.Context, cfg *config.Config) error {
 	}
 	fleetService := service.NewFleetService(durableStore, telemetryStore, replayStore, registryClient).
 		WithLiveStatePolicy(cfg.RegistryFreshness, cfg.TelemetryFreshness, nil)
+	if cfg.RelayControlEnabled() {
+		transportCredentials, err := relaycontrol.LoadTransportCredentials(
+			cfg.RelayControlCAFile, cfg.RelayControlCertFile, cfg.RelayControlKeyFile, cfg.RelayControlServerName,
+		)
+		if err != nil {
+			return err
+		}
+		relayService, err := relaycontrol.New(registryClient, transportCredentials, cfg.RelayControlTimeout, cfg.RelayPlacementTTL)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if err := relayService.Close(); err != nil {
+				slog.Warn("failed to close Relay control connections", slog.String("error", err.Error()))
+			}
+		}()
+		fleetService.WithMissionDeployer(relayService)
+	}
 	deconflictionService, err := deconfliction.NewDeconflictionServiceWithPublicationLease(
 		durableStore,
 		cfg.RequestTimeout+30*time.Second,
@@ -244,7 +277,9 @@ func run(ctx context.Context, cfg *config.Config) error {
 	preflightService := preflight.NewPreflightService(durableStore)
 	conformanceService := service.NewConformanceService(durableStore, telemetryStore)
 
-	apiServer := httpapi.NewWithWorkflows(fleetService, intentService, preflightService, conformanceService, cfg.RequestTimeout, deconflictionService).WithDebug(cfg.Debug)
+	apiServer := httpapi.NewWithWorkflows(fleetService, intentService, preflightService, conformanceService, cfg.RequestTimeout, deconflictionService).
+		WithMissionDeploymentControl(missionDeploymentRequestTimeout(cfg.RelayControlTimeout), cfg.MissionDeploymentToken).
+		WithDebug(cfg.Debug)
 	if deconflictionService.PublishingEnabled() {
 		authorizer, err := httpapi.NewUSSJWTAuthorizer(cfg.USSJWTPublicKeyFile, cfg.USSJWTIssuer, cfg.USSJWTAudience)
 		if err != nil {
@@ -303,6 +338,14 @@ func run(ctx context.Context, cfg *config.Config) error {
 
 	slog.Info("aero-arc-api shutdown complete")
 	return nil
+}
+
+func missionDeploymentRequestTimeout(relayControlTimeout time.Duration) time.Duration {
+	// A cross-flight handoff performs conditional clear, exact context set, and
+	// mission deployment sequentially. The outer transport budget covers every
+	// phase plus persistence/placement overhead; authorization remains bounded
+	// independently by the command's two-minute ExpiresAt.
+	return 3*relayControlTimeout + 5*time.Second
 }
 
 func newDurableStore(ctx context.Context, cfg *config.Config) (durable.Store, error) {

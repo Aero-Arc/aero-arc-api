@@ -28,6 +28,7 @@ type FleetService struct {
 	now                func() time.Time
 	registryFreshness  time.Duration
 	telemetryFreshness time.Duration
+	missionDeployer    MissionDeployer
 }
 
 const (
@@ -115,6 +116,18 @@ func (s *FleetService) WithLiveStatePolicy(registryFreshness, telemetryFreshness
 	if now != nil {
 		s.now = now
 	}
+	return s
+}
+
+// WithMissionDeployer installs the authenticated API-to-Relay mission command transport.
+//
+// Parameters:
+//   - deployer: is the trusted server-side adapter for context and mission commands.
+//
+// Returns:
+//   - result: is the same FleetService for fluent construction.
+func (s *FleetService) WithMissionDeployer(deployer MissionDeployer) *FleetService {
+	s.missionDeployer = deployer
 	return s
 }
 
@@ -268,7 +281,7 @@ func (s *FleetService) StartFlight(ctx context.Context, flightID string) (domain
 	}
 	flight.Status = domain.FlightStatusActive
 	flight.StartedAt = s.now().UTC()
-	if err := s.durable.UpdateFlightRecord(ctx, flight, domain.FlightStatusPlanned); err != nil {
+	if err := s.durable.StartFlightWithCurrentMissionDeployment(ctx, flight, domain.FlightStatusPlanned); err != nil {
 		if errors.Is(err, durable.ErrVersionConflict) {
 			current, getErr := s.durable.GetFlightRecord(ctx, flightID)
 			if getErr == nil && current.Status == domain.FlightStatusActive {
@@ -795,6 +808,13 @@ func (s *FleetService) GetAircraftMapView(ctx context.Context, aircraftID string
 		return readmodel.AircraftMapView{}, fmt.Errorf("list operational volumes: %w", err)
 	}
 	view.OperationalVolumes = volumesForVersion(volumes, intent.Version)
+
+	mission, err := s.durable.GetDeployedMissionForActiveFlight(ctx, aircraft.ID, intent.ID, intent.Version)
+	if err == nil {
+		view.CommandedMission = &mission
+	} else if !errors.Is(err, durable.ErrNotFound) {
+		return readmodel.AircraftMapView{}, fmt.Errorf("get commanded mission: %w", err)
+	}
 
 	summary, err := conformanceSummaryForVersion(ctx, s.durable, *intent)
 	if err != nil {

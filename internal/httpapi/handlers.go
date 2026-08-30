@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -190,6 +191,179 @@ func (s *Server) handleGetFlightReplay(c *mach.Context) {
 		return
 	}
 	writeJSON(c, http.StatusOK, replay)
+}
+
+func (s *Server) handleImportMission(c *mach.Context) {
+	if !s.missionDeploymentControlEnabled() {
+		writeError(c, http.StatusServiceUnavailable, "secure mission control is not configured")
+		return
+	}
+	if !s.authorizeMissionDeployment(c) {
+		writeError(c, http.StatusUnauthorized, "valid mission control authorization is required")
+		return
+	}
+	const maxMissionImportBody = 2 << 20
+	c.Request.Body = http.MaxBytesReader(c.Response, c.Request.Body, maxMissionImportBody)
+	var req service.ImportMissionRequest
+	if err := decodeJSON(c, &req); err != nil {
+		writeError(c, http.StatusBadRequest, fmt.Sprintf("invalid mission import body: %v", err))
+		return
+	}
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	result, err := s.fleet.ImportMission(ctx, c.Param("flight_id"), c.Request.Header.Get("Idempotency-Key"), req)
+	if err != nil {
+		var validationErr service.MissionValidationError
+		if errors.As(err, &validationErr) {
+			writeJSON(c, http.StatusBadRequest, map[string]any{
+				"error":               strings.TrimSpace(err.Error()),
+				"validation_findings": validationErr.Findings,
+			})
+			return
+		}
+		writeServiceError(c, err)
+		return
+	}
+	status := http.StatusCreated
+	if result.Replayed {
+		status = http.StatusOK
+		c.Response.Header().Set("Idempotent-Replayed", "true")
+	}
+	writeJSON(c, status, result)
+}
+
+func (s *Server) handleGetCurrentMission(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	mission, err := s.fleet.GetCurrentMission(ctx, c.Param("flight_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, mission)
+}
+
+func (s *Server) handleDeployCurrentMission(c *mach.Context) {
+	if !s.missionDeploymentControlEnabled() {
+		writeError(c, http.StatusServiceUnavailable, "secure Relay mission control is not configured")
+		return
+	}
+	if !s.authorizeMissionDeployment(c) {
+		writeError(c, http.StatusUnauthorized, "valid mission deployment authorization is required")
+		return
+	}
+	defer func() { _ = c.Request.Body.Close() }()
+	var probe [1]byte
+	if count, err := c.Request.Body.Read(probe[:]); count != 0 || (err != nil && !errors.Is(err, io.EOF)) {
+		writeError(c, http.StatusBadRequest, "mission deployment request must have an empty body")
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Context(), s.missionDeploymentTimeout)
+	defer cancel()
+	expectedDigest, err := parseMissionIfMatch(c.Request.Header.Get("If-Match"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, err := s.fleet.DeployCurrentMission(ctx, c.Param("flight_id"), c.Param("mission_id"), expectedDigest, c.Request.Header.Get("Idempotency-Key"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	status := http.StatusOK
+	if result.Deployment.Status == domain.MissionDeploymentPending || result.Deployment.Status == domain.MissionDeploymentTemporaryError || result.Deployment.Status == domain.MissionDeploymentOutcomeUnknown {
+		status = http.StatusAccepted
+	}
+	if result.Replayed {
+		c.Response.Header().Set("Idempotent-Replayed", "true")
+	}
+	writeJSON(c, status, result)
+}
+
+func parseMissionIfMatch(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if len(value) != 66 || value[0] != '"' || value[len(value)-1] != '"' {
+		return "", errors.New(`If-Match must contain one quoted lowercase SHA-256 mission digest`)
+	}
+	digest := value[1 : len(value)-1]
+	for _, character := range digest {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return "", errors.New(`If-Match must contain one quoted lowercase SHA-256 mission digest`)
+		}
+	}
+	return digest, nil
+}
+
+func (s *Server) handleGetMissionDeployment(c *mach.Context) {
+	if !s.missionDeploymentControlEnabled() {
+		writeError(c, http.StatusServiceUnavailable, "secure Relay mission control is not configured")
+		return
+	}
+	if !s.authorizeMissionDeployment(c) {
+		writeError(c, http.StatusUnauthorized, "valid mission deployment authorization is required")
+		return
+	}
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	deployment, err := s.fleet.GetMissionDeployment(ctx, c.Param("flight_id"), c.Param("deployment_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, deployment)
+}
+
+func (s *Server) handleGetCurrentMissionDeployment(c *mach.Context) {
+	if !s.missionDeploymentControlEnabled() {
+		writeError(c, http.StatusServiceUnavailable, "secure Relay mission control is not configured")
+		return
+	}
+	if !s.authorizeMissionDeployment(c) {
+		writeError(c, http.StatusUnauthorized, "valid mission deployment authorization is required")
+		return
+	}
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	deployment, err := s.fleet.GetCurrentMissionDeployment(ctx, c.Param("flight_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, deployment)
+}
+
+func (s *Server) handleReconcileMissionDeployment(c *mach.Context) {
+	if !s.missionDeploymentControlEnabled() {
+		writeError(c, http.StatusServiceUnavailable, "secure Relay mission control is not configured")
+		return
+	}
+	if !s.authorizeMissionDeployment(c) {
+		writeError(c, http.StatusUnauthorized, "valid mission deployment authorization is required")
+		return
+	}
+	defer func() { _ = c.Request.Body.Close() }()
+	var probe [1]byte
+	if count, err := c.Request.Body.Read(probe[:]); count != 0 || (err != nil && !errors.Is(err, io.EOF)) {
+		writeError(c, http.StatusBadRequest, "mission deployment reconciliation request must have an empty body")
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Context(), s.missionDeploymentTimeout)
+	defer cancel()
+	result, err := s.fleet.ReconcileMissionDeployment(ctx, c.Param("flight_id"), c.Param("deployment_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	status := http.StatusOK
+	if missionDeploymentPending(result.Deployment.Status) {
+		status = http.StatusAccepted
+	}
+	c.Response.Header().Set("Idempotent-Replayed", "true")
+	writeJSON(c, status, result)
+}
+
+func missionDeploymentPending(status domain.MissionDeploymentStatus) bool {
+	return status == domain.MissionDeploymentPending || status == domain.MissionDeploymentTemporaryError || status == domain.MissionDeploymentOutcomeUnknown
 }
 
 func (s *Server) handleCreateAircraft(c *mach.Context) {
@@ -569,6 +743,12 @@ func decodeJSON(c *mach.Context, dst any) error {
 	decoder := json.NewDecoder(c.Request.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(dst); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return errors.New("request body must contain exactly one JSON object")
+		}
 		return err
 	}
 	return nil

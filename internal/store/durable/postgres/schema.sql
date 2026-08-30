@@ -172,3 +172,105 @@ CREATE TABLE IF NOT EXISTS received_peer_notifications (
 
 CREATE INDEX IF NOT EXISTS received_peer_notifications_intent_idx
     ON received_peer_notifications (intent_id, received_at);
+
+CREATE TABLE IF NOT EXISTS aircraft (
+    id text PRIMARY KEY,
+    operator_id text NOT NULL,
+    agent_id text NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    data jsonb NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS aircraft_operator_idx ON aircraft (operator_id, id);
+
+CREATE TABLE IF NOT EXISTS flight_records (
+    id text PRIMARY KEY,
+    operator_id text NOT NULL,
+    aircraft_id text NOT NULL REFERENCES aircraft (id) ON DELETE RESTRICT,
+    intent_id text NOT NULL,
+    intent_version integer NOT NULL CHECK (intent_version > 0),
+    status text NOT NULL,
+    started_at timestamptz NOT NULL,
+    data jsonb NOT NULL,
+    FOREIGN KEY (intent_id, intent_version)
+        REFERENCES operational_intents (id, version) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS flight_records_aircraft_idx
+    ON flight_records (aircraft_id, started_at DESC, id);
+CREATE UNIQUE INDEX IF NOT EXISTS flight_records_one_active_aircraft_idx
+    ON flight_records (aircraft_id)
+    WHERE status = 'active';
+
+CREATE TABLE IF NOT EXISTS missions (
+    id text PRIMARY KEY,
+    operator_id text NOT NULL,
+    flight_id text NOT NULL,
+    aircraft_id text NOT NULL,
+    intent_id text NOT NULL,
+    intent_version integer NOT NULL CHECK (intent_version > 0),
+    version integer NOT NULL CHECK (version > 0),
+    source_format text NOT NULL,
+    source_sha256 text NOT NULL CHECK (source_sha256 ~ '^[0-9a-f]{64}$'),
+    mission_digest text NOT NULL CHECK (mission_digest ~ '^[0-9a-f]{64}$'),
+    idempotency_key text NOT NULL UNIQUE,
+    idempotency_request_hash text NOT NULL CHECK (idempotency_request_hash ~ '^[0-9a-f]{64}$'),
+    created_at timestamptz NOT NULL,
+    data jsonb NOT NULL,
+    UNIQUE (flight_id, version),
+    FOREIGN KEY (flight_id) REFERENCES flight_records (id) ON DELETE RESTRICT,
+    FOREIGN KEY (aircraft_id) REFERENCES aircraft (id) ON DELETE RESTRICT,
+    FOREIGN KEY (intent_id, intent_version)
+        REFERENCES operational_intents (id, version) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS missions_flight_current_idx
+    ON missions (flight_id, version DESC);
+CREATE INDEX IF NOT EXISTS missions_intent_current_idx
+    ON missions (aircraft_id, intent_id, intent_version, created_at DESC, version DESC);
+
+CREATE TABLE IF NOT EXISTS mission_items (
+    mission_id text NOT NULL REFERENCES missions (id) ON DELETE CASCADE,
+    sequence integer NOT NULL CHECK (sequence >= 0 AND sequence < 200),
+    data jsonb NOT NULL,
+    PRIMARY KEY (mission_id, sequence)
+);
+
+CREATE SEQUENCE IF NOT EXISTS mission_deployments_creation_order_seq;
+
+CREATE TABLE IF NOT EXISTS mission_deployments (
+    id text PRIMARY KEY,
+    flight_id text NOT NULL,
+    mission_id text NOT NULL REFERENCES missions (id) ON DELETE RESTRICT,
+    idempotency_key text NOT NULL UNIQUE,
+    idempotency_request_hash text NOT NULL CHECK (idempotency_request_hash ~ '^[0-9a-f]{64}$'),
+    revision bigint NOT NULL DEFAULT 0 CHECK (revision >= 0),
+    status text NOT NULL,
+    creation_order bigint NOT NULL DEFAULT nextval('mission_deployments_creation_order_seq'),
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    data jsonb NOT NULL,
+    FOREIGN KEY (flight_id) REFERENCES flight_records (id) ON DELETE RESTRICT
+);
+
+ALTER TABLE mission_deployments
+    ADD COLUMN IF NOT EXISTS creation_order bigint;
+
+WITH missing_order AS MATERIALIZED (
+    SELECT id, nextval('mission_deployments_creation_order_seq') AS creation_order
+    FROM mission_deployments
+    WHERE creation_order IS NULL
+    ORDER BY created_at, id
+)
+UPDATE mission_deployments AS deployment
+SET creation_order = missing_order.creation_order
+FROM missing_order
+WHERE deployment.id = missing_order.id;
+
+ALTER TABLE mission_deployments
+    ALTER COLUMN creation_order SET DEFAULT nextval('mission_deployments_creation_order_seq'),
+    ALTER COLUMN creation_order SET NOT NULL;
+
+CREATE INDEX IF NOT EXISTS mission_deployments_flight_order_idx
+    ON mission_deployments (flight_id, creation_order DESC);

@@ -8,6 +8,7 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/registry"
 	"github.com/Aero-Arc/aero-arc-api/internal/seed"
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
+	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 	replaymemory "github.com/Aero-Arc/aero-arc-api/internal/store/replay/memory"
 	telemetrymemory "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/memory"
@@ -16,12 +17,16 @@ import (
 func TestDemoPopulatesDashboardStores(t *testing.T) {
 	ctx := context.Background()
 	durable := durablememory.NewStore()
+	seedStore := persistedDuplicateStore{Store: durable}
 	telemetry := telemetrymemory.NewStore()
 	replay := replaymemory.NewStore()
 	registryClient := registry.NewMemoryClient()
 
-	if err := seed.Demo(ctx, durable, telemetry, replay, registryClient); err != nil {
+	if err := seed.Demo(ctx, seedStore, telemetry, replay, registryClient); err != nil {
 		t.Fatalf("Demo returned error: %v", err)
+	}
+	if err := seed.Demo(ctx, seedStore, telemetry, replay, registryClient); err != nil {
+		t.Fatalf("Demo restart returned error: %v", err)
 	}
 
 	aircraft, err := durable.ListAircraft(ctx)
@@ -148,4 +153,15 @@ func TestDemoPopulatesDashboardStores(t *testing.T) {
 	if manifest == nil {
 		t.Fatal("expected replay manifest")
 	}
+}
+
+type persistedDuplicateStore struct {
+	durable.Store
+}
+
+func (s persistedDuplicateStore) CreateAircraft(ctx context.Context, aircraft domain.Aircraft) error {
+	if _, err := s.GetAircraft(ctx, aircraft.ID); err == nil {
+		return durable.ErrAlreadyExists
+	}
+	return s.Store.CreateAircraft(ctx, aircraft)
 }

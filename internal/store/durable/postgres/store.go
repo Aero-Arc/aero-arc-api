@@ -61,6 +61,326 @@ func Open(ctx context.Context, databaseURL string) (*Store, error) {
 // Close releases resources owned by Store and completes any required shutdown work.
 func (s *Store) Close() { s.pool.Close() }
 
+// CreateMission atomically assigns and persists an immutable flight-local
+// mission version with its ordered items. Exact idempotency retries return the
+// original record; conflicting key reuse is rejected.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL transaction.
+//   - mission: contains validated binding, hashes, ordered items, and idempotency metadata.
+//
+// Returns:
+//   - result: is the stored mission with its assigned version.
+//   - error: reports constraint, serialization, or conflicting idempotency failures.
+func (s *Store) CreateMission(ctx context.Context, mission domain.Mission) (domain.Mission, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Mission{}, fmt.Errorf("begin mission create: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	mission, err = createMission(ctx, tx, mission)
+	if err != nil {
+		return domain.Mission{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return domain.Mission{}, fmt.Errorf("commit mission create: %w", err)
+	}
+	return mission, nil
+}
+
+// CreateMissionForPlannedFlight creates a mission while holding the same
+// PostgreSQL row lock used by flight activation.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL transaction.
+//   - mission: contains the exact planned-flight, operator, aircraft, intent, and idempotency binding.
+//
+// Returns:
+//   - result: is the stored mission with its assigned version or exact idempotent replay.
+//   - error: reports missing state, stale lifecycle/binding, an outstanding
+//     deployment fence, serialization/persistence failure, or conflicting idempotency reuse.
+func (s *Store) CreateMissionForPlannedFlight(ctx context.Context, mission domain.Mission) (domain.Mission, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Mission{}, fmt.Errorf("begin planned-flight mission create: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 1))`, mission.IdempotencyKey); err != nil {
+		return domain.Mission{}, fmt.Errorf("lock mission idempotency key: %w", err)
+	}
+	existing, err := getMissionByIdempotencyKey(ctx, tx, mission.IdempotencyKey)
+	if err == nil {
+		if existing.IdempotencyRequest != mission.IdempotencyRequest {
+			return domain.Mission{}, durable.ErrIdempotencyConflict
+		}
+		return existing, nil
+	}
+	if !errors.Is(err, durable.ErrNotFound) {
+		return domain.Mission{}, err
+	}
+	var status domain.FlightStatus
+	var operatorID, aircraftID, intentID string
+	var intentVersion int
+	if err := tx.QueryRow(ctx, `SELECT status,operator_id,aircraft_id,intent_id,intent_version FROM flight_records WHERE id=$1 FOR UPDATE`, mission.FlightID).
+		Scan(&status, &operatorID, &aircraftID, &intentID, &intentVersion); errors.Is(err, pgx.ErrNoRows) {
+		return domain.Mission{}, durable.ErrNotFound
+	} else if err != nil {
+		return domain.Mission{}, fmt.Errorf("lock mission flight: %w", err)
+	}
+	if status != domain.FlightStatusPlanned || mission.OperatorID != operatorID || mission.AircraftID != aircraftID ||
+		mission.IntentID != intentID || mission.IntentVersion != intentVersion {
+		return domain.Mission{}, durable.ErrVersionConflict
+	}
+	if err := lockIntent(ctx, tx, intentID); err != nil {
+		return domain.Mission{}, err
+	}
+	var currentIntentVersion int
+	var currentIntentOperator, currentIntentAircraft, currentIntentStatus string
+	if err := tx.QueryRow(ctx, `SELECT version,data->>'operator_id',aircraft_id,data->>'status' FROM operational_intents WHERE id=$1 ORDER BY version DESC LIMIT 1 FOR UPDATE`, intentID).
+		Scan(&currentIntentVersion, &currentIntentOperator, &currentIntentAircraft, &currentIntentStatus); errors.Is(err, pgx.ErrNoRows) {
+		return domain.Mission{}, durable.ErrNotFound
+	} else if err != nil {
+		return domain.Mission{}, fmt.Errorf("lock current operational intent for mission import: %w", err)
+	}
+	intentStatus := domain.IntentStatus(currentIntentStatus)
+	if currentIntentVersion != intentVersion || currentIntentOperator != operatorID || currentIntentAircraft != aircraftID ||
+		(intentStatus != domain.IntentStatusAccepted && intentStatus != domain.IntentStatusActive) {
+		return domain.Mission{}, durable.ErrVersionConflict
+	}
+	if err := rejectOutstandingMissionDeploymentForFlight(ctx, tx, mission.FlightID); err != nil {
+		return domain.Mission{}, err
+	}
+	mission, err = createMission(ctx, tx, mission)
+	if err != nil {
+		return domain.Mission{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return domain.Mission{}, fmt.Errorf("commit planned-flight mission create: %w", err)
+	}
+	return mission, nil
+}
+
+func createMission(ctx context.Context, tx pgx.Tx, mission domain.Mission) (domain.Mission, error) {
+	var err error
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 1))`, mission.IdempotencyKey); err != nil {
+		return domain.Mission{}, fmt.Errorf("lock mission idempotency key: %w", err)
+	}
+	existing, err := getMissionByIdempotencyKey(ctx, tx, mission.IdempotencyKey)
+	switch {
+	case err == nil:
+		if existing.IdempotencyRequest != mission.IdempotencyRequest {
+			return domain.Mission{}, durable.ErrIdempotencyConflict
+		}
+		return existing, nil
+	case !errors.Is(err, durable.ErrNotFound):
+		return domain.Mission{}, err
+	}
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 2))`, mission.FlightID); err != nil {
+		return domain.Mission{}, fmt.Errorf("lock mission flight: %w", err)
+	}
+	if err = tx.QueryRow(ctx, `SELECT COALESCE(MAX(version), 0) + 1 FROM missions WHERE flight_id = $1`, mission.FlightID).Scan(&mission.Version); err != nil {
+		return domain.Mission{}, fmt.Errorf("assign mission version: %w", err)
+	}
+	metadata := mission
+	metadata.Items = nil
+	raw, err := json.Marshal(metadata)
+	if err != nil {
+		return domain.Mission{}, fmt.Errorf("encode mission metadata: %w", err)
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO missions (
+			id, operator_id, flight_id, aircraft_id, intent_id, intent_version, version,
+			source_format, source_sha256, mission_digest, idempotency_key,
+			idempotency_request_hash, created_at, data
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+		mission.ID, mission.OperatorID, mission.FlightID, mission.AircraftID, mission.IntentID, mission.IntentVersion,
+		mission.Version, mission.SourceFormat, mission.SourceSHA256, mission.MissionDigest,
+		mission.IdempotencyKey, mission.IdempotencyRequest, mission.CreatedAt, raw)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return domain.Mission{}, durable.ErrAlreadyExists
+		}
+		return domain.Mission{}, fmt.Errorf("insert mission: %w", err)
+	}
+	for _, item := range mission.Items {
+		rawItem, marshalErr := json.Marshal(item)
+		if marshalErr != nil {
+			return domain.Mission{}, fmt.Errorf("encode mission item %d: %w", item.Sequence, marshalErr)
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO mission_items (mission_id, sequence, data) VALUES ($1,$2,$3)`, mission.ID, item.Sequence, rawItem); err != nil {
+			return domain.Mission{}, fmt.Errorf("insert mission item %d: %w", item.Sequence, err)
+		}
+	}
+	return mission, nil
+}
+
+// GetMissionByIdempotencyKey returns the immutable mission stored for a request key.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL read.
+//   - key: identifies the original import request.
+//
+// Returns:
+//   - result: is the complete mission including ordered items.
+//   - error: is durable.ErrNotFound when the key has not been used.
+func (s *Store) GetMissionByIdempotencyKey(ctx context.Context, key string) (domain.Mission, error) {
+	return getMissionByIdempotencyKey(ctx, s.pool, key)
+}
+
+// GetMission loads one immutable mission's metadata and sequence-ordered items
+// by identity.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL metadata/item reads.
+//   - missionID: identifies the immutable mission to load.
+//
+// Returns:
+//   - result: is the complete decoded mission with items ordered by sequence.
+//   - error: is durable.ErrNotFound when the mission is absent, or reports
+//     context cancellation, query, scan, row iteration, metadata decoding, and
+//     item decoding failures.
+func (s *Store) GetMission(ctx context.Context, missionID string) (domain.Mission, error) {
+	return getMission(ctx, s.pool, `WHERE id = $1`, missionID)
+}
+
+// GetCurrentMissionForFlight returns the highest immutable mission version for one flight.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL read.
+//   - flightID: identifies the flight binding.
+//
+// Returns:
+//   - result: is the complete current mission.
+//   - error: is durable.ErrNotFound when the flight has no mission.
+func (s *Store) GetCurrentMissionForFlight(ctx context.Context, flightID string) (domain.Mission, error) {
+	return getMission(ctx, s.pool, `WHERE flight_id = $1 ORDER BY version DESC LIMIT 1`, flightID)
+}
+
+// GetCurrentMissionForIntent returns the newest mission exactly bound to an aircraft and intent version.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL read.
+//   - aircraftID: identifies the bound aircraft.
+//   - intentID: identifies the operational intent.
+//   - intentVersion: identifies its exact immutable version.
+//
+// Returns:
+//   - result: is the complete newest matching mission.
+//   - error: is durable.ErrNotFound when no mission matches.
+func (s *Store) GetCurrentMissionForIntent(ctx context.Context, aircraftID string, intentID string, intentVersion int) (domain.Mission, error) {
+	return getMission(ctx, s.pool, `WHERE aircraft_id = $1 AND intent_id = $2 AND intent_version = $3 ORDER BY created_at DESC, version DESC LIMIT 1`, aircraftID, intentID, intentVersion)
+}
+
+// GetDeployedMissionForActiveFlight returns the current mission for the exact
+// active flight only when that mission has a verified terminal deployment.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL read.
+//   - aircraftID: identifies the active flight's aircraft.
+//   - intentID: identifies the active flight's operational intent.
+//   - intentVersion: identifies the exact active intent version.
+//
+// Returns:
+//   - result: is the verified mission commanded for the active flight.
+//   - error: is durable.ErrNotFound when no exact active flight or verified current mission exists.
+func (s *Store) GetDeployedMissionForActiveFlight(ctx context.Context, aircraftID string, intentID string, intentVersion int) (domain.Mission, error) {
+	var activeFlightCount int
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM flight_records
+		WHERE aircraft_id=$1 AND intent_id=$2 AND intent_version=$3 AND status=$4`,
+		aircraftID, intentID, intentVersion, domain.FlightStatusActive).Scan(&activeFlightCount); err != nil {
+		return domain.Mission{}, fmt.Errorf("count active flights for commanded mission: %w", err)
+	}
+	if activeFlightCount == 0 {
+		return domain.Mission{}, durable.ErrNotFound
+	}
+	if activeFlightCount > 1 {
+		return domain.Mission{}, durable.ErrVersionConflict
+	}
+	return getMission(ctx, s.pool, `
+		WHERE id = (
+			SELECT mission.id
+			FROM missions AS mission
+			JOIN flight_records AS flight ON flight.id = mission.flight_id
+			WHERE flight.aircraft_id=$1
+			  AND flight.intent_id=$2
+			  AND flight.intent_version=$3
+			  AND flight.status=$4
+			  AND mission.version=(
+				SELECT MAX(current.version)
+				FROM missions AS current
+				WHERE current.flight_id=flight.id
+			  )
+			  AND EXISTS (
+				SELECT 1
+				FROM mission_deployments AS deployment
+				WHERE deployment.flight_id=flight.id
+				  AND deployment.mission_id=mission.id
+				  AND deployment.status IN ($5,$6)
+				  AND deployment.data->'deployment'->>'mission_digest'=mission.mission_digest
+			  )
+			LIMIT 1
+		)`, aircraftID, intentID, intentVersion, domain.FlightStatusActive,
+		domain.MissionDeploymentApplied, domain.MissionDeploymentAlreadyApplied)
+}
+
+type missionQuerier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
+func getMissionByIdempotencyKey(ctx context.Context, query missionQuerier, key string) (domain.Mission, error) {
+	return getMission(ctx, query, `WHERE idempotency_key = $1`, key)
+}
+
+func getMission(ctx context.Context, query missionQuerier, clause string, args ...any) (domain.Mission, error) {
+	var mission domain.Mission
+	var raw []byte
+	err := query.QueryRow(ctx, `
+		SELECT id, operator_id, flight_id, aircraft_id, intent_id, intent_version, version,
+		       source_format, source_sha256, mission_digest, idempotency_key,
+		       idempotency_request_hash, created_at, data
+		FROM missions `+clause, args...).Scan(
+		&mission.ID, &mission.OperatorID, &mission.FlightID, &mission.AircraftID, &mission.IntentID,
+		&mission.IntentVersion, &mission.Version, &mission.SourceFormat,
+		&mission.SourceSHA256, &mission.MissionDigest, &mission.IdempotencyKey,
+		&mission.IdempotencyRequest, &mission.CreatedAt, &raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Mission{}, durable.ErrNotFound
+	}
+	if err != nil {
+		return domain.Mission{}, fmt.Errorf("get mission: %w", err)
+	}
+	var metadata domain.Mission
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return domain.Mission{}, fmt.Errorf("decode mission metadata: %w", err)
+	}
+	mission.ValidationFindings = metadata.ValidationFindings
+	rows, err := query.Query(ctx, `SELECT data FROM mission_items WHERE mission_id = $1 ORDER BY sequence`, mission.ID)
+	if err != nil {
+		return domain.Mission{}, fmt.Errorf("list mission items: %w", err)
+	}
+	defer rows.Close()
+	mission.Items = make([]domain.MissionItem, 0)
+	for rows.Next() {
+		var rawItem []byte
+		if err := rows.Scan(&rawItem); err != nil {
+			return domain.Mission{}, fmt.Errorf("scan mission item: %w", err)
+		}
+		var item domain.MissionItem
+		if err := json.Unmarshal(rawItem, &item); err != nil {
+			return domain.Mission{}, fmt.Errorf("decode mission item: %w", err)
+		}
+		mission.Items = append(mission.Items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return domain.Mission{}, fmt.Errorf("iterate mission items: %w", err)
+	}
+	return mission, nil
+}
+
 // CreateOperationalIntent creates and stores the supplied Store record.
 //
 // Parameters:
@@ -70,24 +390,38 @@ func (s *Store) Close() { s.pool.Close() }
 // Returns:
 //   - error: reports validation, dependency, cancellation, or persistence failures.
 func (s *Store) CreateOperationalIntent(ctx context.Context, intent domain.OperationalIntent) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin operational intent create: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockIntent(ctx, tx, intent.ID); err != nil {
+		return err
+	}
+	if err := rejectOutstandingMissionDeploymentForIntent(ctx, tx, intent.ID); err != nil {
+		return err
+	}
 	intent.Revision = 0
 	raw, err := json.Marshal(intent)
 	if err != nil {
 		return fmt.Errorf("encode operational intent: %w", err)
 	}
-	_, err = s.pool.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO operational_intents (
 			id, version, revision, aircraft_id, planned_start_at, planned_end_at, updated_at, data
 		) VALUES ($1, $2, 0, $3, $4, $5, $6, $7)`,
 		intent.ID, intent.Version, intent.AircraftID, intent.PlannedStartAt, intent.PlannedEndAt, intent.UpdatedAt, raw)
-	if err == nil {
-		return nil
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return durable.ErrAlreadyExists
+		}
+		return fmt.Errorf("create operational intent: %w", err)
 	}
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		return durable.ErrAlreadyExists
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit operational intent create: %w", err)
 	}
-	return fmt.Errorf("create operational intent: %w", err)
+	return nil
 }
 
 // UpdateOperationalIntent updates the selected Store state while enforcing its consistency checks.
@@ -168,6 +502,9 @@ func (s *Store) ActivateOperationalIntent(ctx context.Context, intent domain.Ope
 }
 
 func updateOperationalIntentTx(ctx context.Context, tx pgx.Tx, intent domain.OperationalIntent, expectedRevision int64) error {
+	if err := rejectOutstandingMissionDeploymentForIntent(ctx, tx, intent.ID); err != nil {
+		return err
+	}
 	raw, err := json.Marshal(intent)
 	if err != nil {
 		return fmt.Errorf("encode operational intent: %w", err)
@@ -261,6 +598,9 @@ func (s *Store) AcceptOperationalIntent(ctx context.Context, intent domain.Opera
 }
 
 func acceptOperationalIntentTx(ctx context.Context, tx pgx.Tx, intent domain.OperationalIntent, expectedRevision int64) error {
+	if err := rejectOutstandingMissionDeploymentForIntent(ctx, tx, intent.ID); err != nil {
+		return err
+	}
 	var currentVersion int
 	var currentRevision int64
 	err := tx.QueryRow(ctx, `SELECT version, revision FROM operational_intents WHERE id = $1 ORDER BY version DESC LIMIT 1`, intent.ID).Scan(&currentVersion, &currentRevision)
@@ -386,6 +726,9 @@ func (s *Store) RecordOperationalVolume(ctx context.Context, volume domain.Opera
 	if err := lockIntent(ctx, tx, volume.IntentID); err != nil {
 		return err
 	}
+	if err := rejectOutstandingMissionDeploymentForIntent(ctx, tx, volume.IntentID); err != nil {
+		return err
+	}
 	if err := upsertVolume(ctx, tx, volume); err != nil {
 		return err
 	}
@@ -415,6 +758,9 @@ func (s *Store) ReplaceOperationalVolumes(ctx context.Context, id string, versio
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if err := lockIntent(ctx, tx, id); err != nil {
+		return err
+	}
+	if err := rejectOutstandingMissionDeploymentForIntent(ctx, tx, id); err != nil {
 		return err
 	}
 	if err := replaceVolumes(ctx, tx, id, version, volumes); err != nil {
@@ -452,6 +798,9 @@ func (s *Store) ReplaceOperationalIntent(ctx context.Context, expectedVersion in
 	// A transaction-scoped advisory lock gives every replica the same lock for
 	// this intent, including when a new version row is inserted.
 	if err := lockIntent(ctx, tx, intent.ID); err != nil {
+		return err
+	}
+	if err := rejectOutstandingMissionDeploymentForIntent(ctx, tx, intent.ID); err != nil {
 		return err
 	}
 	var currentVersion int

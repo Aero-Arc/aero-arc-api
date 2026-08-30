@@ -16,11 +16,15 @@ import (
 )
 
 type fakeRegistry struct {
-	relayIDs []string
-	calls    int
+	relayIDs  []string
+	calls     int
+	deadlines []time.Time
 }
 
-func (f *fakeRegistry) GetAgentPlacement(_ context.Context, _ *registryv1.GetAgentPlacementRequest, _ ...grpc.CallOption) (*registryv1.GetAgentPlacementResponse, error) {
+func (f *fakeRegistry) GetAgentPlacement(ctx context.Context, _ *registryv1.GetAgentPlacementRequest, _ ...grpc.CallOption) (*registryv1.GetAgentPlacementResponse, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		f.deadlines = append(f.deadlines, deadline)
+	}
 	i := f.calls
 	if i >= len(f.relayIDs) {
 		i = len(f.relayIDs) - 1
@@ -28,7 +32,10 @@ func (f *fakeRegistry) GetAgentPlacement(_ context.Context, _ *registryv1.GetAge
 	f.calls++
 	return &registryv1.GetAgentPlacementResponse{Placement: &registryv1.AgentPlacement{AgentId: "agent-1", RelayId: f.relayIDs[i]}}, nil
 }
-func (f *fakeRegistry) ListRelays(context.Context, *registryv1.ListRelaysRequest, ...grpc.CallOption) (*registryv1.ListRelaysResponse, error) {
+func (f *fakeRegistry) ListRelays(ctx context.Context, _ *registryv1.ListRelaysRequest, _ ...grpc.CallOption) (*registryv1.ListRelaysResponse, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		f.deadlines = append(f.deadlines, deadline)
+	}
 	return &registryv1.ListRelaysResponse{Relays: []*registryv1.Relay{{RelayId: "relay-1", Address: "relay-one", GrpcPort: 50051}, {RelayId: "relay-2", Address: "relay-two:50052"}}}, nil
 }
 
@@ -44,10 +51,16 @@ func (f *fakePool) Invalidate(id string) { f.invalidated = append(f.invalidated,
 func (f *fakePool) Close() error         { return nil }
 
 type fakeRelayClient struct {
-	setRequests   []*relayv1.SetOperationContextRequest
-	clearRequests []*relayv1.ClearOperationContextRequest
-	setErrors     []error
-	block         bool
+	setRequests       []*relayv1.SetOperationContextRequest
+	clearRequests     []*relayv1.ClearOperationContextRequest
+	deployRequests    []*relayv1.DeployMissionRequest
+	setErrors         []error
+	activeContext     *agentv1.OperationContext
+	omitActiveContext bool
+	clearResult       *agentv1.OperationContextCommandAck
+	clearErr          error
+	block             bool
+	setDeadlines      []time.Time
 }
 
 func TestNewRequiresRelayTransportCredentials(t *testing.T) {
@@ -72,8 +85,18 @@ func (f *fakeRelayClient) GetDroneStatus(context.Context, *relayv1.GetDroneStatu
 func (f *fakeRelayClient) SendAircraftCommand(context.Context, *relayv1.SendAircraftCommandRequest, ...grpc.CallOption) (*relayv1.SendAircraftCommandResponse, error) {
 	return nil, errors.New("unused")
 }
+func (f *fakeRelayClient) DeployMission(_ context.Context, request *relayv1.DeployMissionRequest, _ ...grpc.CallOption) (*relayv1.DeployMissionResponse, error) {
+	f.deployRequests = append(f.deployRequests, request)
+	return &relayv1.DeployMissionResponse{Result: &agentv1.MissionDeploymentResult{
+		CommandId: request.GetCommand().GetCommandId(), Binding: request.GetCommand().GetBinding(),
+		Status: agentv1.MissionDeploymentResult_STATUS_APPLIED,
+	}}, nil
+}
 func (f *fakeRelayClient) SetOperationContext(ctx context.Context, r *relayv1.SetOperationContextRequest, _ ...grpc.CallOption) (*relayv1.SetOperationContextResponse, error) {
 	f.setRequests = append(f.setRequests, r)
+	if deadline, ok := ctx.Deadline(); ok {
+		f.setDeadlines = append(f.setDeadlines, deadline)
+	}
 	if f.block {
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -85,11 +108,77 @@ func (f *fakeRelayClient) SetOperationContext(ctx context.Context, r *relayv1.Se
 			return nil, err
 		}
 	}
-	return &relayv1.SetOperationContextResponse{Result: &agentv1.OperationContextCommandAck{CommandId: r.Command.GetCommandId(), Status: agentv1.OperationContextCommandAck_STATUS_APPLIED}}, nil
+	active := f.activeContext
+	if active == nil && !f.omitActiveContext {
+		active = r.Command.GetContext()
+	}
+	return &relayv1.SetOperationContextResponse{Result: &agentv1.OperationContextCommandAck{CommandId: r.Command.GetCommandId(), Status: agentv1.OperationContextCommandAck_STATUS_APPLIED, ActiveContext: active}}, nil
+}
+
+func TestEnsureOperationContextRejectsMissingOrMismatchedActiveContext(t *testing.T) {
+	command := &agentv1.SetOperationContextCommand{CommandId: "context-command", Context: &agentv1.OperationContext{
+		AircraftId: "aircraft-1", FlightId: "flight-1", IntentId: "intent-1", IntentVersion: 3,
+	}}
+	for _, test := range []struct {
+		name   string
+		client *fakeRelayClient
+	}{
+		{name: "missing", client: &fakeRelayClient{omitActiveContext: true}},
+		{name: "mismatch", client: &fakeRelayClient{activeContext: &agentv1.OperationContext{AircraftId: "aircraft-2", FlightId: "flight-1", IntentId: "intent-1", IntentVersion: 3}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service := newWithPool(&fakeRegistry{relayIDs: []string{"relay-1"}}, &fakePool{clients: map[string]*fakeRelayClient{"relay-1": test.client}}, time.Second, time.Minute)
+			if err := service.EnsureOperationContext(context.Background(), "agent-1", command); err == nil {
+				t.Fatal("EnsureOperationContext returned nil error")
+			}
+		})
+	}
 }
 func (f *fakeRelayClient) ClearOperationContext(_ context.Context, r *relayv1.ClearOperationContextRequest, _ ...grpc.CallOption) (*relayv1.ClearOperationContextResponse, error) {
 	f.clearRequests = append(f.clearRequests, r)
+	if f.clearErr != nil {
+		return nil, f.clearErr
+	}
+	if f.clearResult != nil {
+		return &relayv1.ClearOperationContextResponse{Result: f.clearResult}, nil
+	}
 	return &relayv1.ClearOperationContextResponse{Result: &agentv1.OperationContextCommandAck{CommandId: r.Command.GetCommandId(), Status: agentv1.OperationContextCommandAck_STATUS_ALREADY_APPLIED}}, nil
+}
+
+func TestClearOperationContextForReconciliationRequiresCorrelatedSafeState(t *testing.T) {
+	old := &agentv1.OperationContext{AircraftId: "aircraft-1", FlightId: "flight-1", IntentId: "intent-1", IntentVersion: 3}
+	command := &agentv1.ClearOperationContextCommand{CommandId: "clear-command", FlightId: old.GetFlightId()}
+	for _, test := range []struct {
+		name    string
+		result  *agentv1.OperationContextCommandAck
+		wantErr bool
+	}{
+		{name: "cleared", result: &agentv1.OperationContextCommandAck{CommandId: command.GetCommandId(), Status: agentv1.OperationContextCommandAck_STATUS_APPLIED}},
+		{name: "newer context preserved", result: &agentv1.OperationContextCommandAck{CommandId: command.GetCommandId(), Status: agentv1.OperationContextCommandAck_STATUS_ALREADY_APPLIED, ActiveContext: &agentv1.OperationContext{AircraftId: old.GetAircraftId(), FlightId: "new-flight", IntentId: "new-intent", IntentVersion: 4}}},
+		{name: "old context remains", result: &agentv1.OperationContextCommandAck{CommandId: command.GetCommandId(), Status: agentv1.OperationContextCommandAck_STATUS_APPLIED, ActiveContext: old}, wantErr: true},
+		{name: "mismatched ack", result: &agentv1.OperationContextCommandAck{CommandId: "another-command", Status: agentv1.OperationContextCommandAck_STATUS_APPLIED}, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeRelayClient{clearResult: test.result}
+			service := newWithPool(&fakeRegistry{relayIDs: []string{"relay-1"}}, &fakePool{clients: map[string]*fakeRelayClient{"relay-1": client}}, time.Second, time.Minute)
+			err := service.ClearOperationContextForReconciliation(context.Background(), "agent-1", command, old)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, test.wantErr)
+			}
+			if len(client.clearRequests) != 1 {
+				t.Fatalf("clear requests = %d", len(client.clearRequests))
+			}
+		})
+	}
+	service := newWithPool(&fakeRegistry{}, &fakePool{}, time.Second, time.Minute)
+	if err := service.ClearOperationContextForReconciliation(context.Background(), "", command, old); err == nil {
+		t.Fatal("invalid clear request returned nil error")
+	}
+	transportFailure := &fakeRelayClient{clearErr: errors.New("relay unavailable")}
+	service = newWithPool(&fakeRegistry{relayIDs: []string{"relay-1"}}, &fakePool{clients: map[string]*fakeRelayClient{"relay-1": transportFailure}}, time.Second, time.Minute)
+	if err := service.ClearOperationContextForReconciliation(context.Background(), "agent-1", command, old); err == nil {
+		t.Fatal("clear transport failure returned nil error")
+	}
 }
 
 func TestSetOperationContextCachesPlacementAndPreservesCommandID(t *testing.T) {
@@ -97,7 +186,7 @@ func TestSetOperationContextCachesPlacementAndPreservesCommandID(t *testing.T) {
 	client := &fakeRelayClient{}
 	service := newWithPool(registry, &fakePool{clients: map[string]*fakeRelayClient{"relay-1": client}}, time.Second, time.Minute)
 	for i := 0; i < 2; i++ {
-		id, err := service.SetOperationContext(context.Background(), SetRequest{AgentID: "agent-1", FlightID: "flight-1", IntentID: "intent-1", IntentVersion: 3, CommandID: "command-1"})
+		id, err := service.SetOperationContext(context.Background(), SetRequest{AgentID: "agent-1", AircraftID: "aircraft-1", FlightID: "flight-1", IntentID: "intent-1", IntentVersion: 3, CommandID: "command-1"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -112,8 +201,22 @@ func TestSetOperationContextCachesPlacementAndPreservesCommandID(t *testing.T) {
 		t.Fatalf("requests=%d", len(client.setRequests))
 	}
 	context := client.setRequests[0].Command.GetContext()
-	if context.GetFlightId() != "flight-1" || context.GetIntentId() != "intent-1" || context.GetIntentVersion() != 3 {
+	if context.GetAircraftId() != "aircraft-1" || context.GetFlightId() != "flight-1" || context.GetIntentId() != "intent-1" || context.GetIntentVersion() != 3 {
 		t.Fatalf("context=%v", context)
+	}
+}
+
+func TestDeployMissionUsesAuthoritativePlacementAndPreservesCommand(t *testing.T) {
+	client := &fakeRelayClient{}
+	service := newWithPool(&fakeRegistry{relayIDs: []string{"relay-1"}}, &fakePool{clients: map[string]*fakeRelayClient{"relay-1": client}}, time.Second, time.Minute)
+	command := &agentv1.DeployMissionCommand{CommandId: "deploy-command", Binding: &agentv1.MissionBinding{MissionId: "mission-1"}}
+	result, err := service.DeployMission(context.Background(), "agent-1", command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.GetCommandId() != command.GetCommandId() || len(client.deployRequests) != 1 ||
+		client.deployRequests[0].GetAgentId() != "agent-1" || client.deployRequests[0].GetCommand() != command {
+		t.Fatalf("result=%#v requests=%#v", result, client.deployRequests)
 	}
 }
 
@@ -132,6 +235,15 @@ func TestUnavailableInvalidatesPlacementAndRetriesSameCommand(t *testing.T) {
 	}
 	if second.setRequests[0].Command.GetCommandId() != "stable" {
 		t.Fatalf("command changed: %v", second.setRequests[0].Command)
+	}
+	if len(registry.deadlines) != 4 || len(first.setDeadlines) != 1 || len(second.setDeadlines) != 1 {
+		t.Fatalf("phase deadlines = registry:%v first:%v second:%v", registry.deadlines, first.setDeadlines, second.setDeadlines)
+	}
+	phaseDeadline := registry.deadlines[0]
+	for _, deadline := range append(append([]time.Time(nil), registry.deadlines...), first.setDeadlines[0], second.setDeadlines[0]) {
+		if !deadline.Equal(phaseDeadline) {
+			t.Fatalf("placement/retry received fresh deadline: got %s want %s", deadline, phaseDeadline)
+		}
 	}
 }
 
