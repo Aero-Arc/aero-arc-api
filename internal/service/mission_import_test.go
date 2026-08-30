@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -21,6 +22,15 @@ const validWPL110 = "QGC WPL 110\n" +
 	"1\t0\t0\t22\t0\t0\t0\t0\t-35.3632620\t149.1652370\t20\t1\n" +
 	"2\t0\t0\t16\t0\t0\t0\t0\t-35.3620000\t149.1660000\t25\t1\n" +
 	"3\t0\t0\t21\t0\t0\t0\t0\t-35.3632620\t149.1652370\t0\t1\n"
+
+type missionCoverageErrorStore struct {
+	durable.Store
+	err error
+}
+
+func (s missionCoverageErrorStore) CheckMissionCoverage(context.Context, domain.OperationalVolume, []domain.MissionItem) (durable.MissionCoverageResult, error) {
+	return durable.MissionCoverageResult{}, s.err
+}
 
 func TestImportMissionIsIntentBoundImmutableAndIdempotent(t *testing.T) {
 	svc, store := newMissionTestService(t)
@@ -297,6 +307,29 @@ func TestImportMissionRejectsItemsAndSegmentsOutsideIntentVolume(t *testing.T) {
 			"2\t0\t0\t21\t0\t0\t0\t0\t3\t3.5\t20\t1\n"
 		_, err = svc.ImportMission(context.Background(), "flight-1", "outside-segment", validMissionRequest(source))
 		assertMissionFinding(t, err, "mission_segment_outside_authorized_volume")
+	})
+}
+
+func TestImportMissionClassifiesCoverageErrorsWithoutLeakingDependencies(t *testing.T) {
+	t.Run("dependency failure propagates", func(t *testing.T) {
+		svc, store := newMissionTestService(t)
+		svc.durable = missionCoverageErrorStore{Store: store, err: context.DeadlineExceeded}
+		_, err := svc.ImportMission(context.Background(), "flight-1", "coverage-dependency-error", validMissionRequest(validWPL110))
+		var validationErr MissionValidationError
+		if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &validationErr) {
+			t.Fatalf("coverage dependency error = %v", err)
+		}
+	})
+
+	t.Run("invalid geometry is a generic finding", func(t *testing.T) {
+		svc, store := newMissionTestService(t)
+		detail := "sensitive geometry parser detail"
+		svc.durable = missionCoverageErrorStore{Store: store, err: fmt.Errorf("%w: %s", durable.ErrInvalidMissionCoverageGeometry, detail)}
+		_, err := svc.ImportMission(context.Background(), "flight-1", "coverage-geometry-error", validMissionRequest(validWPL110))
+		var validationErr MissionValidationError
+		if !errors.As(err, &validationErr) || len(validationErr.Findings) != 1 || validationErr.Findings[0].Code != "authorized_geometry_not_evaluable" || strings.Contains(err.Error(), detail) {
+			t.Fatalf("coverage geometry error = %#v err=%v", validationErr, err)
+		}
 	})
 }
 

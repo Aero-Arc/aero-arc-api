@@ -27,7 +27,7 @@ import (
 func (s *Store) CheckMissionCoverage(_ context.Context, volume domain.OperationalVolume, items []domain.MissionItem) (durable.MissionCoverageResult, error) {
 	polygon, err := decodeMissionPolygon(volume.GeoJSON)
 	if err != nil {
-		return durable.MissionCoverageResult{}, err
+		return durable.MissionCoverageResult{}, fmt.Errorf("%w: %v", durable.ErrInvalidMissionCoverageGeometry, err)
 	}
 	result := durable.MissionCoverageResult{}
 	for index, item := range items {

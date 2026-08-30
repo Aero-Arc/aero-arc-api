@@ -211,9 +211,12 @@ func (s *FleetService) validateMissionAgainstIntent(ctx context.Context, intent 
 	}
 	coverage, err := s.durable.CheckMissionCoverage(ctx, volume, items)
 	if err != nil {
-		return MissionValidationError{Findings: []domain.MissionValidationFinding{missionFinding(
-			"authorized_geometry_not_evaluable", fmt.Sprintf("authorized volume geometry cannot be evaluated: %v", err), nil,
-		)}}
+		if errors.Is(err, durable.ErrInvalidMissionCoverageGeometry) {
+			return MissionValidationError{Findings: []domain.MissionValidationFinding{missionFinding(
+				"authorized_geometry_not_evaluable", "authorized volume geometry is malformed or unsupported", nil,
+			)}}
+		}
+		return fmt.Errorf("check mission coverage against authorized volume: %w", err)
 	}
 	for _, sequence := range coverage.UncoveredItems {
 		itemSequence := sequence

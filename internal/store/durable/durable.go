@@ -16,11 +16,12 @@ import (
 )
 
 var (
-	ErrNotFound            = errors.New("not found")
-	ErrAlreadyExists       = errors.New("already exists")
-	ErrVersionConflict     = errors.New("version conflict")
-	ErrActiveIntent        = errors.New("aircraft already has an active operational intent")
-	ErrIdempotencyConflict = errors.New("idempotency key was already used for a different request")
+	ErrNotFound                       = errors.New("not found")
+	ErrAlreadyExists                  = errors.New("already exists")
+	ErrVersionConflict                = errors.New("version conflict")
+	ErrActiveIntent                   = errors.New("aircraft already has an active operational intent")
+	ErrIdempotencyConflict            = errors.New("idempotency key was already used for a different request")
+	ErrInvalidMissionCoverageGeometry = errors.New("invalid mission coverage geometry")
 )
 
 type CandidateQuery struct {

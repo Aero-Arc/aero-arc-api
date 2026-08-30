@@ -12,6 +12,7 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/registry"
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
+	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
 	replaymemory "github.com/Aero-Arc/aero-arc-api/internal/store/replay/memory"
 	telemetrymemory "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/memory"
@@ -92,6 +93,35 @@ func TestMissionImportFailsClosedWhenControlIsUnconfigured(t *testing.T) {
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
+}
+
+func TestMissionImportCoverageDependencyFailureIsServerError(t *testing.T) {
+	handler := newMissionHTTPHandlerWithCoverageError(t, context.DeadlineExceeded)
+	payload := map[string]any{
+		"source_format": "qgc_wpl_110", "aircraft_id": "aircraft-1", "intent_id": "intent-1", "intent_version": 1,
+		"source": "QGC WPL 110\n0\t1\t0\t16\t0\t0\t0\t0\t-35.363262\t149.165237\t0\t1\n1\t0\t0\t22\t0\t0\t0\t0\t-35.363262\t149.165237\t20\t1\n2\t0\t0\t21\t0\t0\t0\t0\t-35.363262\t149.165237\t0\t1\n",
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/flights/flight-1/missions/import", bytes.NewReader(raw))
+	request.Header.Set("Authorization", "Bearer test-mission-deployment-token")
+	request.Header.Set("Idempotency-Key", "http-coverage-dependency")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusInternalServerError || bytes.Contains(response.Body.Bytes(), []byte("authorized_geometry_not_evaluable")) {
+		t.Fatalf("coverage dependency response status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+type httpCoverageErrorStore struct {
+	durable.Store
+	err error
+}
+
+func (s httpCoverageErrorStore) CheckMissionCoverage(context.Context, domain.OperationalVolume, []domain.MissionItem) (durable.MissionCoverageResult, error) {
+	return durable.MissionCoverageResult{}, s.err
 }
 
 type httpMissionDeployer struct{}
@@ -260,6 +290,10 @@ func TestMissionImportReturnsStructuredValidationFindings(t *testing.T) {
 }
 
 func newMissionHTTPHandler(t *testing.T) http.Handler {
+	return newMissionHTTPHandlerWithCoverageError(t, nil)
+}
+
+func newMissionHTTPHandlerWithCoverageError(t *testing.T, coverageErr error) http.Handler {
 	t.Helper()
 	ctx := context.Background()
 	store := durablememory.NewStore()
@@ -286,6 +320,10 @@ func newMissionHTTPHandler(t *testing.T) http.Handler {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	fleet := service.NewFleetService(store, telemetrymemory.NewStore(), replaymemory.NewStore(), registry.NewMemoryClient()).WithMissionDeployer(&httpMissionDeployer{})
+	var durableStore durable.Store = store
+	if coverageErr != nil {
+		durableStore = httpCoverageErrorStore{Store: store, err: coverageErr}
+	}
+	fleet := service.NewFleetService(durableStore, telemetrymemory.NewStore(), replaymemory.NewStore(), registry.NewMemoryClient()).WithMissionDeployer(&httpMissionDeployer{})
 	return New(fleet, time.Second).WithMissionDeploymentControl(time.Second, "test-mission-deployment-token").Handler()
 }
