@@ -182,8 +182,9 @@ This slice intentionally accepts only:
 - zero values for operational parameters 1 through 4, except LAND source
   parameter 4 may be `0` or `1`; canonical parameters 1 through 3 and
   waypoint/takeoff parameter 4 are positive zero, while LAND parameter 4 is `+1`
-- operational altitudes that remain identical after float32 conversion and
-  ArduPilot's signed centimeter storage round trip
+- operational altitudes that remain bit-identical after ArduPilot's exact
+  float32 multiply, int32 truncation-toward-zero, and float32 centimeter
+  readback path
 
 Relative and terrain frames are rejected because the API cannot safely resolve
 them into the operational volume's altitude reference. The exact intent version
@@ -200,8 +201,10 @@ and altitude are canonicalized through IEEE-754 float32. ArduPilot stores and
 reads back NAV_LAND command `21` parameter 4 as `+1` when WPL supplied either
 `0` or `1`, so the API canonical mission and digest always contain `+1` for that
 field. Other values that ArduPilot would normalize—including nonzero parameters,
-disabled autocontinue, or sub-centimeter altitude—are rejected before
-persistence so an Agent readback cannot false-mismatch the API digest.
+disabled autocontinue, sub-centimeter altitude, or values such as `16.8 m` that
+float32 multiplication truncates to `1679 cm` and reads back as `16.79 m`—are
+rejected before persistence so an Agent readback cannot false-mismatch the API
+digest.
 `source_sha256` still hashes the exact uploaded source. `mission_digest` is
 SHA-256 over the published schema-version `1` fixed-width canonical byte
 encoding. The encoder uses an explicit domain prefix, item count, network-byte
