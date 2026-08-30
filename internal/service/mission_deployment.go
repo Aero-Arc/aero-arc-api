@@ -170,8 +170,13 @@ func (s *FleetService) DeployCurrentMission(ctx context.Context, flightID, expec
 				updated := deployment
 				updated.AttemptCount++
 				updated.UpdatedAt = s.now().UTC()
-				updated.Status = domain.MissionDeploymentTemporaryError
-				updated.Message = "previous operation context was not conditionally cleared; mission was not dispatched: " + clearErr.Error()
+				if deployment.DispatchStarted {
+					updated.Status = domain.MissionDeploymentOutcomeUnknown
+					updated.Message = "previous operation context was not conditionally cleared during reconciliation; prior mission outcome remains unknown: " + clearErr.Error()
+				} else {
+					updated.Status = domain.MissionDeploymentTemporaryError
+					updated.Message = "previous operation context was not conditionally cleared; mission was not dispatched: " + clearErr.Error()
+				}
 				if err := s.durable.UpdateMissionDeployment(ctx, updated, deployment.Revision); err != nil {
 					if errors.Is(err, durable.ErrVersionConflict) {
 						current, getErr := s.durable.GetMissionDeployment(ctx, deployment.ID)
@@ -203,8 +208,13 @@ func (s *FleetService) DeployCurrentMission(ctx context.Context, flightID, expec
 			updated := deployment
 			updated.AttemptCount++
 			updated.UpdatedAt = s.now().UTC()
-			updated.Status = domain.MissionDeploymentTemporaryError
-			updated.Message = "operation context was not acknowledged; mission was not dispatched: " + contextErr.Error()
+			if deployment.DispatchStarted {
+				updated.Status = domain.MissionDeploymentOutcomeUnknown
+				updated.Message = "operation context was not acknowledged during reconciliation; prior mission outcome remains unknown: " + contextErr.Error()
+			} else {
+				updated.Status = domain.MissionDeploymentTemporaryError
+				updated.Message = "operation context was not acknowledged; mission was not dispatched: " + contextErr.Error()
+			}
 			if err := s.durable.UpdateMissionDeployment(ctx, updated, deployment.Revision); err != nil {
 				if errors.Is(err, durable.ErrVersionConflict) {
 					current, getErr := s.durable.GetMissionDeployment(ctx, deployment.ID)

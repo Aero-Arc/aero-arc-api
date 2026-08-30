@@ -110,6 +110,16 @@ func (s *Service) SetOperationContext(ctx context.Context, req SetRequest) (stri
 
 // EnsureOperationContext delivers one stable context command and requires a
 // correlated successful Agent acknowledgement before returning.
+//
+// Parameters:
+//   - ctx: bounds placement lookup, connection, refreshed-placement retry, and delivery.
+//   - agentID: identifies the Registry-authoritative Agent destination.
+//   - command: contains a stable command ID and exact aircraft/flight/intent/version context.
+//
+// Returns:
+//   - error: reports incomplete input, cancellation/deadline, Registry placement,
+//     Relay connection/delivery, missing or mismatched acknowledgement, rejected
+//     status, or an active context that differs from the requested binding.
 func (s *Service) EnsureOperationContext(ctx context.Context, agentID string, command *agentv1.SetOperationContextCommand) error {
 	if strings.TrimSpace(agentID) == "" || command == nil || strings.TrimSpace(command.GetCommandId()) == "" || command.GetContext() == nil {
 		return fmt.Errorf("agent_id and a complete operation context command are required")
@@ -130,6 +140,17 @@ func (s *Service) EnsureOperationContext(ctx context.Context, agentID string, co
 
 // ClearOperationContextForReconciliation conditionally clears the old flight
 // context and proves that exact binding is no longer active before recovery.
+//
+// Parameters:
+//   - ctx: bounds placement lookup, connection, refreshed-placement retry, and delivery.
+//   - agentID: identifies the Registry-authoritative Agent destination.
+//   - command: contains a stable non-authoritative command ID and old flight ID.
+//   - old: is the exact old aircraft/flight/intent/version context that must no longer be active.
+//
+// Returns:
+//   - error: reports incomplete or authoritative input, cancellation/deadline,
+//     placement/delivery failure, an uncorrelated or rejected acknowledgement,
+//     or acknowledgement state that still reports the old context active.
 func (s *Service) ClearOperationContextForReconciliation(ctx context.Context, agentID string, command *agentv1.ClearOperationContextCommand, old *agentv1.OperationContext) error {
 	if strings.TrimSpace(agentID) == "" || command == nil || strings.TrimSpace(command.GetCommandId()) == "" ||
 		strings.TrimSpace(command.GetFlightId()) == "" || command.GetAuthoritative() || old == nil {
@@ -181,6 +202,16 @@ func (s *Service) ClearOperationContext(ctx context.Context, req ClearRequest) (
 
 // DeployMission routes one API-authoritative command through the Agent's
 // Registry placement and returns only a correlated Agent result.
+//
+// Parameters:
+//   - ctx: bounds placement lookup, connection, refreshed-placement retry, and delivery.
+//   - agentID: identifies the Registry-authoritative Agent destination.
+//   - command: is the stable, fully bound mission command preserved across retries.
+//
+// Returns:
+//   - result: is the Agent's correlated mission deployment result.
+//   - error: reports incomplete input, cancellation/deadline, placement,
+//     connection/delivery failure, or a response without a deployment result.
 func (s *Service) DeployMission(ctx context.Context, agentID string, command *agentv1.DeployMissionCommand) (*agentv1.MissionDeploymentResult, error) {
 	if strings.TrimSpace(agentID) == "" || command == nil || strings.TrimSpace(command.GetCommandId()) == "" {
 		return nil, fmt.Errorf("agent_id and a command with command_id are required")

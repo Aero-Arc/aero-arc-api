@@ -274,6 +274,56 @@ func TestDeployCurrentMissionConditionallyClearsPreviousFlightContext(t *testing
 	}
 }
 
+func TestDeployCurrentMissionPreservesUncertaintyAfterClearFailure(t *testing.T) {
+	svc, store := newMissionTestService(t)
+	firstMission, err := svc.ImportMission(context.Background(), "flight-1", "uncertain-clear-first-import", validMissionRequest(validWPL110))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployer := &fakeMissionDeployer{}
+	svc.WithMissionDeployer(deployer)
+	if _, err := svc.DeployCurrentMission(context.Background(), "flight-1", firstMission.Mission.ID, firstMission.Mission.MissionDigest, "uncertain-clear-first-deploy"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateFlightRecord(context.Background(), domain.FlightRecord{
+		ID: "flight-2", OperatorID: "operator-1", AircraftID: "aircraft-1", IntentID: "intent-1",
+		IntentVersion: 2, Status: domain.FlightStatusPlanned,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	secondMission, err := svc.ImportMission(context.Background(), "flight-2", "uncertain-clear-second-import", validMissionRequest(validWPL110))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployer.deployErr = context.DeadlineExceeded
+	uncertain, err := svc.DeployCurrentMission(context.Background(), "flight-2", secondMission.Mission.ID, secondMission.Mission.MissionDigest, "uncertain-clear-second-deploy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uncertain.Deployment.Status != domain.MissionDeploymentOutcomeUnknown || !uncertain.Deployment.DispatchStarted {
+		t.Fatalf("uncertain deployment = %#v", uncertain.Deployment)
+	}
+
+	deployer.clearErr = errors.New("conditional clear unavailable")
+	failedReconcile, err := svc.ReconcileMissionDeployment(context.Background(), "flight-2", uncertain.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failedReconcile.Deployment.Status != domain.MissionDeploymentOutcomeUnknown || !failedReconcile.Deployment.DispatchStarted || len(deployer.commands) != 2 {
+		t.Fatalf("clear failure downgraded uncertainty: %#v calls=%#v", failedReconcile.Deployment, deployer.events)
+	}
+
+	svc.now = func() time.Time { return uncertain.Deployment.ExpiresAt }
+	deployer.deployErr = nil
+	postExpiry, err := svc.ReconcileMissionDeployment(context.Background(), "flight-2", uncertain.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if postExpiry.Deployment.Status != domain.MissionDeploymentApplied || len(deployer.clears) != 2 || len(deployer.contexts) != 2 || len(deployer.commands) != 3 {
+		t.Fatalf("post-expiry clear recovery = %#v calls=%#v", postExpiry.Deployment, deployer.events)
+	}
+}
+
 func TestDeployCurrentMissionRejectsConflictingIdempotencyAndLifecycle(t *testing.T) {
 	svc, store := newMissionTestService(t)
 	firstMission, err := svc.ImportMission(context.Background(), "flight-1", "first-import", validMissionRequest(validWPL110))
@@ -352,6 +402,23 @@ func TestDeployCurrentMissionRetainsTransportUnknown(t *testing.T) {
 	}
 	if _, err := svc.DeployCurrentMission(context.Background(), "flight-1", mission.Mission.ID, mission.Mission.MissionDigest, "another-deploy-key"); !errors.Is(err, durable.ErrVersionConflict) {
 		t.Fatalf("second unresolved deployment error = %v, want version conflict", err)
+	}
+	deployer.contextErr = errors.New("context reconciliation unavailable")
+	failedReconcile, err := svc.ReconcileMissionDeployment(context.Background(), "flight-1", result.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failedReconcile.Deployment.Status != domain.MissionDeploymentOutcomeUnknown || !failedReconcile.Deployment.DispatchStarted || len(deployer.commands) != 1 {
+		t.Fatalf("failed reconciliation downgraded uncertainty: %#v calls=%#v", failedReconcile.Deployment, deployer.events)
+	}
+	svc.now = func() time.Time { return result.Deployment.ExpiresAt }
+	deployer.deployErr = nil
+	postExpiry, err := svc.ReconcileMissionDeployment(context.Background(), "flight-1", result.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if postExpiry.Deployment.Status != domain.MissionDeploymentApplied || len(deployer.contexts) != 2 || len(deployer.commands) != 2 {
+		t.Fatalf("post-expiry readback = %#v calls=%#v", postExpiry.Deployment, deployer.events)
 	}
 }
 
