@@ -41,7 +41,16 @@ func (s *Store) CreateAircraft(ctx context.Context, aircraft domain.Aircraft) er
 	return nil
 }
 
-// GetAircraft returns one durable aircraft by identity.
+// GetAircraft loads and decodes one durable aircraft by identity.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL query lifetime.
+//   - aircraftID: identifies the aircraft record to load.
+//
+// Returns:
+//   - result: is the complete decoded aircraft record.
+//   - error: is durable.ErrNotFound when the identity is absent, or reports
+//     context cancellation, query, connection, scan, or decoding failures.
 func (s *Store) GetAircraft(ctx context.Context, aircraftID string) (domain.Aircraft, error) {
 	var raw []byte
 	if err := s.pool.QueryRow(ctx, `SELECT data FROM aircraft WHERE id=$1`, aircraftID).Scan(&raw); errors.Is(err, pgx.ErrNoRows) {
@@ -56,7 +65,15 @@ func (s *Store) GetAircraft(ctx context.Context, aircraftID string) (domain.Airc
 	return aircraft, nil
 }
 
-// ListAircraft returns all durable aircraft in stable identity order.
+// ListAircraft loads and decodes all durable aircraft in ascending ID order.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL query/iteration lifetime.
+//
+// Returns:
+//   - result: contains every decoded aircraft, ordered by aircraft ID.
+//   - error: reports context cancellation, query, connection, scan, row
+//     iteration, or decoding failures.
 func (s *Store) ListAircraft(ctx context.Context) ([]domain.Aircraft, error) {
 	rows, err := s.pool.Query(ctx, `SELECT data FROM aircraft ORDER BY id`)
 	if err != nil {
@@ -78,7 +95,18 @@ func (s *Store) ListAircraft(ctx context.Context) ([]domain.Aircraft, error) {
 	return result, rows.Err()
 }
 
-// CreateFlightRecord persists one flight lifecycle record.
+// CreateFlightRecord persists one flight lifecycle record. It writes the
+// flight, operator, aircraft, and intent identities, intent version, lifecycle
+// status, start time, and the complete serialized domain record.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL insert lifetime.
+//   - flight: is the complete flight lifecycle record to serialize and persist.
+//
+// Returns:
+//   - error: is durable.ErrAlreadyExists for a duplicate flight ID, or reports
+//     record serialization, context cancellation, connection, and other
+//     PostgreSQL dependency failures.
 func (s *Store) CreateFlightRecord(ctx context.Context, flight domain.FlightRecord) error {
 	raw, err := json.Marshal(flight)
 	if err != nil {
@@ -96,7 +124,21 @@ func (s *Store) CreateFlightRecord(ctx context.Context, flight domain.FlightReco
 	return nil
 }
 
-// UpdateFlightRecord replaces a flight under an optimistic status fence.
+// UpdateFlightRecord transactionally replaces a flight under an optimistic
+// status fence. It locks the flight, then its aircraft mission lifecycle and
+// intent, and refuses binding mutation while a retryable mission deployment is
+// outstanding.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL transaction lifetime.
+//   - flight: is the complete replacement lifecycle record to persist.
+//   - expectedStatus: is the required durable status before replacement.
+//
+// Returns:
+//   - error: is durable.ErrNotFound when the flight is absent;
+//     durable.ErrVersionConflict for a stale status, conflicting active flight,
+//     or outstanding deployment fence; or reports locking, serialization,
+//     context cancellation, transaction, and other PostgreSQL failures.
 func (s *Store) UpdateFlightRecord(ctx context.Context, flight domain.FlightRecord, expectedStatus domain.FlightStatus) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -145,7 +187,16 @@ func (s *Store) UpdateFlightRecord(ctx context.Context, flight domain.FlightReco
 	return nil
 }
 
-// GetFlightRecord returns one durable flight by identity.
+// GetFlightRecord loads and decodes one durable flight by identity.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL query lifetime.
+//   - flightID: identifies the flight lifecycle record to load.
+//
+// Returns:
+//   - result: is the complete decoded flight lifecycle record.
+//   - error: is durable.ErrNotFound when the identity is absent, or reports
+//     context cancellation, query, connection, scan, or decoding failures.
 func (s *Store) GetFlightRecord(ctx context.Context, flightID string) (domain.FlightRecord, error) {
 	var raw []byte
 	if err := s.pool.QueryRow(ctx, `SELECT data FROM flight_records WHERE id=$1`, flightID).Scan(&raw); errors.Is(err, pgx.ErrNoRows) {
@@ -160,7 +211,19 @@ func (s *Store) GetFlightRecord(ctx context.Context, flightID string) (domain.Fl
 	return flight, nil
 }
 
-// ListFlightRecords returns durable flights for an optional aircraft scope.
+// ListFlightRecords loads and decodes durable flights for an optional aircraft
+// scope, ordered by descending start time and then ascending flight ID.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL query/iteration lifetime.
+//   - aircraftID: limits results to one aircraft when non-empty; an empty value
+//     lists flights for every aircraft.
+//
+// Returns:
+//   - result: contains the matching decoded flight lifecycle records in stable
+//     start-time and identity order.
+//   - error: reports context cancellation, query, connection, scan, row
+//     iteration, or decoding failures.
 func (s *Store) ListFlightRecords(ctx context.Context, aircraftID string) ([]domain.FlightRecord, error) {
 	query := `SELECT data FROM flight_records ORDER BY started_at DESC,id`
 	args := []any{}
