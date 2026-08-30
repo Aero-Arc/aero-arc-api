@@ -293,6 +293,16 @@ func (s *FleetService) persistUndispatchedMissionExpiry(ctx context.Context, dep
 }
 
 // GetMissionDeployment returns a durable result scoped to its flight.
+//
+// Parameters:
+//   - ctx: controls cancellation and the durable read.
+//   - flightID: scopes the result to its owning flight.
+//   - deploymentID: identifies the durable mission command result.
+//
+// Returns:
+//   - result: is the matching deployment with server-owned routing secrets omitted.
+//   - error: reports invalid input, durable read failure, or durable.ErrNotFound
+//     when the deployment is absent or belongs to another flight.
 func (s *FleetService) GetMissionDeployment(ctx context.Context, flightID, deploymentID string) (domain.MissionDeployment, error) {
 	if strings.TrimSpace(flightID) == "" || strings.TrimSpace(deploymentID) == "" {
 		return domain.MissionDeployment{}, fmt.Errorf("%w: flight_id and deployment_id are required", ErrValidation)

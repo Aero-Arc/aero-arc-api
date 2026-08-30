@@ -14,6 +14,14 @@ import (
 
 // CreateMissionDeployment atomically stores one exact command or returns an
 // existing exact idempotency replay.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL transaction.
+//   - deployment: contains the immutable command binding and idempotency metadata.
+//
+// Returns:
+//   - result: is the stored deployment or exact idempotent replay.
+//   - error: reports encoding/persistence, duplicate identity, or conflicting idempotency reuse.
 func (s *Store) CreateMissionDeployment(ctx context.Context, deployment domain.MissionDeployment) (domain.MissionDeployment, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -32,6 +40,16 @@ func (s *Store) CreateMissionDeployment(ctx context.Context, deployment domain.M
 
 // CreateMissionDeploymentForPlannedFlight records a deployment under the
 // flight row lock shared with mission import and StartFlight.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL transaction.
+//   - deployment: contains the exact current mission, planned-flight, operator,
+//     aircraft, intent-version, Agent, and idempotency binding.
+//
+// Returns:
+//   - result: is the durably admitted deployment or exact idempotent replay.
+//   - error: reports missing state, stale lifecycle/binding, conflicting
+//     idempotency, active-flight/outstanding-deployment conflicts, or persistence failure.
 func (s *Store) CreateMissionDeploymentForPlannedFlight(ctx context.Context, deployment domain.MissionDeployment) (domain.MissionDeployment, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -236,6 +254,16 @@ func (s *Store) GetMissionDeploymentByIdempotencyKey(ctx context.Context, key st
 
 // GetPreviousMissionDeploymentForAircraft returns the immediately preceding
 // database-ordered deployment admission for the same aircraft.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL read.
+//   - aircraftID: scopes durable admission order to one aircraft.
+//   - deploymentID: identifies the current deployment whose predecessor is requested.
+//
+// Returns:
+//   - result: is the highest creation_order below the current deployment.
+//   - error: reports query/decoding failure or durable.ErrNotFound when the
+//     current deployment is outside the aircraft scope or no predecessor exists.
 func (s *Store) GetPreviousMissionDeploymentForAircraft(ctx context.Context, aircraftID, deploymentID string) (domain.MissionDeployment, error) {
 	return getMissionDeployment(ctx, s.pool, `
 		WHERE flight_id IN (SELECT id FROM flight_records WHERE aircraft_id=$1)
@@ -271,6 +299,15 @@ func (s *Store) GetCurrentMissionDeploymentForFlight(ctx context.Context, flight
 }
 
 // UpdateMissionDeployment persists an observed result with optimistic concurrency.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL update.
+//   - deployment: is the updated observation for the same immutable command identity.
+//   - expectedRevision: is the required current revision before replacement.
+//
+// Returns:
+//   - error: reports encoding/persistence, durable.ErrNotFound for an unknown
+//     deployment, or durable.ErrVersionConflict for stale revision/identity.
 func (s *Store) UpdateMissionDeployment(ctx context.Context, deployment domain.MissionDeployment, expectedRevision int64) error {
 	deployment.Revision = expectedRevision + 1
 	raw, err := encodeMissionDeployment(deployment)

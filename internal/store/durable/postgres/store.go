@@ -90,6 +90,15 @@ func (s *Store) CreateMission(ctx context.Context, mission domain.Mission) (doma
 
 // CreateMissionForPlannedFlight creates a mission while holding the same
 // PostgreSQL row lock used by flight activation.
+//
+// Parameters:
+//   - ctx: controls cancellation and the PostgreSQL transaction.
+//   - mission: contains the exact planned-flight, operator, aircraft, intent, and idempotency binding.
+//
+// Returns:
+//   - result: is the stored mission with its assigned version or exact idempotent replay.
+//   - error: reports missing state, stale lifecycle/binding, an outstanding
+//     deployment fence, serialization/persistence failure, or conflicting idempotency reuse.
 func (s *Store) CreateMissionForPlannedFlight(ctx context.Context, mission domain.Mission) (domain.Mission, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
