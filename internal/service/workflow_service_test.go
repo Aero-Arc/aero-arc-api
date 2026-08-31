@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -533,6 +534,7 @@ func TestIntentLifecycleHappyPath(t *testing.T) {
 	if intent.Status != domain.IntentStatusSubmitted {
 		t.Fatalf("submitted status = %q, want submitted", intent.Status)
 	}
+	seedClearConflictEvidence(t, ctx, store, intent, now)
 
 	evaluation, err := preflight.EvaluateIntent(ctx, intent.ID)
 	if err != nil {
@@ -767,6 +769,11 @@ func TestModifySubmittedIntentRequiresFreshPreflightForReplacementVolumes(t *tes
 		t.Fatalf("ActivateIntent stale preflight error = %v, want ErrActivationBlocked", err)
 	}
 
+	modified, err := store.GetOperationalIntent(ctx, intent.ID)
+	if err != nil {
+		t.Fatalf("GetOperationalIntent after modify returned error: %v", err)
+	}
+	seedClearConflictEvidence(t, ctx, store, modified, modifyAt.Add(time.Minute))
 	if evaluation, err := preflightsvc.NewPreflightServiceWithClock(store, fixedClock(modifyAt.Add(time.Minute))).EvaluateIntent(ctx, intent.ID); err != nil {
 		t.Fatalf("EvaluateIntent after modify returned error: %v", err)
 	} else if evaluation.Blocked {
@@ -1112,6 +1119,9 @@ func TestPreflightIgnoresOperationalVolumesFromOldIntentVersion(t *testing.T) {
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}))
+	seedClearConflictEvidence(t, ctx, store, domain.OperationalIntent{
+		ID: "intent-versioned-preflight", OperatorID: "operator-1", AircraftID: "aircraft-1", Version: 2,
+	}, now)
 
 	evaluation, err := preflightsvc.NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, "intent-versioned-preflight")
 	if err != nil {
@@ -1673,6 +1683,9 @@ func TestActivationReadinessIgnoresPreflightAndFindingsFromOldIntentVersion(t *t
 		Message:         "old version block",
 		EvaluatedAt:     now,
 	}))
+	seedClearConflictEvidence(t, ctx, store, domain.OperationalIntent{
+		ID: "intent-versioned-activation", OperatorID: "operator-1", AircraftID: "aircraft-1", Version: 2,
+	}, now)
 	evaluation, err := preflightsvc.NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, "intent-versioned-activation")
 	if err != nil {
 		t.Fatalf("EvaluateIntent returned error: %v", err)
@@ -1747,7 +1760,25 @@ func seedSubmittedIntentWithVolumeRequest(t *testing.T, ctx context.Context, sto
 	if err != nil {
 		t.Fatalf("SubmitIntent returned error: %v", err)
 	}
+	seedClearConflictEvidence(t, ctx, store, intent, now)
 	return intent
+}
+
+func seedClearConflictEvidence(t *testing.T, ctx context.Context, store durable.Store, intent domain.OperationalIntent, now time.Time) {
+	t.Helper()
+	must(t, store.RecordConflictFinding(ctx, domain.ConflictFinding{
+		ID:            fmt.Sprintf("conflict-%s-v%d", intent.ID, intent.Version),
+		OperatorID:    intent.OperatorID,
+		IntentID:      intent.ID,
+		IntentVersion: intent.Version,
+		AircraftID:    intent.AircraftID,
+		Status:        domain.ConflictFindingStatusClear,
+		SourceType:    domain.ConflictFindingSourceLocal,
+		SourceID:      "deconfliction_service",
+		RuleVersion:   "provider-aggregate-v1",
+		Message:       "seeded clear deconfliction evidence",
+		EvaluatedAt:   now,
+	}))
 }
 
 func seedActiveIntentWithVolume(t *testing.T, ctx context.Context, store durable.Store, now time.Time) domain.OperationalIntent {
@@ -1809,6 +1840,7 @@ func createActiveIntentWithVolume(t *testing.T, ctx context.Context, store durab
 	if intent, err = intents.SubmitIntent(ctx, intent.ID); err != nil {
 		t.Fatalf("SubmitIntent returned error: %v", err)
 	}
+	seedClearConflictEvidence(t, ctx, store, intent, now)
 	if evaluation, err := preflightsvc.NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID); err != nil {
 		t.Fatalf("EvaluateIntent returned error: %v", err)
 	} else if evaluation.Blocked {
