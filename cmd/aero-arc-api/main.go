@@ -30,7 +30,9 @@ import (
 	"github.com/Aero-Arc/aero-arc-api/internal/store/telemetry"
 	telemetryinfluxdb "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/influxdb"
 	telemetrymemory "github.com/Aero-Arc/aero-arc-api/internal/store/telemetry/memory"
+	conformancev1 "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/conformance/v1"
 	"github.com/urfave/cli/v3"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -245,6 +247,18 @@ func run(ctx context.Context, cfg *config.Config) error {
 	}
 	fleetService := service.NewFleetService(durableStore, telemetryStore, replayStore, registryClient).
 		WithLiveStatePolicy(cfg.RegistryFreshness, cfg.TelemetryFreshness, nil)
+	if cfg.ConformanceAddress != "" {
+		credentials, err := relaycontrol.LoadTransportCredentials(cfg.ConformanceCAFile, cfg.ConformanceCertFile, cfg.ConformanceKeyFile, cfg.ConformanceServerName)
+		if err != nil {
+			return fmt.Errorf("conformance history TLS: %w", err)
+		}
+		conn, err := grpc.NewClient(cfg.ConformanceAddress, grpc.WithTransportCredentials(credentials))
+		if err != nil {
+			return fmt.Errorf("conformance history client: %w", err)
+		}
+		defer conn.Close()
+		fleetService.WithConformanceHistory(conformancev1.NewConformanceServiceClient(conn))
+	}
 	if cfg.RelayControlEnabled() {
 		transportCredentials, err := relaycontrol.LoadTransportCredentials(
 			cfg.RelayControlCAFile, cfg.RelayControlCertFile, cfg.RelayControlKeyFile, cfg.RelayControlServerName,

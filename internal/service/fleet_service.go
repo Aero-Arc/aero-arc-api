@@ -29,6 +29,7 @@ type FleetService struct {
 	registryFreshness  time.Duration
 	telemetryFreshness time.Duration
 	missionDeployer    MissionDeployer
+	conformanceHistory ConformanceHistoryClient
 }
 
 const (

@@ -62,6 +62,11 @@ type Config struct {
 	USSJWTAudience           string
 	ReplayStore              string
 	RegistryMode             string
+	ConformanceAddress       string
+	ConformanceCAFile        string
+	ConformanceCertFile      string
+	ConformanceKeyFile       string
+	ConformanceServerName    string
 	RegistryAddress          string
 	RegistryDialTimeout      time.Duration
 	RegistryFreshness        time.Duration
@@ -135,6 +140,11 @@ func Load() (*Config, error) {
 	applyStringEnv("AERO_API_USS_JWT_AUDIENCE", &cfg.USSJWTAudience)
 	applyStringEnv("AERO_API_REPLAY_STORE", &cfg.ReplayStore)
 	applyStringEnv("AERO_API_REGISTRY_MODE", &cfg.RegistryMode)
+	applyStringEnv("AERO_API_CONFORMANCE_ADDR", &cfg.ConformanceAddress)
+	applyStringEnv("AERO_API_CONFORMANCE_CA_FILE", &cfg.ConformanceCAFile)
+	applyStringEnv("AERO_API_CONFORMANCE_CERT_FILE", &cfg.ConformanceCertFile)
+	applyStringEnv("AERO_API_CONFORMANCE_KEY_FILE", &cfg.ConformanceKeyFile)
+	applyStringEnv("AERO_API_CONFORMANCE_SERVER_NAME", &cfg.ConformanceServerName)
 	applyStringEnv("AERO_API_REGISTRY_ADDR", &cfg.RegistryAddress)
 	applyStringEnv("AERO_API_RELAY_CONTROL_CA_FILE", &cfg.RelayControlCAFile)
 	applyStringEnv("AERO_API_RELAY_CONTROL_CERT_FILE", &cfg.RelayControlCertFile)
@@ -274,6 +284,16 @@ func (cfg *Config) Validate() error {
 		return fmt.Errorf("AERO_API_RELAY_PLACEMENT_TTL must be > 0")
 	}
 	relayTLSValues := []string{cfg.RelayControlCAFile, cfg.RelayControlCertFile, cfg.RelayControlKeyFile, cfg.RelayControlServerName}
+	conformanceValues := []string{cfg.ConformanceAddress, cfg.ConformanceCAFile, cfg.ConformanceCertFile, cfg.ConformanceKeyFile, cfg.ConformanceServerName}
+	configuredConformance := 0
+	for _, v := range conformanceValues {
+		if strings.TrimSpace(v) != "" {
+			configuredConformance++
+		}
+	}
+	if configuredConformance != 0 && configuredConformance != len(conformanceValues) {
+		return fmt.Errorf("conformance address, CA, client certificate, key and server name must be configured together")
+	}
 	configuredRelayTLS := 0
 	for _, value := range relayTLSValues {
 		if strings.TrimSpace(value) != "" {
