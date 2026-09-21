@@ -256,7 +256,11 @@ func run(ctx context.Context, cfg *config.Config) error {
 		if err != nil {
 			return fmt.Errorf("conformance history client: %w", err)
 		}
-		defer conn.Close()
+		defer func() {
+			if err := conn.Close(); err != nil {
+				slog.Warn("failed to close conformance history client", slog.String("error", err.Error()))
+			}
+		}()
 		fleetService.WithConformanceHistory(conformancev1.NewConformanceServiceClient(conn))
 	}
 	if cfg.RelayControlEnabled() {
