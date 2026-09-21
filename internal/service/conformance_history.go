@@ -23,20 +23,22 @@ type ConformanceHistoryClient interface {
 
 // ConformanceHistoryEvent carries immutable incident evidence, separate from live summaries.
 type ConformanceHistoryEvent struct {
-	ID                   string    `json:"id"`
-	AssignmentID         string    `json:"assignment_id"`
-	AssignmentGeneration uint64    `json:"assignment_generation"`
-	IntentID             string    `json:"intent_id"`
-	IntentVersion        uint32    `json:"intent_version"`
-	AircraftID           string    `json:"aircraft_id"`
-	FlightID             string    `json:"flight_id"`
-	IncidentID           string    `json:"incident_id"`
-	Transition           string    `json:"transition"`
-	ViolationType        string    `json:"violation_type"`
-	ObservedAt           time.Time `json:"observed_at"`
-	DeviationM           *float64  `json:"deviation_m,omitempty"`
-	FrameID              string    `json:"frame_id"`
-	EvaluationRevision   uint64    `json:"evaluation_revision"`
+	ID                   string     `json:"id"`
+	AssignmentID         string     `json:"assignment_id"`
+	AssignmentGeneration uint64     `json:"assignment_generation"`
+	IntentID             string     `json:"intent_id"`
+	IntentVersion        uint32     `json:"intent_version"`
+	AircraftID           string     `json:"aircraft_id"`
+	FlightID             string     `json:"flight_id"`
+	IncidentID           string     `json:"incident_id"`
+	Transition           string     `json:"transition"`
+	ViolationType        string     `json:"violation_type"`
+	ObservedAt           time.Time  `json:"observed_at"`
+	DeviationM           *float64   `json:"deviation_m,omitempty"`
+	FrameID              string     `json:"frame_id"`
+	EvaluationRevision   uint64     `json:"evaluation_revision"`
+	PlannedStartAt       *time.Time `json:"planned_start_at,omitempty"`
+	PlannedEndAt         *time.Time `json:"planned_end_at,omitempty"`
 }
 
 // ConformanceHistoryPage is a newest-first, bounded, service-owned event page.
@@ -87,6 +89,21 @@ func (s *FleetService) GetConformanceHistory(ctx context.Context, intentID strin
 		}
 		kind := strings.ToLower(strings.TrimPrefix(e.ViolationType.String(), "VIOLATION_TYPE_"))
 		result.Events = append(result.Events, ConformanceHistoryEvent{ID: e.EventId, AssignmentID: e.AssignmentId, AssignmentGeneration: e.AssignmentGeneration, IntentID: e.IntentId, IntentVersion: e.IntentVersion, AircraftID: e.AircraftId, FlightID: e.FlightId, IncidentID: e.IncidentId, Transition: e.Transition, ViolationType: kind, ObservedAt: e.ObservedAt.AsTime(), DeviationM: e.DeviationM, FrameID: e.FrameId, EvaluationRevision: e.EvaluationRevision})
+		last := &result.Events[len(result.Events)-1]
+		if e.PlannedStartAt != nil {
+			if e.PlannedStartAt.CheckValid() != nil {
+				return ConformanceHistoryPage{}, ErrConformanceHistoryUnavailable
+			}
+			v := e.PlannedStartAt.AsTime()
+			last.PlannedStartAt = &v
+		}
+		if e.PlannedEndAt != nil {
+			if e.PlannedEndAt.CheckValid() != nil {
+				return ConformanceHistoryPage{}, ErrConformanceHistoryUnavailable
+			}
+			v := e.PlannedEndAt.AsTime()
+			last.PlannedEndAt = &v
+		}
 	}
 	return result, nil
 }

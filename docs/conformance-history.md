@@ -4,6 +4,12 @@ The API does not query Conformance's PostgreSQL tables. Live summaries remain
 Registry projections; immutable incident transitions are read from Conformance
 using the additive `ListConformanceEvents` gRPC contract.
 
+Optional `planned_start_at` and `planned_end_at` preserve the historical
+assignment generation's outer planned-volume bounds from Conformance. They are
+not taken from the current intent or monitoring authority interval. A UI can
+show time past planned end at observation time without claiming an actual
+completion time or treating gaps between volumes as authorized.
+
 ## Configuration
 
 Set all five values together; there is no plaintext fallback:
