@@ -3,6 +3,11 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"net"
+	"net/http/httptest"
+	"testing"
+	"time"
+
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
 	durablememory "github.com/Aero-Arc/aero-arc-api/internal/store/durable/memory"
@@ -15,10 +20,6 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"net"
-	"net/http/httptest"
-	"testing"
-	"time"
 )
 
 type historyRPC struct {
@@ -52,13 +53,23 @@ func TestHistoryHTTPThroughGRPC(t *testing.T) {
 	rpc := grpc.NewServer()
 	backend := &historyRPC{}
 	conformancev1.RegisterConformanceServiceServer(rpc, backend)
-	go rpc.Serve(listener)
-	t.Cleanup(rpc.Stop)
+	serveResult := make(chan error, 1)
+	go func() { serveResult <- rpc.Serve(listener) }()
+	t.Cleanup(func() {
+		rpc.Stop()
+		if err := <-serveResult; err != nil {
+			t.Errorf("serve history RPC: %v", err)
+		}
+	})
 	conn, err := grpc.NewClient("passthrough:///history", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() {
+		if err := conn.Close(); err != nil {
+			t.Errorf("close history client: %v", err)
+		}
+	})
 	durable := durablememory.NewStore()
 	if err := durable.CreateOperationalIntent(context.Background(), domain.OperationalIntent{ID: "intent", AircraftID: "aircraft"}); err != nil {
 		t.Fatal(err)
