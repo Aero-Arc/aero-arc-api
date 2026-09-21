@@ -157,6 +157,7 @@ func (s *Server) Handler() http.Handler {
 	api.GET("/operations", s.handleGetOperationsDashboard)
 	api.GET("/preflight", s.handleGetPreflightDashboard)
 	api.GET("/conformance", s.handleGetConformanceDashboard)
+	api.GET("/operational-intents/{intent_id}/conformance/events", s.handleGetConformanceHistory)
 	api.GET("/maintenance", s.handleGetMaintenanceDashboard)
 	api.GET("/records", s.handleGetRecordsDashboard)
 
