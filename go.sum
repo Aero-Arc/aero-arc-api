@@ -15,6 +15,8 @@ github.com/aero-arc/aero-arc-protos v0.0.0-20260830133103-af0b6757de47 h1:9iNhYN
 github.com/aero-arc/aero-arc-protos v0.0.0-20260830133103-af0b6757de47/go.mod h1:fILW3Dz6auXllS5ABRFTt0FTnNC4Mtw3ukvGrJa7zLo=
 github.com/aero-arc/aero-arc-protos v0.0.0-20260921031714-05d3fb897afb h1:ic+mOPCSFtgw6aipmPz4c7tHCJhSegb6t2+nqJuo+9Q=
 github.com/aero-arc/aero-arc-protos v0.0.0-20260921031714-05d3fb897afb/go.mod h1:fILW3Dz6auXllS5ABRFTt0FTnNC4Mtw3ukvGrJa7zLo=
+github.com/aero-arc/aero-arc-protos v0.0.0-20260921042842-85db403dd26d h1:DplPLgP5GljFEINpGGbnNZ7MPCgr34K3xOHsTA6bdG0=
+github.com/aero-arc/aero-arc-protos v0.0.0-20260921042842-85db403dd26d/go.mod h1:fILW3Dz6auXllS5ABRFTt0FTnNC4Mtw3ukvGrJa7zLo=
 github.com/andybalholm/brotli v1.2.0 h1:ukwgCxwYrmACq68yiUqwIWnGY0cTPox/M94sVwToPjQ=
 github.com/andybalholm/brotli v1.2.0/go.mod h1:rzTDkvFWvIrjDXZHkuS16NPggd91W3kUSvPlQ1pLaKY=
 github.com/apache/arrow-go/v18 v18.5.1 h1:yaQ6zxMGgf9YCYw4/oaeOU3AULySDlAYDOcnr4LdHdI=

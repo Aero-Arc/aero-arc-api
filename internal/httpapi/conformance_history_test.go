@@ -45,7 +45,7 @@ func (s *historyRPC) ListConformanceEvents(_ context.Context, q *conformancev1.L
 		scope = "other"
 	}
 	zero := 0.0
-	return &conformancev1.ListConformanceEventsResponse{Events: []*conformancev1.ConformanceHistoryEvent{{EventId: "event", AssignmentId: scope, IntentId: "intent", AircraftId: "aircraft", AssignmentGeneration: 2, Transition: "resolved", ViolationType: conformancev1.ViolationType_VIOLATION_TYPE_LATERAL_DEVIATION, ObservedAt: timestamppb.New(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)), DeviationM: &zero}}, NextPageToken: "next"}, nil
+	return &conformancev1.ListConformanceEventsResponse{Events: []*conformancev1.ConformanceHistoryEvent{{EventId: "event", AssignmentId: scope, IntentId: "intent", AircraftId: "aircraft", AssignmentGeneration: 2, Transition: "resolved", ViolationType: conformancev1.ViolationType_VIOLATION_TYPE_LATERAL_DEVIATION, ObservedAt: timestamppb.New(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)), DeviationM: &zero, PlannedStartAt: timestamppb.New(time.Date(2026, 8, 31, 23, 0, 0, 0, time.UTC)), PlannedEndAt: timestamppb.New(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))}}, NextPageToken: "next"}, nil
 }
 
 func TestHistoryHTTPThroughGRPC(t *testing.T) {
@@ -93,6 +93,9 @@ func TestHistoryHTTPThroughGRPC(t *testing.T) {
 	}
 	if len(page.Events) != 1 || page.Events[0].DeviationM == nil || *page.Events[0].DeviationM != 0 || backend.query.AssignmentId != "intent" || backend.query.AssignmentGeneration != 2 || backend.query.PageSize != 10 || backend.query.PageToken != "opaque" || page.NextPageToken != "next" {
 		t.Fatalf("page=%+v request=%+v", page, backend.query)
+	}
+	if page.Events[0].PlannedStartAt == nil || page.Events[0].PlannedEndAt == nil || !page.Events[0].PlannedEndAt.Equal(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatal("historical plan timestamps were not forwarded")
 	}
 	for _, query := range []string{"?generation=-1", "?generation=18446744073709551615", "?page_size=201", "?page_size=0", "?from=nope", "?from=2026-09-02T00:00:00Z&until=2026-09-01T00:00:00Z"} {
 		if r := get(path + query); r.Code != 400 {
