@@ -352,3 +352,21 @@ func relayAddress(relay *registryv1.Relay) string {
 	}
 	return address
 }
+
+// ExchangeCommand resolves current placement and exchanges a stable command for
+// Agent evidence. Transport failures leave the execution outcome unknown.
+//
+// Parameters: ctx bounds one attempt; agentID is the destination; command is immutable authority; attemptID identifies the handoff.
+//
+// Returns: Replayable evidence or a discovery, authorization, delivery, or timeout error; transport error does not prove aircraft failure.
+func (s *Service) ExchangeCommand(ctx context.Context, agentID string, command *agentv1.DurableCommand, attemptID string) (*agentv1.CommandEvidence, error) {
+	var evidence *agentv1.CommandEvidence
+	err := s.call(ctx, agentID, func(callCtx context.Context, client relayv1.RelayControlClient) error {
+		response, err := client.ExchangeCommand(callCtx, &relayv1.ExchangeCommandRequest{AgentId: agentID, Command: command, AttemptId: attemptID})
+		if err == nil {
+			evidence = response.GetEvidence()
+		}
+		return err
+	})
+	return evidence, err
+}

@@ -3,6 +3,7 @@ package relaycontrol
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -61,6 +62,10 @@ type fakeRelayClient struct {
 	clearErr          error
 	block             bool
 	setDeadlines      []time.Time
+}
+
+func (f *fakeRelayClient) ExchangeCommand(context.Context, *relayv1.ExchangeCommandRequest, ...grpc.CallOption) (*relayv1.ExchangeCommandResponse, error) {
+	return nil, fmt.Errorf("unexpected command exchange")
 }
 
 func TestNewRequiresRelayTransportCredentials(t *testing.T) {

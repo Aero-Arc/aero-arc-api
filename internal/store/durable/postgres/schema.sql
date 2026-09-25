@@ -274,3 +274,52 @@ ALTER TABLE mission_deployments
 
 CREATE INDEX IF NOT EXISTS mission_deployments_flight_order_idx
     ON mission_deployments (flight_id, creation_order DESC);
+
+-- Durable C2 authority. Outbox leases use database time and monotonic generations.
+CREATE TABLE IF NOT EXISTS commands (
+ id text PRIMARY KEY,
+ operator_id text NOT NULL,
+ aircraft_id text NOT NULL REFERENCES aircraft(id),
+ flight_id text NOT NULL REFERENCES flight_records(id),
+ idempotency_key text NOT NULL,
+ request_hash text NOT NULL,
+ digest text NOT NULL,
+ payload bytea NOT NULL,
+ data jsonb NOT NULL,
+ state text NOT NULL,
+ observation_state text NOT NULL DEFAULT 'pending',
+ created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ expires_at timestamptz NOT NULL,
+ UNIQUE(operator_id,idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS commands_flight_idx ON commands(flight_id,created_at,id);
+CREATE TABLE IF NOT EXISTS command_events (
+ event_id text PRIMARY KEY,
+ command_id text NOT NULL REFERENCES commands(id),
+ stage text NOT NULL,
+ occurred_at timestamptz NOT NULL,
+ received_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ source text NOT NULL,
+ message text NOT NULL
+);
+ALTER TABLE command_events DROP CONSTRAINT IF EXISTS command_events_command_id_stage_key;
+CREATE TABLE IF NOT EXISTS command_outbox (
+ command_id text PRIMARY KEY REFERENCES commands(id),
+ available_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ lease_until timestamptz,
+ generation bigint NOT NULL DEFAULT 0,
+ attempts integer NOT NULL DEFAULT 0,
+ done boolean NOT NULL DEFAULT false
+);
+CREATE TABLE IF NOT EXISTS command_attempts (
+ command_id text NOT NULL REFERENCES commands(id),
+ attempt integer NOT NULL,
+ started_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ finished_at timestamptz,
+ result text,
+ relay_id text NOT NULL DEFAULT '',
+ agent_id text NOT NULL DEFAULT '',
+ PRIMARY KEY(command_id,attempt)
+);
+
+ALTER TABLE command_attempts ADD COLUMN IF NOT EXISTS relay_id text NOT NULL DEFAULT '', ADD COLUMN IF NOT EXISTS agent_id text NOT NULL DEFAULT '';

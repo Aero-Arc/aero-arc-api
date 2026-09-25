@@ -176,6 +176,9 @@ func (s *Server) handleGetFlight(c *mach.Context) {
 }
 
 func (s *Server) handleGetFlightReplay(c *mach.Context) {
+	if s.fleet.CommandControlEnabled() && !s.commandAccess(c) {
+		return
+	}
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
 
@@ -265,6 +268,20 @@ func (s *Server) handleDeployCurrentMission(c *mach.Context) {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	if s.fleet.CommandControlEnabled() {
+		command, err := s.fleet.SubmitCommand(ctx, c.Param("flight_id"), "mission-control-service", c.Request.Header.Get("Idempotency-Key"), service.CommandRequest{Type: "MISSION_UPLOAD", MissionID: c.Param("mission_id"), MissionDigest: expectedDigest})
+		if err != nil {
+			writeServiceError(c, err)
+			return
+		}
+		deployment, err := s.fleet.GetMissionDeployment(ctx, command.FlightID, command.DeploymentID)
+		if err != nil {
+			writeServiceError(c, err)
+			return
+		}
+		writeJSON(c, http.StatusAccepted, service.DeployMissionResult{Deployment: deployment})
+		return
+	}
 	result, err := s.fleet.DeployCurrentMission(ctx, c.Param("flight_id"), c.Param("mission_id"), expectedDigest, c.Request.Header.Get("Idempotency-Key"))
 	if err != nil {
 		writeServiceError(c, err)
@@ -349,6 +366,15 @@ func (s *Server) handleReconcileMissionDeployment(c *mach.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Context(), s.missionDeploymentTimeout)
 	defer cancel()
+	if s.fleet.CommandControlEnabled() {
+		deployment, err := s.fleet.GetMissionDeployment(ctx, c.Param("flight_id"), c.Param("deployment_id"))
+		if err != nil {
+			writeServiceError(c, err)
+			return
+		}
+		writeJSON(c, http.StatusAccepted, service.DeployMissionResult{Deployment: deployment, Replayed: true})
+		return
+	}
 	result, err := s.fleet.ReconcileMissionDeployment(ctx, c.Param("flight_id"), c.Param("deployment_id"))
 	if err != nil {
 		writeServiceError(c, err)
