@@ -490,18 +490,24 @@ func TestOperationalIntentTerminalTransitionRoutes(t *testing.T) {
 		path   string
 		id     string
 		status domain.IntentStatus
+		code   int
 	}{
-		{path: "/api/v1/operational-intents/active-intent/complete", id: "active-intent", status: domain.IntentStatusComplete},
-		{path: "/api/v1/operational-intents/draft-intent/cancel", id: "draft-intent", status: domain.IntentStatusCanceled},
+		{path: "/api/v1/operational-intents/active-intent/complete", id: "active-intent", status: domain.IntentStatusActive, code: http.StatusUnauthorized},
+		{path: "/api/v1/operational-intents/draft-intent/cancel", id: "draft-intent", status: domain.IntentStatusCanceled, code: http.StatusOK},
 	} {
 		response := httptest.NewRecorder()
 		server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, test.path, nil))
-		if response.Code != http.StatusOK {
+		if response.Code != test.code {
 			t.Fatalf("%s status=%d body=%s", test.path, response.Code, response.Body.String())
 		}
 		intent, err := store.GetOperationalIntent(ctx, test.id)
 		if err != nil || intent.Status != test.status {
 			t.Fatalf("%s intent=%+v err=%v", test.path, intent, err)
+		}
+		read := httptest.NewRecorder()
+		server.Handler().ServeHTTP(read, httptest.NewRequest(http.MethodGet, "/api/v1/operational-intents/"+test.id, nil))
+		if read.Code != http.StatusOK {
+			t.Fatalf("read intent status=%d body=%s", read.Code, read.Body.String())
 		}
 	}
 }

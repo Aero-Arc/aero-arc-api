@@ -447,3 +447,37 @@ func validMissionRequest(source string) ImportMissionRequest {
 		AircraftID: "aircraft-1", IntentID: "intent-1", IntentVersion: 2,
 	}
 }
+
+func TestMissionEndingIsImmutableAndIdempotencyBound(t *testing.T) {
+	svc, _ := newMissionTestService(t)
+	ctx := context.Background()
+	req := validMissionRequest(validWPL110)
+	req.EndingBehavior = "rtl"
+	first, err := svc.ImportMission(ctx, "flight-1", "ending-rtl", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := first.Mission.Items[len(first.Mission.Items)-1]
+	if last.Command != 20 || last.LatitudeE7 != 0 || last.LongitudeE7 != 0 || last.AltitudeM != 0 {
+		t.Fatalf("RTL item=%+v", last)
+	}
+	replay, err := svc.ImportMission(ctx, "flight-1", "ending-rtl", req)
+	if err != nil || !replay.Replayed || replay.Mission.MissionDigest != first.Mission.MissionDigest {
+		t.Fatalf("replay=%+v %v", replay, err)
+	}
+	req.EndingBehavior = "land"
+	if _, err = svc.ImportMission(ctx, "flight-1", "ending-rtl", req); !errors.Is(err, durable.ErrIdempotencyConflict) {
+		t.Fatalf("changed ending under same key: %v", err)
+	}
+	landing, err := svc.ImportMission(ctx, "flight-1", "ending-land", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if landing.Mission.Items[len(landing.Mission.Items)-1].Command != 21 || landing.Mission.MissionDigest == first.Mission.MissionDigest {
+		t.Fatal("ending absent from canonical digest")
+	}
+	req.EndingBehavior = "hover"
+	if _, err = svc.ImportMission(ctx, "flight-1", "ending-invalid", req); !errors.Is(err, ErrValidation) {
+		t.Fatalf("unknown ending accepted: %v", err)
+	}
+}
