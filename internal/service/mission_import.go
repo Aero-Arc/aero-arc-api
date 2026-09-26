@@ -27,6 +27,7 @@ const (
 
 var supportedMissionCommands = map[int]string{
 	16: "NAV_WAYPOINT",
+	20: "NAV_RETURN_TO_LAUNCH",
 	21: "NAV_LAND",
 	22: "NAV_TAKEOFF",
 }
@@ -38,11 +39,12 @@ var supportedMissionFrames = map[int]string{
 // ImportMissionRequest carries a bounded WPL source plus stale-screen binding
 // preconditions. The server derives the authoritative binding from the flight.
 type ImportMissionRequest struct {
-	SourceFormat  domain.MissionSourceFormat `json:"source_format"`
-	Source        string                     `json:"source"`
-	AircraftID    string                     `json:"aircraft_id"`
-	IntentID      string                     `json:"intent_id"`
-	IntentVersion int                        `json:"intent_version"`
+	EndingBehavior string                     `json:"ending_behavior,omitempty"`
+	SourceFormat   domain.MissionSourceFormat `json:"source_format"`
+	Source         string                     `json:"source"`
+	AircraftID     string                     `json:"aircraft_id"`
+	IntentID       string                     `json:"intent_id"`
+	IntentVersion  int                        `json:"intent_version"`
 }
 
 // ImportMissionResult reports whether an idempotency-key retry replayed the original result.
@@ -97,10 +99,17 @@ func (s *FleetService) ImportMission(ctx context.Context, flightID string, idemp
 	if req.SourceFormat != domain.MissionSourceFormatQGCWPL110 {
 		return ImportMissionResult{}, fmt.Errorf("%w: source_format must be %q", ErrValidation, domain.MissionSourceFormatQGCWPL110)
 	}
+	if req.EndingBehavior != "" && req.EndingBehavior != "rtl" && req.EndingBehavior != "land" {
+		return ImportMissionResult{}, fmt.Errorf("%w: ending_behavior must be rtl or land", ErrValidation)
+	}
 	sourceSHA := sha256Hex(req.Source)
-	requestHash := sha256Hex(strings.Join([]string{
+	requestParts := []string{
 		flightID, req.AircraftID, req.IntentID, strconv.Itoa(req.IntentVersion), string(req.SourceFormat), sourceSHA,
-	}, "\n"))
+	}
+	if req.EndingBehavior != "" {
+		requestParts = append(requestParts, req.EndingBehavior)
+	}
+	requestHash := sha256Hex(strings.Join(requestParts, "\n"))
 	existing, err := s.durable.GetMissionByIdempotencyKey(ctx, idempotencyKey)
 	if err == nil {
 		if existing.IdempotencyRequest != requestHash {
@@ -118,6 +127,20 @@ func (s *FleetService) ImportMission(ctx context.Context, flightID string, idemp
 	}
 	if parsedSourceSHA != sourceSHA {
 		return ImportMissionResult{}, errors.New("mission source hash changed during import")
+	}
+	if req.EndingBehavior != "" {
+		items, err = applyMissionEnding(items, req.EndingBehavior)
+		if err != nil {
+			return ImportMissionResult{}, err
+		}
+		canonicalSHA, err = canonicalMissionSHA(items)
+		if err != nil {
+			return ImportMissionResult{}, err
+		}
+		findings = nil
+	}
+	if items[len(items)-1].Command == 20 {
+		findings = append(findings, missionWarning("rtl_autopilot_settings", "RTL uses the autopilot HOME and RTL settings. Explicit waypoint validation does not validate the return path. Completion waits for observed landing and disarm."))
 	}
 	flight, err := s.durable.GetFlightRecord(ctx, flightID)
 	if err != nil {
@@ -176,6 +199,13 @@ func (s *FleetService) ImportMission(ctx context.Context, flightID string, idemp
 }
 
 func (s *FleetService) validateMissionAgainstIntent(ctx context.Context, intent domain.OperationalIntent, items []domain.MissionItem) error {
+	// RTL is a mode instruction, not a geographic waypoint at (0,0).
+	if len(items) > 0 && items[len(items)-1].Command == 20 {
+		items = items[:len(items)-1]
+	}
+	if len(items) == 0 {
+		return fmt.Errorf("%w: mission requires an explicit route before recovery", ErrValidation)
+	}
 	allVolumes, err := s.durable.ListOperationalVolumes(ctx, intent.ID)
 	if err != nil {
 		return fmt.Errorf("list linked operational volumes: %w", err)
@@ -381,6 +411,11 @@ func parseWPL110(source string) ([]domain.MissionItem, []domain.MissionValidatio
 	if len(items) == 0 {
 		findings = append(findings, missionFinding("empty_mission", "mission must contain at least one operational item after HOME metadata", nil))
 	}
+	for i, item := range items {
+		if item.Command == 20 && (i != len(items)-1 || item.LatitudeE7 != 0 || item.LongitudeE7 != 0 || item.AltitudeM != 0) {
+			findings = append(findings, missionFinding("invalid_rtl", "RTL must be the final item with zero coordinates and altitude", nil))
+		}
+	}
 	if len(findings) > 0 {
 		return nil, nil, "", sourceSHA, MissionValidationError{Findings: findings}
 	}
@@ -520,4 +555,39 @@ func canonicalMissionPlan(items []domain.MissionItem) *agentv1.MissionPlan {
 func sha256Hex(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
+}
+
+// applyMissionEnding makes recovery part of the immutable onboard plan. Existing
+// callers omitting a choice retain their source unchanged.
+func applyMissionEnding(items []domain.MissionItem, ending string) ([]domain.MissionItem, error) {
+	for i, item := range items {
+		if (item.Command == 20 || item.Command == 21) && i != len(items)-1 {
+			return nil, fmt.Errorf("%w: recovery commands must be terminal", ErrValidation)
+		}
+	}
+	last := items[len(items)-1]
+	if last.Command == 20 || last.Command == 21 {
+		items = items[:len(items)-1]
+	}
+	if len(items) == 0 {
+		return nil, fmt.Errorf("%w: an explicit route must precede recovery", ErrValidation)
+	}
+	recovery := domain.MissionItem{Sequence: len(items), Frame: 0, Autocontinue: true, Command: 20}
+	if ending == "land" {
+		recovery = items[len(items)-1]
+		if last.Command == 21 {
+			recovery = last
+		}
+		recovery.Sequence = len(items)
+		recovery.Command = 21
+		recovery.Current = false
+		recovery.Param1 = 0
+		recovery.Param2 = 0
+		recovery.Param3 = 0
+		recovery.Param4 = 1
+	}
+	if len(items) >= maxMissionItems {
+		return nil, fmt.Errorf("%w: no room for terminal recovery item", ErrValidation)
+	}
+	return append(items, recovery), nil
 }

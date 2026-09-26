@@ -171,6 +171,7 @@ func (s *Server) Handler() http.Handler {
 	api.GET("/flights/{flight_id}", s.handleGetFlight)
 	api.POST("/flights/{flight_id}/commands", s.handleSubmitCommand)
 	api.GET("/flights/{flight_id}/commands", s.handleListCommands)
+	api.GET("/flights/{flight_id}/completion", s.handleGetFlightCompletion)
 	api.GET("/flights/{flight_id}/commands/{command_id}", s.handleGetCommand)
 	api.POST("/flights/{flight_id}/commands/{command_id}/reconcile", s.handleReconcileCommand)
 	api.POST("/flights/{flight_id}/start", s.handleStartFlight)
@@ -184,6 +185,7 @@ func (s *Server) Handler() http.Handler {
 
 	if s.workflowsAvailable() {
 		api.POST("/operational-intents", s.handleCreateOperationalIntent)
+		api.GET("/operational-intents/{intent_id}", s.handleGetOperationalIntent)
 		api.POST("/operational-intents/{intent_id}/modify", s.handleModifyOperationalIntent)
 		api.POST("/operational-intents/{intent_id}/volumes", s.handleAddOperationalVolume)
 		api.POST("/operational-intents/{intent_id}/submit", s.handleSubmitOperationalIntent)

@@ -311,6 +311,10 @@ func run(ctx context.Context, cfg *config.Config) error {
 		return err
 	}
 	workerCtx, stopWorker := context.WithCancel(ctx)
+	fleetService.WithFlightFinalization(deconflictionService)
+	finalizationDone := make(chan struct{})
+	go func() { defer close(finalizationDone); fleetService.RunFlightFinalization(workerCtx) }()
+	defer func() { stopWorker(); <-finalizationDone }()
 	commandWorkersDone := make(chan struct{})
 	go func() { defer close(commandWorkersDone); fleetService.RunCommandWorker(workerCtx) }()
 	defer func() { stopWorker(); <-commandWorkersDone }()

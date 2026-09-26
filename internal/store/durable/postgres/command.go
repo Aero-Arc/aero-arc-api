@@ -88,6 +88,13 @@ func (s *Store) AcceptCommand(ctx context.Context, c domain.Command, deployment 
 	if flightStatus != "planned" && flightStatus != "active" {
 		return c, durable.ErrVersionConflict
 	}
+	var finalizing bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM flight_completions WHERE flight_id=$1)`, c.FlightID).Scan(&finalizing); err != nil {
+		return c, err
+	}
+	if finalizing {
+		return c, fmt.Errorf("%w: flight completion evidence has been admitted", durable.ErrVersionConflict)
+	}
 	var anotherActive bool
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM flight_records WHERE aircraft_id=$1 AND id<>$2 AND status='active')`, aircraft, c.FlightID).Scan(&anotherActive); err != nil {
 		return c, err

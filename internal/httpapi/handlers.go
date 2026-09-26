@@ -683,12 +683,16 @@ func (s *Server) handleCompleteOperationalIntent(c *mach.Context) {
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
 	s.debugOperation(ctx, "complete_intent", slog.String("intent_id", c.Param("intent_id")))
-	intent, err := s.intents.CompleteIntent(ctx, c.Param("intent_id"))
+	if !s.authorizeMissionDeployment(c) {
+		writeError(c, http.StatusUnauthorized, "valid command authorization is required")
+		return
+	}
+	completion, err := s.fleet.RequestIntentCompletion(ctx, c.Param("intent_id"))
 	if err != nil {
 		writeServiceError(c, err)
 		return
 	}
-	writeJSON(c, http.StatusOK, intent)
+	writeJSON(c, http.StatusAccepted, completion)
 }
 
 func (s *Server) handleCancelOperationalIntent(c *mach.Context) {
@@ -778,4 +782,15 @@ func decodeJSON(c *mach.Context, dst any) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Server) handleGetOperationalIntent(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	intent, err := s.intents.GetIntent(ctx, c.Param("intent_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, intent)
 }
