@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"testing"
 	"time"
 
@@ -52,6 +53,8 @@ func (f *fakePool) Invalidate(id string) { f.invalidated = append(f.invalidated,
 func (f *fakePool) Close() error         { return nil }
 
 type fakeRelayClient struct {
+	relayv1.RelayControlClient
+	execute           func(context.Context, *relayv1.ExecuteCommandRequest) (grpc.ServerStreamingClient[relayv1.ExecuteCommandResponse], error)
 	setRequests       []*relayv1.SetOperationContextRequest
 	clearRequests     []*relayv1.ClearOperationContextRequest
 	deployRequests    []*relayv1.DeployMissionRequest
@@ -273,5 +276,51 @@ func TestTimeout(t *testing.T) {
 	_, err := service.SetOperationContext(context.Background(), SetRequest{AgentID: "agent-1", FlightID: "flight-1", CommandID: "command"})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func (f *fakeRelayClient) ExecuteCommand(ctx context.Context, req *relayv1.ExecuteCommandRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[relayv1.ExecuteCommandResponse], error) {
+	if f.execute == nil {
+		return nil, errors.New("unexpected streaming command")
+	}
+	return f.execute(ctx, req)
+}
+
+type evidenceClientStream struct {
+	grpc.ClientStream
+	evidence []*agentv1.CommandEvidence
+	terminal error
+}
+
+func (s *evidenceClientStream) Recv() (*relayv1.ExecuteCommandResponse, error) {
+	if len(s.evidence) == 0 {
+		if s.terminal != nil {
+			return nil, s.terminal
+		}
+		return nil, io.EOF
+	}
+	e := s.evidence[0]
+	s.evidence = s.evidence[1:]
+	return &relayv1.ExecuteCommandResponse{Evidence: e}, nil
+}
+func TestExecuteCommandStreamsProgressAndDoesNotHideDisconnectWithRedelivery(t *testing.T) {
+	client := &fakeRelayClient{}
+	pool := &fakePool{clients: map[string]*fakeRelayClient{"relay-1": client}}
+	service := newWithPool(&fakeRegistry{relayIDs: []string{"relay-1"}}, pool, time.Second, time.Minute)
+	calls := 0
+	client.execute = func(ctx context.Context, req *relayv1.ExecuteCommandRequest) (grpc.ServerStreamingClient[relayv1.ExecuteCommandResponse], error) {
+		calls++
+		if req.AttemptId != "command/attempt-1" {
+			t.Fatal("attempt identity changed")
+		}
+		return &evidenceClientStream{evidence: []*agentv1.CommandEvidence{{CommandId: "command", Events: []*agentv1.CommandEvent{{Stage: "acknowledged"}}}, {CommandId: "command", Events: []*agentv1.CommandEvent{{Stage: "acknowledged"}, {Stage: "applied"}}}}, terminal: status.Error(codes.Unavailable, "lost completion")}, nil
+	}
+	snapshots := 0
+	err := service.ExecuteCommand(context.Background(), "agent-1", &agentv1.DurableCommand{CommandId: "command"}, "command/attempt-1", func(e *agentv1.CommandEvidence) error { snapshots++; return nil })
+	if status.Code(err) != codes.Unavailable || calls != 1 || snapshots != 2 {
+		t.Fatalf("stream result calls=%d snapshots=%d err=%v", calls, snapshots, err)
+	}
+	if len(pool.invalidated) != 1 {
+		t.Fatal("stale placement not invalidated for recovery")
 	}
 }

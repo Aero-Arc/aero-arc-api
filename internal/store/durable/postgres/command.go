@@ -298,6 +298,20 @@ func (s *Store) ClaimCommand(ctx context.Context) (domain.Command, error) {
 //
 // Returns: Nil after atomic projection and outbox update; stale leases, contradictory evidence, and database errors roll back all updates.
 func (s *Store) FinishCommandAttempt(ctx context.Context, c domain.Command, events []domain.CommandEvent, result string) error {
+	return s.recordCommandEvidence(ctx, c, events, result, true)
+}
+
+// RecordCommandProgress persists immutable evidence and updates the projection
+// while retaining the delivery lease for subsequent streamed progress.
+//
+// Parameters: ctx bounds persistence; c carries the claimed lease generation;
+// events contain immutable source evidence.
+// Returns nil after commit, or a lease, evidence conflict, or database error.
+func (s *Store) RecordCommandProgress(ctx context.Context, c domain.Command, events []domain.CommandEvent) error {
+	return s.recordCommandEvidence(ctx, c, events, "", false)
+}
+
+func (s *Store) recordCommandEvidence(ctx context.Context, c domain.Command, events []domain.CommandEvent, result string, finish bool) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -367,6 +381,9 @@ func (s *Store) FinishCommandAttempt(ctx context.Context, c domain.Command, even
 				}
 			}
 		}
+	}
+	if !finish {
+		return tx.Commit(ctx)
 	}
 	var envelope pb.DurableCommand
 	if err = proto.Unmarshal(c.Payload, &envelope); err != nil {

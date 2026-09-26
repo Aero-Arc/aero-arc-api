@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -369,4 +370,45 @@ func (s *Service) ExchangeCommand(ctx context.Context, agentID string, command *
 		return err
 	})
 	return evidence, err
+}
+
+// ExecuteCommand delivers once and passes each cumulative evidence snapshot to
+// receive. The caller persists progress before requesting the next snapshot.
+// Stream loss leaves execution uncertain; recovery reuses the same authority.
+//
+// Parameters: ctx bounds the worker attempt; agentID selects placement; command
+// and attemptID identify authority and delivery; receive commits each snapshot.
+// Returns the first discovery, transport, or persistence error, or nil on EOF.
+func (s *Service) ExecuteCommand(ctx context.Context, agentID string, command *agentv1.DurableCommand, attemptID string, receive func(*agentv1.CommandEvidence) error) error {
+	// Resolve placement once per leased attempt: a retry must get a new attempt ID.
+	discovery, cancel := context.WithTimeout(ctx, s.timeout)
+	placement, err := s.resolve(discovery, agentID, false)
+	if err != nil {
+		cancel()
+		return err
+	}
+	client, err := s.pool.Client(discovery, placement.relayID, placement.address)
+	cancel()
+	if err != nil {
+		return err
+	}
+	stream, err := client.ExecuteCommand(ctx, &relayv1.ExecuteCommandRequest{AgentId: agentID, Command: command, AttemptId: attemptID})
+	if err != nil {
+		return err
+	}
+	for {
+		response, err := stream.Recv()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			if status.Code(err) == codes.Unavailable {
+				s.invalidate(agentID, placement.relayID)
+			}
+			return err
+		}
+		if err = receive(response.GetEvidence()); err != nil {
+			return err
+		}
+	}
 }

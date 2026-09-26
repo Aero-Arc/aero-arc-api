@@ -285,28 +285,68 @@ func (s *FleetService) executeCommandAttempt(ctx context.Context, c domain.Comma
 			return nil, err.Error()
 		}
 	}
-	evidence, err := s.commandTransport.ExchangeCommand(ctx, envelope.AgentId, &envelope, fmt.Sprintf("%s/attempt-%d", c.ID, c.Attempts))
+
+	var evidence *pb.CommandEvidence
+	var err error
+	if transport, ok := s.commandTransport.(interface {
+		ExecuteCommand(context.Context, string, *pb.DurableCommand, string, func(*pb.CommandEvidence) error) error
+	}); ok {
+		store, storeErr := s.commandStore()
+		if storeErr != nil {
+			return nil, storeErr.Error()
+		}
+		progress, ok := store.(interface {
+			RecordCommandProgress(context.Context, domain.Command, []domain.CommandEvent) error
+		})
+		if !ok {
+			return nil, "command store cannot persist streaming progress"
+		}
+		err = transport.ExecuteCommand(ctx, envelope.AgentId, &envelope, fmt.Sprintf("%s/attempt-%d", c.ID, c.Attempts), func(snapshot *pb.CommandEvidence) error {
+			events, validationErr := commandEvidenceEvents(c, snapshot)
+			if validationErr != nil {
+				return validationErr
+			}
+			if persistErr := progress.RecordCommandProgress(ctx, c, events); persistErr != nil {
+				return persistErr
+			}
+			evidence = snapshot
+			return nil
+		})
+	} else {
+		evidence, err = s.commandTransport.ExchangeCommand(ctx, envelope.AgentId, &envelope, fmt.Sprintf("%s/attempt-%d", c.ID, c.Attempts))
+	}
 	if err != nil {
 		unknown := event("delivery_unknown", "delivery attempt has no authoritative outcome", "api_worker", time.Now().UTC())
 		unknown.ID = fmt.Sprintf("%s/attempt-%d/delivery_unknown", c.ID, c.Attempts)
 		return []domain.CommandEvent{unknown}, err.Error()
 	}
+	events, err := commandEvidenceEvents(c, evidence)
+	if err != nil {
+		return nil, err.Error()
+	}
+	return events, "Agent evidence received"
+}
+
+func commandEvidenceEvents(c domain.Command, evidence *pb.CommandEvidence) ([]domain.CommandEvent, error) {
 	if evidence == nil || evidence.CommandId != c.ID || evidence.CommandDigest != c.Digest {
-		return nil, "uncorrelated Agent evidence"
+		return nil, fmt.Errorf("uncorrelated Agent evidence")
 	}
 	out := []domain.CommandEvent{}
 	for _, e := range evidence.Events {
+		if e == nil {
+			return nil, fmt.Errorf("empty Agent evidence event")
+		}
 		switch e.Stage {
-		case "acknowledged", "applied", "observed", "observation_unavailable", "observation_superseded", "rejected", "outcome_unknown", "relay_received", "dispatched":
+		case "verifying_mission", "awaiting_ack", "acknowledged", "applied", "observed", "observation_unavailable", "observation_superseded", "rejected", "outcome_unknown", "relay_received", "dispatched":
 		default:
-			return nil, "invalid Agent evidence stage"
+			return nil, fmt.Errorf("invalid Agent evidence stage")
 		}
 		expectedID := c.ID + "/" + e.Stage
 		if e.Stage == "relay_received" || e.Stage == "dispatched" {
 			expectedID = fmt.Sprintf("%s/attempt-%d/%s", c.ID, c.Attempts, e.Stage)
 		}
 		if e.EventId != expectedID || e.OccurredAtUnixMs <= 0 {
-			return nil, "invalid Agent event identity"
+			return nil, fmt.Errorf("invalid Agent event identity")
 		}
 		// API uncertainty is transport evidence, not the immutable Agent event.
 		if e.Stage == "outcome_unknown" {
@@ -322,7 +362,7 @@ func (s *FleetService) executeCommandAttempt(ctx context.Context, c domain.Comma
 		}
 		out = append(out, domain.CommandEvent{ID: e.EventId, Stage: e.Stage, OccurredAt: time.UnixMilli(e.OccurredAtUnixMs), Source: e.EvidenceSource, Message: e.Message})
 	}
-	return out, "Agent evidence received"
+	return out, nil
 }
 
 // CommandControlEnabled reports whether durable command routes are configured.

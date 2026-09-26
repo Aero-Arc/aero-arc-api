@@ -147,3 +147,19 @@ Staticcheck v0.6.1 rebuilt with Go 1.26 reports only existing SA1019 deprecation
 at `internal/registry/grpc.go:28,30` and `internal/relaycontrol/grpc_pool.go:53`.
 SITL/hardware, Multigres failover, and independent command archive export remain
 outside this validation record.
+
+## Streaming progress and rollout
+
+The background worker uses Relay `ExecuteCommand` and commits each cumulative
+snapshot as it arrives. Progress uses the current lease generation and retains
+the lease; finishing the delivery releases it and schedules recovery only while
+evidence remains incomplete. Immutable-event conflicts and stale leases roll
+back. An interrupted stream preserves previously committed application evidence.
+Placement failure invalidates cached placement for the next explicit delivery
+attempt rather than silently redelivering under the same attempt ID.
+
+Deploy the updated Relay before API, then Agent and Ops. The unary exchange RPC
+remains for older clients. Agent adds verification/ACK progress stages and a
+transport-only delivery completion flag; the latter never changes lifecycle
+state. No schema migration is needed. HTTP submission still only authorizes
+and commits the command/outbox, independently of Relay availability.

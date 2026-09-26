@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/aero-arc/aero-arc-protos/commanddigest"
 	pb "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/agent/v1"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -131,6 +133,25 @@ func TestCommandAcceptanceRestartLeaseAndEvidence(t *testing.T) {
 	if err = s.FinishCommandAttempt(ctx, first, evidence, "old worker"); !errors.Is(err, durable.ErrVersionConflict) {
 		t.Fatalf("stale worker: %v", err)
 	}
+
+	if err = s.RecordCommandProgress(ctx, first, evidence); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("stale progress: %v", err)
+	}
+	if err = other.RecordCommandProgress(ctx, second, evidence); err != nil {
+		t.Fatal(err)
+	}
+	progress, err := s.GetCommand(ctx, c.ID)
+	if err != nil || progress.State != "applied" || progress.ObservationState != "pending" {
+		t.Fatalf("uncommitted progress: %+v %v", progress, err)
+	}
+	if _, err = s.ClaimCommand(ctx); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("progress released delivery lease: %v", err)
+	}
+	altered := append([]domain.CommandEvent(nil), evidence...)
+	altered[0].Message = "changed"
+	if err = other.RecordCommandProgress(ctx, second, altered); err == nil {
+		t.Fatal("mutable progress accepted")
+	}
 	if err = other.FinishCommandAttempt(ctx, second, evidence, "applied"); err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +204,19 @@ func TestCommandAcceptanceRestartLeaseAndEvidence(t *testing.T) {
 	if err != nil || deployment.DispatchStarted || deployment.CommandID != upload.ID {
 		t.Fatalf("atomic upload reservation: %+v %v", deployment, err)
 	}
-	transport := &appliedCommandTransport{}
+	transport := &appliedCommandTransport{progress: func(id string) error {
+		value, err := s.GetCommand(ctx, id)
+		if err != nil {
+			return err
+		}
+		if value.State != "acknowledged" || value.Attempts != 1 {
+			return fmt.Errorf("stream progress not persisted on first delivery: %+v", value)
+		}
+		if _, err = s.ClaimCommand(ctx); !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("stream released worker lease: %v", err)
+		}
+		return nil
+	}}
 	fleet.WithMissionDeployer(transport).WithCommandControl(transport, func(context.Context, string, domain.FlightRecord, string) error { return nil })
 	workerCtx, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -231,7 +264,7 @@ func (n *noDispatchTransport) ExchangeCommand(context.Context, string, *pb.Durab
 }
 
 // appliedCommandTransport models protocol acceptance independently of observations.
-type appliedCommandTransport struct{}
+type appliedCommandTransport struct{ progress func(string) error }
 
 func (*appliedCommandTransport) EnsureOperationContext(context.Context, string, *pb.SetOperationContextCommand) error {
 	return nil
@@ -244,4 +277,23 @@ func (*appliedCommandTransport) DeployMission(_ context.Context, _ string, c *pb
 }
 func (*appliedCommandTransport) ExchangeCommand(_ context.Context, _ string, c *pb.DurableCommand, _ string) (*pb.CommandEvidence, error) {
 	return &pb.CommandEvidence{CommandId: c.CommandId, CommandDigest: c.CommandDigest, Events: []*pb.CommandEvent{{EventId: c.CommandId + "/applied", Stage: "applied", OccurredAtUnixMs: c.IssuedAtUnixMs, EvidenceSource: "mavlink_command_ack"}}}, nil
+}
+
+func (a *appliedCommandTransport) ExecuteCommand(ctx context.Context, agent string, c *pb.DurableCommand, attempt string, receive func(*pb.CommandEvidence) error) error {
+	acknowledged := &pb.CommandEvidence{CommandId: c.CommandId, CommandDigest: c.CommandDigest, Events: []*pb.CommandEvent{{EventId: c.CommandId + "/acknowledged", Stage: "acknowledged", OccurredAtUnixMs: c.IssuedAtUnixMs, EvidenceSource: "agent_journal"}}}
+	if err := receive(acknowledged); err != nil {
+		return err
+	}
+	if a.progress != nil {
+		if err := a.progress(c.CommandId); err != nil {
+			return err
+		}
+	}
+	applied, err := a.ExchangeCommand(ctx, agent, c, attempt)
+	if err != nil {
+		return err
+	}
+	applied.Events = append(acknowledged.Events, applied.Events...)
+	applied.DeliveryComplete = true
+	return receive(applied)
 }
