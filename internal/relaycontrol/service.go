@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -351,4 +352,63 @@ func relayAddress(relay *registryv1.Relay) string {
 		}
 	}
 	return address
+}
+
+// ExchangeCommand resolves current placement and exchanges a stable command for
+// Agent evidence. Transport failures leave the execution outcome unknown.
+//
+// Parameters: ctx bounds one attempt; agentID is the destination; command is immutable authority; attemptID identifies the handoff.
+//
+// Returns: Replayable evidence or a discovery, authorization, delivery, or timeout error; transport error does not prove aircraft failure.
+func (s *Service) ExchangeCommand(ctx context.Context, agentID string, command *agentv1.DurableCommand, attemptID string) (*agentv1.CommandEvidence, error) {
+	var evidence *agentv1.CommandEvidence
+	err := s.call(ctx, agentID, func(callCtx context.Context, client relayv1.RelayControlClient) error {
+		response, err := client.ExchangeCommand(callCtx, &relayv1.ExchangeCommandRequest{AgentId: agentID, Command: command, AttemptId: attemptID})
+		if err == nil {
+			evidence = response.GetEvidence()
+		}
+		return err
+	})
+	return evidence, err
+}
+
+// ExecuteCommand delivers once and passes each cumulative evidence snapshot to
+// receive. The caller persists progress before requesting the next snapshot.
+// Stream loss leaves execution uncertain; recovery reuses the same authority.
+//
+// Parameters: ctx bounds the worker attempt; agentID selects placement; command
+// and attemptID identify authority and delivery; receive commits each snapshot.
+// Returns the first discovery, transport, or persistence error, or nil on EOF.
+func (s *Service) ExecuteCommand(ctx context.Context, agentID string, command *agentv1.DurableCommand, attemptID string, receive func(*agentv1.CommandEvidence) error) error {
+	// Resolve placement once per leased attempt: a retry must get a new attempt ID.
+	discovery, cancel := context.WithTimeout(ctx, s.timeout)
+	placement, err := s.resolve(discovery, agentID, false)
+	if err != nil {
+		cancel()
+		return err
+	}
+	client, err := s.pool.Client(discovery, placement.relayID, placement.address)
+	cancel()
+	if err != nil {
+		return err
+	}
+	stream, err := client.ExecuteCommand(ctx, &relayv1.ExecuteCommandRequest{AgentId: agentID, Command: command, AttemptId: attemptID})
+	if err != nil {
+		return err
+	}
+	for {
+		response, err := stream.Recv()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			if status.Code(err) == codes.Unavailable {
+				s.invalidate(agentID, placement.relayID)
+			}
+			return err
+		}
+		if err = receive(response.GetEvidence()); err != nil {
+			return err
+		}
+	}
 }
