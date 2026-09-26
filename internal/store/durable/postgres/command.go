@@ -82,7 +82,7 @@ func (s *Store) AcceptCommand(ctx context.Context, c domain.Command, deployment 
 	if err = tx.QueryRow(ctx, `SELECT version,data->>'status' FROM operational_intents WHERE id=$1 ORDER BY version DESC LIMIT 1 FOR UPDATE`, intent).Scan(&currentVersion, &intentStatus); err != nil {
 		return c, err
 	}
-	if currentVersion != version || (intentStatus != "active" && !(c.Type == "MISSION_UPLOAD" && intentStatus == "accepted")) {
+	if currentVersion != version || (intentStatus != "active" && (c.Type != "MISSION_UPLOAD" || intentStatus != "accepted")) {
 		return c, durable.ErrVersionConflict
 	}
 	if flightStatus != "planned" && flightStatus != "active" {
