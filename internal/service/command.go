@@ -262,6 +262,9 @@ func (s *FleetService) executeCommandAttempt(ctx context.Context, c domain.Comma
 		case domain.MissionDeploymentApplied, domain.MissionDeploymentAlreadyApplied:
 			return []domain.CommandEvent{event("acknowledged", "durable mission result received", "mission_deployment", at), event("applied", "mission protocol accepted upload", "mission_deployment", at), event("observed", "verified onboard mission digest "+d.OnboardMissionDigest, "mavlink_mission_readback", at)}, string(d.Status)
 		case domain.MissionDeploymentRejected, domain.MissionDeploymentBindingMismatch, domain.MissionDeploymentOnboardMissionMismatch:
+			if d.Status == domain.MissionDeploymentRejected && !d.DispatchStarted && !c.ExpiresAt.After(s.now()) {
+				return []domain.CommandEvent{event("timed_out", "authorization expired before mission dispatch", "api_worker", c.ExpiresAt)}, string(d.Status)
+			}
 			return []domain.CommandEvent{event("rejected", d.Message, "mission_deployment", at)}, string(d.Status)
 		default:
 			for _, e := range c.Events {
