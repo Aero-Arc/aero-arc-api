@@ -42,3 +42,7 @@ Snapshot capture, full telemetry pagination and late-evidence watermarks, outbox
 job delivery, archive discovery, and replay UI integration remain outstanding.
 An outbox row is not an uploaded archive and monitoring closure is not a claim
 that all delayed evidence has arrived.
+
+An operator cancellation does not erase physical flight completion evidence.
+If cancellation precedes or races finalization, the intent remains canceled;
+the evidenced flight still completes and creates its archive obligation.

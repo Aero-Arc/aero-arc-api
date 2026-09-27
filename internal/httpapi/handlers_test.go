@@ -492,7 +492,7 @@ func TestOperationalIntentTerminalTransitionRoutes(t *testing.T) {
 		status domain.IntentStatus
 		code   int
 	}{
-		{path: "/api/v1/operational-intents/active-intent/complete", id: "active-intent", status: domain.IntentStatusActive, code: http.StatusUnauthorized},
+		{path: "/api/v1/operational-intents/active-intent/complete", id: "active-intent", status: domain.IntentStatusActive, code: http.StatusServiceUnavailable},
 		{path: "/api/v1/operational-intents/draft-intent/cancel", id: "draft-intent", status: domain.IntentStatusCanceled, code: http.StatusOK},
 	} {
 		response := httptest.NewRecorder()

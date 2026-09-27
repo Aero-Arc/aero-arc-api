@@ -171,15 +171,19 @@ func (s *Store) CompleteFlight(ctx context.Context, c domain.FlightCompletion, p
 	if err = json.Unmarshal(raw, &intent); err != nil {
 		return err
 	}
-	if intent.Status != domain.IntentStatusActive {
+	if intent.Status != domain.IntentStatusActive && intent.Status != domain.IntentStatusCanceled {
 		return durable.ErrVersionConflict
 	}
 	ended := time.Unix(0, max(e.LandedAtUnixNs, e.DisarmedAtUnixNs)).UTC()
-	intent.Status = domain.IntentStatusComplete
-	intent.CompletedAt = &ended
-	intent.UpdatedAt = ended
-	if err = updateOperationalIntentTx(ctx, tx, intent, revision); err != nil {
-		return err
+	// Cancellation describes operator intent, not whether the aircraft landed.
+	// Preserve that terminal decision while still closing the evidenced flight.
+	if intent.Status == domain.IntentStatusActive {
+		intent.Status = domain.IntentStatusComplete
+		intent.CompletedAt = &ended
+		intent.UpdatedAt = ended
+		if err = updateOperationalIntentTx(ctx, tx, intent, revision); err != nil {
+			return err
+		}
 	}
 	if publication != nil {
 		if publication.IntentID != intent.ID || publication.DesiredIntentVersion != intent.Version {

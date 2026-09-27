@@ -688,8 +688,7 @@ func (s *Server) handleCompleteOperationalIntent(c *mach.Context) {
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
 	s.debugOperation(ctx, "complete_intent", slog.String("intent_id", c.Param("intent_id")))
-	if !s.authorizeMissionDeployment(c) {
-		writeError(c, http.StatusUnauthorized, "valid command authorization is required")
+	if !s.commandAccess(c) {
 		return
 	}
 	completion, err := s.fleet.RequestIntentCompletion(ctx, c.Param("intent_id"))
