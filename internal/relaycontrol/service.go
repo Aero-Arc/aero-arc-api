@@ -40,6 +40,7 @@ type Service struct {
 	now                   func() time.Time
 	mu                    sync.Mutex
 	placements            map[string]cachedPlacement
+	completionPollOffset  uint64
 }
 
 type cachedPlacement struct {

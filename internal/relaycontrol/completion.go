@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/aero-arc/aero-arc-protos/flightcompletion"
@@ -23,7 +24,19 @@ func (s *Service) DrainFlightCompletions(ctx context.Context, admit func(context
 		return err
 	}
 	var failures []error
-	for _, relay := range response.GetRelays() {
+	// Stable ordering plus a rotating starting point ensures an unreachable
+	// prefix cannot consume every polling budget before later Relays are reached.
+	relays := response.GetRelays()
+	sort.Slice(relays, func(i, j int) bool { return relays[i].GetRelayId() < relays[j].GetRelayId() })
+	if len(relays) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	start := int(s.completionPollOffset % uint64(len(relays)))
+	s.completionPollOffset++
+	s.mu.Unlock()
+	for i := range relays {
+		relay := relays[(start+i)%len(relays)]
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

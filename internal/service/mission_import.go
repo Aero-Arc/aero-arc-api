@@ -137,7 +137,13 @@ func (s *FleetService) ImportMission(ctx context.Context, flightID string, idemp
 		if err != nil {
 			return ImportMissionResult{}, err
 		}
-		findings = nil
+		kept := findings[:0]
+		for _, finding := range findings {
+			if finding.Code != "landing_not_declared" {
+				kept = append(kept, finding)
+			}
+		}
+		findings = kept
 	}
 	if items[len(items)-1].Command == 20 {
 		findings = append(findings, missionWarning("rtl_autopilot_settings", "RTL uses the autopilot HOME and RTL settings. Explicit waypoint validation does not validate the return path. Completion waits for observed landing and disarm."))
