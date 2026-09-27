@@ -109,7 +109,7 @@ func (s *Store) AcceptCommand(ctx context.Context, c domain.Command, deployment 
 		}
 		c.DeploymentID = d.ID
 	} else {
-		if err = rejectOutstandingMissionDeploymentForFlight(ctx, tx, c.FlightID); err != nil {
+		if err = rejectOutstandingMissionDeploymentForAircraft(ctx, tx, aircraft); err != nil {
 			return c, err
 		}
 		if c.Type == "MISSION_START" || c.Type == "RESUME" {

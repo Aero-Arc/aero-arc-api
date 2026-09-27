@@ -425,3 +425,14 @@ func decodeMissionDeployment(raw []byte, deployment *domain.MissionDeployment) e
 	deployment.ReconciliationClearCommandID = data.ReconciliationClearCommandID
 	return nil
 }
+
+func rejectOutstandingMissionDeploymentForAircraft(ctx context.Context, tx pgx.Tx, aircraftID string) error {
+	var outstanding bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM mission_deployments d JOIN flight_records f ON f.id=d.flight_id WHERE f.aircraft_id=$1 AND d.status IN ($2,$3,$4))`, aircraftID, domain.MissionDeploymentPending, domain.MissionDeploymentTemporaryError, domain.MissionDeploymentOutcomeUnknown).Scan(&outstanding); err != nil {
+		return err
+	}
+	if outstanding {
+		return durable.ErrVersionConflict
+	}
+	return nil
+}

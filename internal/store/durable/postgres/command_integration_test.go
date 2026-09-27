@@ -196,6 +196,29 @@ func TestCommandAcceptanceRestartLeaseAndEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// An uncertain legacy upload on another planned flight fences this aircraft.
+	otherFlight := f
+	otherFlight.ID = prefix + "-other-flight"
+	if err = s.CreateFlightRecord(ctx, otherFlight); err != nil {
+		t.Fatal(err)
+	}
+	otherMission, err := fleet.ImportMission(ctx, otherFlight.ID, prefix+"-other-import", service.ImportMissionRequest{
+		AircraftID: a.ID, IntentID: intent.ID, IntentVersion: 1, SourceFormat: domain.MissionSourceFormatQGCWPL110,
+		Source: "QGC WPL 110\n0\t1\t0\t16\t0\t0\t0\t0\t35.2\t-97.2\t120\t1\n1\t0\t0\t16\t0\t0\t0\t0\t35.21\t-97.21\t100\t1\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := s.CreateMissionDeployment(ctx, domain.MissionDeployment{ID: prefix + "-legacy", FlightID: otherFlight.ID, MissionID: otherMission.Mission.ID, CommandID: prefix + "-legacy-command", IdempotencyKey: prefix + "-legacy-key", IdempotencyRequest: strings.Repeat("a", 64), Status: domain.MissionDeploymentOutcomeUnknown, CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = fleet.SubmitCommand(ctx, f.ID, "mission-control-service", prefix+"-blocked-arm", service.CommandRequest{Type: "ARM"}); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("legacy upload on other flight failed to fence aircraft: %v", err)
+	}
+	legacy.Status = domain.MissionDeploymentRejected
+	if err = s.UpdateMissionDeployment(ctx, legacy, legacy.Revision); err != nil {
+		t.Fatal(err)
+	}
 	upload, err := fleet.SubmitCommand(ctx, f.ID, "mission-control-service", prefix+"-upload", service.CommandRequest{Type: "MISSION_UPLOAD", MissionID: mission.Mission.ID, MissionDigest: mission.Mission.MissionDigest})
 	if err != nil {
 		t.Fatal(err)

@@ -323,6 +323,10 @@ func sameMissionDeploymentCommand(left, right domain.MissionDeployment) bool {
 func (s *FleetService) persistUndispatchedMissionExpiry(ctx context.Context, deployment domain.MissionDeployment, replayed bool, message string, now time.Time) (DeployMissionResult, error) {
 	updated := deployment
 	updated.Status = domain.MissionDeploymentOutcomeUnknown
+	if !deployment.DispatchStarted {
+		updated.Status = domain.MissionDeploymentRejected
+		updated.CompletedAt = &now
+	}
 	updated.Message = message
 	updated.UpdatedAt = now
 	if err := s.durable.UpdateMissionDeployment(ctx, updated, deployment.Revision); err != nil {
