@@ -365,6 +365,13 @@ func commandEvidenceEvents(c domain.Command, evidence *pb.CommandEvidence) ([]do
 	return out, nil
 }
 
+// CommandHistoryEnabled reports whether replay can include persisted command
+// evidence, independently of dispatch transport and authorization configuration.
+func (s *FleetService) CommandHistoryEnabled() bool {
+	_, ok := s.durable.(durable.CommandStore)
+	return ok
+}
+
 // CommandControlEnabled reports whether durable command routes are configured.
 func (s *FleetService) CommandControlEnabled() bool {
 	_, err := s.commandStore()
