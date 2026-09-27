@@ -16,8 +16,16 @@ import (
 // DrainFlightCompletions discovers live Relays and durably admits their pending
 // notifications before acknowledging delivery. Agent placement is not used:
 // a previous Relay may still own an older flight's delivery obligation.
-// Parameters: ctx bounds discovery/delivery; admit must commit the exact event.
-// Returns: joined per-Relay errors while continuing other available Relays.
+//
+// Parameters:
+//   - ctx: bounds Registry discovery and all Relay polling/admission/receipt calls.
+//   - admit: is a nonnil callback that must durably commit the exact immutable
+//     event before returning nil; failures leave the Relay obligation pending.
+//
+// Returns: nil when this bounded pass succeeds, discovery/cancellation errors,
+// or joined per-Relay validation/admission/receipt errors while continuing other
+// available Relays. Each pass starts at a rotating Relay to avoid a failing prefix
+// starving later Relays. Lost receipts cause exact replay, not a new event identity.
 func (s *Service) DrainFlightCompletions(ctx context.Context, admit func(context.Context, *pb.FlightCompletionEvidence) error) error {
 	response, err := s.registry.ListRelays(ctx, &registryv1.ListRelaysRequest{})
 	if err != nil {

@@ -17,14 +17,19 @@ import (
 )
 
 // AdmitFlightCompletion validates aircraft evidence against immutable API authority
-// and commits an idempotent inbox obligation. Parameters: ctx bounds persistence;
-// e carries authenticated Agent evidence. The exact cited mission start must
-// already have durable applied state/evidence; dispatch permission is insufficient.
-// Relay retains an unadmitted notification until start evidence has caught up.
-// Undispatched commands are rejected and
-// their delivery leases revoked in this same flight-locked transaction; previously
-// started delivery remains uncertain and requires post-expiry evidence recovery.
-// Returns: binding/conflict/storage errors with no partial admission or retirement.
+// and commits an idempotent inbox obligation under the exact flight row lock.
+//
+// Parameters:
+//   - ctx: bounds validation reads and the admission/retirement transaction.
+//   - e: carries authenticated Agent evidence. Its cited mission start must have
+//     durable applied state/evidence; dispatch permission alone is insufficient.
+//
+// Returns: nil after first admission or exact replay; ErrIdempotencyConflict for
+// changed delivery content, ErrVersionConflict for binding/start/lifecycle conflicts,
+// or validation, lookup, encoding, and storage errors without a partial commit.
+// Undispatched commands are rejected and their delivery leases revoked atomically;
+// previously started work remains uncertain for post-expiry evidence recovery.
+// An unadmitted Relay notification stays pending until start evidence catches up.
 func (s *Store) AdmitFlightCompletion(ctx context.Context, e *pb.FlightCompletionEvidence) error {
 	raw, digest, err := flightcompletion.Encode(e)
 	if err != nil {
@@ -230,10 +235,19 @@ func (s *Store) RetryFlightCompletion(ctx context.Context, c domain.FlightComple
 	return nil
 }
 
-// CompleteFlight atomically closes flight and intent, requests DSS withdrawal,
-// and publishes the archive obligation. Parameters: ctx bounds the transaction;
-// c holds the live lease; publication is optional configured DSS withdrawal.
-// Returns: conflicts and failures without partial lifecycle transitions.
+// CompleteFlight atomically closes the flight, completes an active intent while
+// preserving a canceled intent, requests optional DSS withdrawal, and creates one
+// archive obligation. External cleanup must have succeeded before this commit.
+//
+// Parameters:
+//   - ctx: bounds the flight/aircraft/intent transaction.
+//   - c: supplies immutable completion identity and the current finalizing lease.
+//   - publication: optionally supplies withdrawal for the exact intent version.
+//
+// Returns: nil after the atomic lifecycle/outbox commit; ErrVersionConflict for
+// expired/replaced leases, wrong lifecycle/publication binding, or unresolved
+// commands; lookup/encoding/storage errors otherwise. Errors roll back all changes.
+// The archive outbox records an obligation, not proof of uploaded archive coverage.
 func (s *Store) CompleteFlight(ctx context.Context, c domain.FlightCompletion, publication *domain.OperationalIntentPublication) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

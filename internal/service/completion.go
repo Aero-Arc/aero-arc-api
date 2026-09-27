@@ -19,9 +19,14 @@ type CompletionTransport interface {
 	DrainFlightCompletions(context.Context, func(context.Context, *pb.FlightCompletionEvidence) error) error
 }
 
-// WithFlightFinalization configures authoritative monitoring and publication
-// cleanup. Parameters: publication supplies the existing DSS coordinator.
-// Returns: this service for startup composition.
+// WithFlightFinalization configures optional DSS withdrawal during finalization.
+//
+// Parameters:
+//   - publication: supplies the existing DSS coordinator; nil omits withdrawal
+//     while retaining monitoring/context cleanup and durable flight finalization.
+//
+// Returns: this service for startup composition; it starts no worker or network
+// activity and does not change command/monitoring dependency configuration.
 func (s *FleetService) WithFlightFinalization(publication DeconflictionCoordinator) *FleetService {
 	s.completionPublication = publication
 	return s
@@ -29,6 +34,18 @@ func (s *FleetService) WithFlightFinalization(publication DeconflictionCoordinat
 
 // RunFlightFinalization consumes completion events and retries external cleanup
 // independently of HTTP. Only a current database lease can commit finalization.
+//
+// Parameters:
+//   - ctx: controls worker lifetime, Relay polling, database claims, bounded
+//     cleanup attempts, retry persistence, and shutdown. Cancellation stops new
+//     work and cancels in-flight operations; it does not erase durable obligations.
+//
+// Returns: after cancellation, or immediately if durable completion storage or a
+// completion-capable command transport is absent. The method has no return value;
+// dependency, admission, and cleanup errors are logged and retried. Failed cleanup
+// remains pending; an interrupted lease is recoverable after expiry. Monitoring
+// closure requires the configured Conformance client when the intent requires it,
+// context cleanup requires the mission deployer, and DSS withdrawal is optional.
 func (s *FleetService) RunFlightFinalization(ctx context.Context) {
 	store, ok := s.durable.(durable.CompletionStore)
 	if !ok {
@@ -124,7 +141,15 @@ func (s *FleetService) finalizeFlight(ctx context.Context, c domain.FlightComple
 }
 
 // GetFlightCompletion returns durable completion progress without inferring it
-// from live connection state. Missing evidence is a not-found result.
+// from live connection state. It does not perform cleanup or authorize a caller.
+//
+// Parameters:
+//   - ctx: bounds the durable read; callers apply their command-access policy.
+//   - flightID: selects the exact flight whose evidence/progress is requested.
+//
+// Returns: persisted progress, durable.ErrNotFound when evidence is absent,
+// ErrMissionDeploymentUnavailable when completion storage is not configured, or
+// a storage/decoding error. Pending evidence does not imply completed cleanup.
 func (s *FleetService) GetFlightCompletion(ctx context.Context, flightID string) (domain.FlightCompletion, error) {
 	store, ok := s.durable.(durable.CompletionStore)
 	if !ok {
@@ -134,9 +159,16 @@ func (s *FleetService) GetFlightCompletion(ctx context.Context, flightID string)
 }
 
 // RequestIntentCompletion reports the automatically retried completion obligation.
-// Parameters: ctx bounds reads; intentID scopes the current active flight.
-// Returns: persisted progress; absent aircraft evidence is a validation error.
 // No physical command or external cleanup executes in the request lifetime.
+//
+// Parameters:
+//   - ctx: bounds intent, flight, and completion reads; the caller authorizes access.
+//   - intentID: selects the current intent version and its active or completed flight.
+//
+// Returns: persisted progress; ErrValidation when the matching flight has no
+// admitted aircraft evidence, ErrInvalidTransition when no qualifying flight
+// exists, or dependency/lookup errors. Calling this method does not force a
+// lifecycle transition or bypass the background worker's evidence/lease fences.
 func (s *FleetService) RequestIntentCompletion(ctx context.Context, intentID string) (domain.FlightCompletion, error) {
 	intent, err := s.durable.GetOperationalIntent(ctx, intentID)
 	if err != nil {
