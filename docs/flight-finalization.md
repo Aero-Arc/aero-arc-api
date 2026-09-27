@@ -54,3 +54,8 @@ flight-scoped dispatch fence before context setup and again before handoff. A
 previously started attempt remains uncertain; after completion its unchanged
 authority can be retried only after expiry for Agent journal/readback recovery.
 Pre-fence command rows are conservatively migrated as possibly dispatched.
+
+Completion admission also requires durable applied state/evidence for its exact
+MISSION_START command. A claim or dispatch permission never substitutes for that
+proof. If completion reaches API before the start result, Relay keeps the delivery
+obligation and retries after command evidence reconciliation.

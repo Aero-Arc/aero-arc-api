@@ -100,6 +100,13 @@ func TestFlightFinalizationIsAtomicIdempotentAndLeaseFenced(t *testing.T) {
 					if err = s.AdmitFlightCompletion(ctx, wrongStart); !errors.Is(err, durable.ErrVersionConflict) {
 						t.Fatalf("unclaimed upgrade marker authorized completion: %v", err)
 					}
+					// A claim and first dispatch permit precede context setup, not handoff.
+					if _, err = s.pool.Exec(ctx, `INSERT INTO command_attempts(command_id,attempt) VALUES($1,1)`, laterStartID); err != nil {
+						t.Fatal(err)
+					}
+					if err = s.AdmitFlightCompletion(ctx, wrongStart); !errors.Is(err, durable.ErrVersionConflict) {
+						t.Fatalf("context-only dispatch permit authorized completion: %v", err)
+					}
 					if _, err = s.pool.Exec(ctx, `UPDATE commands SET dispatch_started=false WHERE id=$1`, laterStartID); err != nil {
 						t.Fatal(err)
 					}

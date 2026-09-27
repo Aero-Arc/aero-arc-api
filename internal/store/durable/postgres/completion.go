@@ -18,7 +18,10 @@ import (
 
 // AdmitFlightCompletion validates aircraft evidence against immutable API authority
 // and commits an idempotent inbox obligation. Parameters: ctx bounds persistence;
-// e carries authenticated Agent evidence. Undispatched commands are rejected and
+// e carries authenticated Agent evidence. The exact cited mission start must
+// already have durable applied state/evidence; dispatch permission is insufficient.
+// Relay retains an unadmitted notification until start evidence has caught up.
+// Undispatched commands are rejected and
 // their delivery leases revoked in this same flight-locked transaction; previously
 // started delivery remains uncertain and requires post-expiry evidence recovery.
 // Returns: binding/conflict/storage errors with no partial admission or retirement.
@@ -58,11 +61,11 @@ func (s *Store) AdmitFlightCompletion(ctx context.Context, e *pb.FlightCompletio
 		return durable.ErrVersionConflict
 	}
 	var startAuthorized bool
-	if err = tx.QueryRow(ctx, `SELECT payload,(dispatch_started AND EXISTS(SELECT 1 FROM command_attempts WHERE command_id=commands.id)) OR state='applied' OR EXISTS(SELECT 1 FROM command_events WHERE command_id=commands.id AND stage='applied') FROM commands WHERE id=$1 AND flight_id=$2`, e.StartCommandId, flight.ID).Scan(&commandRaw, &startAuthorized); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT payload,state='applied' OR EXISTS(SELECT 1 FROM command_events WHERE command_id=commands.id AND stage='applied') FROM commands WHERE id=$1 AND flight_id=$2`, e.StartCommandId, flight.ID).Scan(&commandRaw, &startAuthorized); err != nil {
 		return err
 	}
 	if !startAuthorized {
-		return fmt.Errorf("%w: completion cites an undispatched mission start", durable.ErrVersionConflict)
+		return fmt.Errorf("%w: completion cites a mission start without durable applied evidence", durable.ErrVersionConflict)
 	}
 	c := new(pb.DurableCommand)
 	if err = proto.Unmarshal(commandRaw, c); err != nil {
