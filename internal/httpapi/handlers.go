@@ -176,7 +176,7 @@ func (s *Server) handleGetFlight(c *mach.Context) {
 }
 
 func (s *Server) handleGetFlightReplay(c *mach.Context) {
-	if s.fleet.CommandControlEnabled() && !s.commandAccess(c) {
+	if s.fleet.CommandHistoryEnabled() && !s.commandAccess(c) {
 		return
 	}
 	ctx, cancel := s.contextWithTimeout(c)
@@ -372,6 +372,11 @@ func (s *Server) handleReconcileMissionDeployment(c *mach.Context) {
 			writeServiceError(c, err)
 			return
 		}
+		if _, err := s.fleet.ReconcileFlightCommand(ctx, deployment.FlightID, deployment.CommandID, "mission-control-service"); err != nil {
+			writeServiceError(c, err)
+			return
+		}
+		c.Response.Header().Set("Idempotent-Replayed", "true")
 		writeJSON(c, http.StatusAccepted, service.DeployMissionResult{Deployment: deployment, Replayed: true})
 		return
 	}
