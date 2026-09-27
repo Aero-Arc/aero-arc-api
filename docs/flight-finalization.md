@@ -47,3 +47,10 @@ that all delayed evidence has arrived.
 An operator cancellation does not erase physical flight completion evidence.
 If cancellation precedes or races finalization, the intent remains canceled;
 the evidenced flight still completes and creates its archive obligation.
+
+Completion admission atomically rejects commands whose delivery has not started,
+revokes their leases, and retires undelivered mission deployments. Workers check a
+flight-scoped dispatch fence before context setup and again before handoff. A
+previously started attempt remains uncertain; after completion its unchanged
+authority can be retried only after expiry for Agent journal/readback recovery.
+Pre-fence command rows are conservatively migrated as possibly dispatched.

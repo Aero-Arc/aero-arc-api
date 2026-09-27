@@ -18,7 +18,10 @@ import (
 
 // AdmitFlightCompletion validates aircraft evidence against immutable API authority
 // and commits an idempotent inbox obligation. Parameters: ctx bounds persistence;
-// e carries authenticated Agent evidence. Returns: binding/conflict/storage errors.
+// e carries authenticated Agent evidence. Undispatched commands are rejected and
+// their delivery leases revoked in this same flight-locked transaction; previously
+// started delivery remains uncertain and requires post-expiry evidence recovery.
+// Returns: binding/conflict/storage errors with no partial admission or retirement.
 func (s *Store) AdmitFlightCompletion(ctx context.Context, e *pb.FlightCompletionEvidence) error {
 	raw, digest, err := flightcompletion.Encode(e)
 	if err != nil {
@@ -79,7 +82,83 @@ func (s *Store) AdmitFlightCompletion(ctx context.Context, e *pb.FlightCompletio
 	if err != nil {
 		return err
 	}
+	if err = retireUndispatchedFlightCommands(ctx, tx, flight.ID, databaseNow); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
+}
+
+func retireUndispatchedFlightCommands(ctx context.Context, tx pgx.Tx, flightID string, at time.Time) error {
+	const message = "flight completion admitted before command delivery began"
+	rows, err := tx.Query(ctx, `UPDATE command_outbox o SET done=true,generation=generation+1,lease_until=NULL FROM commands c WHERE o.command_id=c.id AND c.flight_id=$1 AND NOT c.dispatch_started AND c.state NOT IN ('applied','rejected','failed','timed_out') RETURNING o.command_id`, flightID)
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err = tx.Exec(ctx, `UPDATE commands SET state='rejected',observation_state='unavailable' WHERE id=$1`, id); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO command_events(event_id,command_id,stage,occurred_at,source,message) VALUES($1,$2,'rejected',$3,'api_completion',$4) ON CONFLICT DO NOTHING`, id+"/rejected", id, at, message); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `UPDATE command_attempts SET finished_at=$2,result=$3 WHERE command_id=$1 AND finished_at IS NULL`, id, at, message); err != nil {
+			return err
+		}
+	}
+	// Preserve the existing mission-deployment read model and fence direct retries.
+	rows, err = tx.Query(ctx, `SELECT id,data FROM mission_deployments WHERE flight_id=$1 AND status IN ('pending','temporary_error','outcome_unknown') AND NOT COALESCE((data->>'dispatch_started')::boolean,false) FOR UPDATE`, flightID)
+	if err != nil {
+		return err
+	}
+	var deployments []domain.MissionDeployment
+	for rows.Next() {
+		var id string
+		var raw []byte
+		if err = rows.Scan(&id, &raw); err != nil {
+			rows.Close()
+			return err
+		}
+		var d domain.MissionDeployment
+		if err = decodeMissionDeployment(raw, &d); err != nil {
+			rows.Close()
+			return err
+		}
+		d.ID = id
+		deployments = append(deployments, d)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, d := range deployments {
+		d.Status = domain.MissionDeploymentRejected
+		d.Message = message
+		d.CompletedAt = &at
+		d.UpdatedAt = at
+		raw, err := encodeMissionDeployment(d)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `UPDATE mission_deployments SET status=$2,data=$3,updated_at=$4,revision=revision+1 WHERE id=$1`, d.ID, d.Status, raw, at); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func scanCompletion(row pgx.Row) (domain.FlightCompletion, error) {

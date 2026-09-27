@@ -239,6 +239,15 @@ func (s *FleetService) runCommandWorker(ctx context.Context) {
 }
 
 func (s *FleetService) executeCommandAttempt(ctx context.Context, c domain.Command) ([]domain.CommandEvent, string) {
+	// Production command stores fence every attempt before context installation
+	// and again immediately before transport handoff. Memory mission-adapter
+	// tests do not provide CommandStore and cannot enable the background worker.
+	dispatchStore, fenced := s.durable.(durable.CommandStore)
+	if fenced {
+		if err := dispatchStore.BeginCommandDispatch(ctx, c); err != nil {
+			return nil, err.Error()
+		}
+	}
 	var envelope pb.DurableCommand
 	if err := proto.Unmarshal(c.Payload, &envelope); err != nil {
 		return nil, err.Error()
@@ -284,11 +293,19 @@ func (s *FleetService) executeCommandAttempt(ctx context.Context, c domain.Comma
 	// Context installation is its own existing durable, idempotent operation.
 	// Never change operation context for post-expiry result recovery.
 	if time.Now().Before(c.ExpiresAt) {
+		if s.missionDeployer == nil {
+			return nil, ErrMissionDeploymentUnavailable.Error()
+		}
 		if err := s.missionDeployer.EnsureOperationContext(ctx, envelope.AgentId, &pb.SetOperationContextCommand{CommandId: c.ID + "/context", Context: envelope.Context}); err != nil {
 			return nil, err.Error()
 		}
 	}
 
+	if fenced {
+		if err := dispatchStore.BeginCommandDispatch(ctx, c); err != nil {
+			return nil, err.Error()
+		}
+	}
 	var evidence *pb.CommandEvidence
 	var err error
 	if transport, ok := s.commandTransport.(interface {

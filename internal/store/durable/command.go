@@ -8,6 +8,7 @@ import (
 
 // CommandStore is the durable command authority; memory backends must not enable execution.
 type CommandStore interface {
+	BeginCommandDispatch(context.Context, domain.Command) error
 	RequeueCommand(context.Context, string) error
 	AcceptCommand(context.Context, domain.Command, *domain.MissionDeployment) (domain.Command, error)
 	ListCommands(context.Context, string) ([]domain.Command, error)

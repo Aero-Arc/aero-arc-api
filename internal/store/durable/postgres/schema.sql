@@ -288,10 +288,14 @@ CREATE TABLE IF NOT EXISTS commands (
  data jsonb NOT NULL,
  state text NOT NULL,
  observation_state text NOT NULL DEFAULT 'pending',
+ dispatch_started boolean NOT NULL DEFAULT false,
  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
  expires_at timestamptz NOT NULL,
  UNIQUE(operator_id,idempotency_key)
 );
+-- Pre-fence records are conservatively treated as possibly dispatched during upgrade.
+ALTER TABLE commands ADD COLUMN IF NOT EXISTS dispatch_started boolean NOT NULL DEFAULT true;
+ALTER TABLE commands ALTER COLUMN dispatch_started SET DEFAULT false;
 CREATE INDEX IF NOT EXISTS commands_flight_idx ON commands(flight_id,created_at,id);
 CREATE TABLE IF NOT EXISTS command_events (
  event_id text PRIMARY KEY,
