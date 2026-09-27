@@ -100,12 +100,12 @@ func (s *FleetService) finalizeFlight(ctx context.Context, c domain.FlightComple
 		if !ok {
 			return ErrConformanceHistoryUnavailable
 		}
-		response, err := client.EndAssignment(ctx, &conformance.EndAssignmentRequest{Source: "aero-arc-api", MessageId: e.EventId, AssignmentId: intent.ID, FlightId: e.Context.FlightId, AircraftId: e.Context.AircraftId, IntentVersion: e.Context.IntentVersion, FlightCompletedAt: timestamppb.New(time.Unix(0, max(e.LandedAtUnixNs, e.DisarmedAtUnixNs)))})
+		response, err := client.EndAssignment(ctx, &conformance.EndAssignmentRequest{Source: "aero-arc-api", MessageId: e.EventId, AssignmentId: intent.ID, FlightId: e.Context.FlightId, AircraftId: e.Context.AircraftId, IntentVersion: e.Context.IntentVersion, IntentId: e.Context.IntentId, AgentId: e.AgentId, FlightCompletedAt: timestamppb.New(time.Unix(0, max(e.LandedAtUnixNs, e.DisarmedAtUnixNs)))})
 		if err != nil {
 			return err
 		}
 		a := response.GetRecord().GetAssignment()
-		if a.GetFlightId() != e.Context.FlightId || a.GetAircraftId() != e.Context.AircraftId || a.GetIntentVersion() != e.Context.IntentVersion {
+		if a.GetFlightId() != e.Context.FlightId || a.GetAircraftId() != e.Context.AircraftId || a.GetIntentVersion() != e.Context.IntentVersion || a.GetIntentId() != e.Context.IntentId || a.GetAgentId() != e.AgentId {
 			return fmt.Errorf("monitoring closure binding mismatch")
 		}
 	}

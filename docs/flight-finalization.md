@@ -20,7 +20,8 @@ The API polls registered Relays, durably admits exact flight/mission/Agent-bound
 evidence, then acknowledges Relay delivery. A lost receipt causes safe replay.
 
 The API worker resolves outstanding commands, closes the exact Conformance
-assignment, and clears Agent operation context. A database-clock lease fences
+assignment using its exact flight, aircraft, Agent, intent identity and version,
+and clears Agent operation context. A database-clock lease fences
 its final transaction: flight complete, intent complete, optional DSS withdrawal
 request, and one `flight_finalized_outbox` row commit together. Closure errors
 remain retryable. Physical completion time and the monitoring authority boundary
