@@ -75,6 +75,37 @@ func TestFlightFinalizationIsAtomicIdempotentAndLeaseFenced(t *testing.T) {
 					if _, err = s.pool.Exec(ctx, `INSERT INTO command_attempts(command_id,attempt) VALUES($1,1)`, queuedID); err != nil {
 						t.Fatal(err)
 					}
+					laterStartID := id + "-unsent-start"
+					laterStart := proto.Clone(command).(*pb.DurableCommand)
+					laterStart.CommandId = laterStartID
+					laterRaw, err := proto.Marshal(laterStart)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err = s.pool.Exec(ctx, `INSERT INTO commands(id,operator_id,aircraft_id,flight_id,digest,idempotency_key,request_hash,payload,data,state,expires_at) VALUES($1,$2,$2,$2,'later-digest',$1,'hash',$3,'{}','accepted',clock_timestamp()+interval '1 minute')`, laterStartID, id, laterRaw); err != nil {
+						t.Fatal(err)
+					}
+					if _, err = s.pool.Exec(ctx, `INSERT INTO command_outbox(command_id) VALUES($1)`, laterStartID); err != nil {
+						t.Fatal(err)
+					}
+					wrongStart := proto.Clone(e).(*pb.FlightCompletionEvidence)
+					wrongStart.StartCommandId = laterStartID
+					if err = s.AdmitFlightCompletion(ctx, wrongStart); !errors.Is(err, durable.ErrVersionConflict) {
+						t.Fatalf("undispatched start authorized completion: %v", err)
+					}
+					// A conservative upgrade marker alone is not a recorded dispatch attempt.
+					if _, err = s.pool.Exec(ctx, `UPDATE commands SET dispatch_started=true WHERE id=$1`, laterStartID); err != nil {
+						t.Fatal(err)
+					}
+					if err = s.AdmitFlightCompletion(ctx, wrongStart); !errors.Is(err, durable.ErrVersionConflict) {
+						t.Fatalf("unclaimed upgrade marker authorized completion: %v", err)
+					}
+					if _, err = s.pool.Exec(ctx, `UPDATE commands SET dispatch_started=false WHERE id=$1`, laterStartID); err != nil {
+						t.Fatal(err)
+					}
+					if _, err = s.GetFlightCompletion(ctx, id); !errors.Is(err, durable.ErrNotFound) {
+						t.Fatalf("invalid start persisted completion: %v", err)
+					}
 					if mode == "dispatching" {
 						if err = s.BeginCommandDispatch(ctx, queued); err != nil {
 							t.Fatal(err)

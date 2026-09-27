@@ -57,8 +57,12 @@ func (s *Store) AdmitFlightCompletion(ctx context.Context, e *pb.FlightCompletio
 	if flight.Status != domain.FlightStatusActive {
 		return durable.ErrVersionConflict
 	}
-	if err = tx.QueryRow(ctx, `SELECT payload FROM commands WHERE id=$1 AND flight_id=$2`, e.StartCommandId, flight.ID).Scan(&commandRaw); err != nil {
+	var startAuthorized bool
+	if err = tx.QueryRow(ctx, `SELECT payload,(dispatch_started AND EXISTS(SELECT 1 FROM command_attempts WHERE command_id=commands.id)) OR state='applied' OR EXISTS(SELECT 1 FROM command_events WHERE command_id=commands.id AND stage='applied') FROM commands WHERE id=$1 AND flight_id=$2`, e.StartCommandId, flight.ID).Scan(&commandRaw, &startAuthorized); err != nil {
 		return err
+	}
+	if !startAuthorized {
+		return fmt.Errorf("%w: completion cites an undispatched mission start", durable.ErrVersionConflict)
 	}
 	c := new(pb.DurableCommand)
 	if err = proto.Unmarshal(commandRaw, c); err != nil {
@@ -173,6 +177,11 @@ func scanCompletion(row pgx.Row) (domain.FlightCompletion, error) {
 }
 
 // GetFlightCompletion reads evidence and finalization progress for a flight.
+//
+// Parameters: ctx bounds storage reads; flightID selects the exact durable flight.
+// Returns: immutable evidence and current finalization state, ErrNotFound when no
+// evidence has been admitted, or a database/protobuf decoding error. A pending
+// record does not imply flight/intent cleanup or archive publication is complete.
 func (s *Store) GetFlightCompletion(ctx context.Context, flightID string) (domain.FlightCompletion, error) {
 	c, err := scanCompletion(s.pool.QueryRow(ctx, `SELECT payload,state,attempts,generation,last_error FROM flight_completions WHERE flight_id=$1`, flightID))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -182,6 +191,11 @@ func (s *Store) GetFlightCompletion(ctx context.Context, flightID string) (domai
 }
 
 // ClaimFlightCompletion takes one due obligation under a database-clock lease.
+//
+// Parameters: ctx bounds the atomic database claim.
+// Returns: evidence with incremented attempt and fencing generation, ErrNotFound
+// when no due unleased obligation exists, or a storage/decoding error. Only that
+// unexpired generation may finish or reschedule; the claim itself closes nothing.
 func (s *Store) ClaimFlightCompletion(ctx context.Context) (domain.FlightCompletion, error) {
 	c, err := scanCompletion(s.pool.QueryRow(ctx, `WITH due AS (SELECT event_id FROM flight_completions WHERE state<>'complete' AND available_at<=clock_timestamp() AND (lease_until IS NULL OR lease_until<=clock_timestamp()) ORDER BY available_at,event_id FOR UPDATE SKIP LOCKED LIMIT 1)
  UPDATE flight_completions c SET state='finalizing',attempts=attempts+1,generation=generation+1,lease_until=clock_timestamp()+interval '90 seconds' FROM due WHERE c.event_id=due.event_id RETURNING c.payload,c.state,c.attempts,c.generation,c.last_error`))
@@ -192,6 +206,12 @@ func (s *Store) ClaimFlightCompletion(ctx context.Context) (domain.FlightComplet
 }
 
 // RetryFlightCompletion retains failed cleanup under the current unexpired lease.
+//
+// Parameters: ctx bounds persistence; c holds claimed event identity/generation;
+// cause is the nonnil cleanup failure whose bounded message is retained.
+// Returns: nil after releasing the lease and scheduling retry, ErrVersionConflict
+// for expired/superseded ownership or wrong state, or a storage error. It preserves
+// immutable evidence and never marks partial external cleanup as completion.
 func (s *Store) RetryFlightCompletion(ctx context.Context, c domain.FlightCompletion, cause error) error {
 	message := cause.Error()
 	if len(message) > 2048 {
