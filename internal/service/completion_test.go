@@ -17,12 +17,16 @@ type closureBindingStore struct {
 	durable.Store
 	durable.CommandStore
 	records []domain.Command
+	intent  *domain.OperationalIntent
 }
 
 func (s *closureBindingStore) ListCommands(context.Context, string) ([]domain.Command, error) {
 	return s.records, nil
 }
-func (*closureBindingStore) GetOperationalIntentVersion(context.Context, string, int) (domain.OperationalIntent, error) {
+func (s *closureBindingStore) GetOperationalIntentVersion(context.Context, string, int) (domain.OperationalIntent, error) {
+	if s.intent != nil {
+		return *s.intent, nil
+	}
 	return domain.OperationalIntent{ID: "intent-a", Version: 1, ConformanceRequired: true}, nil
 }
 
@@ -83,6 +87,33 @@ func TestCompetingStartPreventsExternalCompletionCleanup(t *testing.T) {
 			err := svc.finalizeFlight(context.Background(), completion, nil)
 			if err == nil || client.request != nil || len(deployer.clears) != 0 {
 				t.Fatalf("competing start reached cleanup: %v", err)
+			}
+		})
+	}
+}
+
+type completionPublicationRecorder struct {
+	durable.CompletionStore
+	publication *domain.OperationalIntentPublication
+	completed   bool
+}
+
+func (s *completionPublicationRecorder) CompleteFlight(_ context.Context, _ domain.FlightCompletion, p *domain.OperationalIntentPublication) error {
+	s.publication = p
+	s.completed = true
+	return nil
+}
+func TestFinalizationSkipsDSSWithdrawalForLegacyIntent(t *testing.T) {
+	for _, id := range []string{"legacy-intent", "33333333-3333-4333-8333-333333333333"} {
+		t.Run(id, func(t *testing.T) {
+			sink := &completionPublicationRecorder{}
+			svc := &FleetService{durable: &closureBindingStore{intent: &domain.OperationalIntent{ID: id}}, missionDeployer: &fakeMissionDeployer{}, completionPublication: &durableWorkflowCoordinator{}}
+			c := domain.FlightCompletion{Evidence: &pb.FlightCompletionEvidence{EventId: "event", AgentId: "agent", Context: &pb.OperationContext{FlightId: "flight", IntentId: id}}}
+			if err := svc.finalizeFlight(context.Background(), c, sink); err != nil {
+				t.Fatal(err)
+			}
+			if !sink.completed || (sink.publication != nil) != (id != "legacy-intent") {
+				t.Fatalf("incorrect publication: %+v", sink)
 			}
 		})
 	}

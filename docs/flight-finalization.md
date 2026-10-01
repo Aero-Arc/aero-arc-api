@@ -59,3 +59,14 @@ Completion admission also requires durable applied state/evidence for its exact
 MISSION_START command. A claim or dispatch permission never substitutes for that
 proof. If completion reaches API before the start result, Relay keeps the delivery
 obligation and retries after command evidence reconciliation.
+
+A flight has one applied mission-start execution identity, matching the Agent's
+immutable completion watch. New `MISSION_START` identities are rejected while
+another start for that flight is applied or has unresolved dispatch evidence.
+Retry/reconcile the original command identity; a separate execution requires a
+new flight. A rejected, never-applied start may be replaced. Imported or legacy
+records containing competing applied starts remain a reconciliation conflict;
+creation timestamps alone cannot prove which execution caused physical completion.
+
+Legacy non-UUID intent IDs were never published to DSS. Their completion still
+closes monitoring and Agent context, but does not enqueue an invalid DSS withdrawal.

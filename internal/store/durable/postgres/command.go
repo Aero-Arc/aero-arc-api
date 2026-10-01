@@ -24,7 +24,10 @@ import (
 //
 // Parameters: ctx bounds the transaction; c is immutable authority; deployment optionally reserves the existing mission workflow.
 //
-// Returns: The original command on exact replay, or the accepted record; validation, binding, idempotency, and database errors fail without dispatch.
+// Returns: the original command on exact replay or the accepted record. A new
+// MISSION_START cannot replace an applied/uncertain start in the same flight;
+// reconcile the original identity or create a new flight. Validation, binding,
+// idempotency, and database errors fail without dispatch.
 func (s *Store) AcceptCommand(ctx context.Context, c domain.Command, deployment *domain.MissionDeployment) (domain.Command, error) {
 	var cmd pb.DurableCommand
 	if err := proto.Unmarshal(c.Payload, &cmd); err != nil {
@@ -101,6 +104,13 @@ func (s *Store) AcceptCommand(ctx context.Context, c domain.Command, deployment 
 	}
 	if anotherActive {
 		return c, durable.ErrVersionConflict
+	}
+	// One execution watch belongs to a flight. A rejected never-applied start
+	// can be replaced, but an applied/uncertain start requires the same ID.
+	if c.Type == "MISSION_START" {
+		if err = validateCompletionStart(ctx, tx, &pb.FlightCompletionEvidence{Context: cmd.Context, StartCommandId: c.ID}); err != nil {
+			return c, err
+		}
 	}
 	var outstanding bool
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM commands WHERE aircraft_id=$1 AND state NOT IN ('applied','rejected','failed','timed_out'))`, aircraft).Scan(&outstanding); err != nil {

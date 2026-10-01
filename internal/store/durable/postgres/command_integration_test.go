@@ -271,6 +271,12 @@ func TestCommandAcceptanceRestartLeaseAndEvidence(t *testing.T) {
 	if value := waitApplied(start.ID); value.ObservationState != "pending" {
 		t.Fatalf("start application invented observation: %+v", value)
 	}
+	if _, err = fleet.SubmitCommand(ctx, f.ID, "mission-control-service", prefix+"-second-start", service.CommandRequest{Type: "MISSION_START"}); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("new identity replaced an applied mission start: %v", err)
+	}
+	if replay, replayErr := fleet.SubmitCommand(ctx, f.ID, "mission-control-service", prefix+"-start", service.CommandRequest{Type: "MISSION_START"}); replayErr != nil || replay.ID != start.ID {
+		t.Fatalf("same start identity could not reconcile: %+v %v", replay, replayErr)
+	}
 	active, err := s.GetFlightRecord(ctx, f.ID)
 	if err != nil || active.Status != domain.FlightStatusActive || active.StartedAt.IsZero() {
 		t.Fatalf("start activation: %+v %v", active, err)

@@ -143,8 +143,12 @@ func (s *FleetService) finalizeFlight(ctx context.Context, c domain.FlightComple
 	}
 	var publication *domain.OperationalIntentPublication
 	if s.completionPublication != nil && s.completionPublication.PublishingEnabled() {
-		p := s.completionPublication.PublicationRequest(intent, domain.OperationalIntentExternalStateWithdrawn)
-		publication = &p
+		// Legacy IDs were never published by transitionIntentWithPublication.
+		// Do not create an obligation the DSS adapter will reject forever.
+		if _, err := canonicalDSSIntentID(intent.ID); err == nil {
+			p := s.completionPublication.PublicationRequest(intent, domain.OperationalIntentExternalStateWithdrawn)
+			publication = &p
+		}
 	}
 	return store.CompleteFlight(ctx, c, publication)
 }
