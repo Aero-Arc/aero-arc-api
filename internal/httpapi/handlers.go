@@ -517,14 +517,7 @@ func (s *Server) handleCreatePlannedFlight(c *mach.Context) {
 }
 
 func (s *Server) handleStartFlight(c *mach.Context) {
-	ctx, cancel := s.contextWithTimeout(c)
-	defer cancel()
-	flight, err := s.fleet.StartFlight(ctx, c.Param("flight_id"))
-	if err != nil {
-		writeServiceError(c, err)
-		return
-	}
-	writeJSON(c, http.StatusOK, flight)
+	writeError(c, http.StatusConflict, "Legacy flight activation is disabled; submit authenticated MISSION_START through /api/v1/flights/{flight_id}/commands with an Idempotency-Key")
 }
 
 func (s *Server) handleCreateMaintenanceEvent(c *mach.Context) {
@@ -725,12 +718,15 @@ func (s *Server) handleCompleteOperationalIntent(c *mach.Context) {
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
 	s.debugOperation(ctx, "complete_intent", slog.String("intent_id", c.Param("intent_id")))
-	intent, err := s.intents.CompleteIntent(ctx, c.Param("intent_id"))
+	if !s.commandAccess(c) {
+		return
+	}
+	completion, err := s.fleet.RequestIntentCompletion(ctx, c.Param("intent_id"))
 	if err != nil {
 		writeServiceError(c, err)
 		return
 	}
-	writeJSON(c, http.StatusOK, intent)
+	writeJSON(c, http.StatusAccepted, completion)
 }
 
 func (s *Server) handleCancelOperationalIntent(c *mach.Context) {
@@ -820,6 +816,17 @@ func decodeJSON(c *mach.Context, dst any) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Server) handleGetOperationalIntent(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	intent, err := s.intents.GetIntent(ctx, c.Param("intent_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, intent)
 }
 
 func (s *Server) handleGetIntentVolumes(c *mach.Context) {

@@ -218,19 +218,14 @@ func TestHandleBootstrapBatteryAndFlightLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	startedResponse := performJSONRequest(t, server.Handler(), http.MethodPost, "/api/v1/flights/flight-1/start", `{}`)
-	if startedResponse.Code != http.StatusOK {
-		t.Fatalf("start status=%d body=%s", startedResponse.Code, startedResponse.Body.String())
+	if startedResponse.Code != http.StatusConflict || !strings.Contains(startedResponse.Body.String(), "MISSION_START") {
+		t.Fatalf("legacy start accepted without durable authority: %d %s", startedResponse.Code, startedResponse.Body.String())
 	}
-	if err := json.Unmarshal(startedResponse.Body.Bytes(), &flight); err != nil {
-		t.Fatal(err)
+	unchanged, err := store.GetFlightRecord(ctx, "flight-1")
+	if err != nil || unchanged.Status != domain.FlightStatusPlanned || !unchanged.StartedAt.IsZero() {
+		t.Fatalf("legacy activation changed flight: %+v %v", unchanged, err)
 	}
-	if flight.Status != domain.FlightStatusActive || flight.StartedAt.IsZero() {
-		t.Fatalf("started flight = %#v", flight)
-	}
-	retryResponse := performJSONRequest(t, server.Handler(), http.MethodPost, "/api/v1/flights/flight-1/start", `{}`)
-	if retryResponse.Code != http.StatusOK {
-		t.Fatalf("start retry status=%d body=%s", retryResponse.Code, retryResponse.Body.String())
-	}
+
 }
 
 func TestHandleOperationsExposesRegistryConformanceJSON(t *testing.T) {
@@ -490,18 +485,24 @@ func TestOperationalIntentTerminalTransitionRoutes(t *testing.T) {
 		path   string
 		id     string
 		status domain.IntentStatus
+		code   int
 	}{
-		{path: "/api/v1/operational-intents/active-intent/complete", id: "active-intent", status: domain.IntentStatusComplete},
-		{path: "/api/v1/operational-intents/draft-intent/cancel", id: "draft-intent", status: domain.IntentStatusCanceled},
+		{path: "/api/v1/operational-intents/active-intent/complete", id: "active-intent", status: domain.IntentStatusActive, code: http.StatusServiceUnavailable},
+		{path: "/api/v1/operational-intents/draft-intent/cancel", id: "draft-intent", status: domain.IntentStatusCanceled, code: http.StatusOK},
 	} {
 		response := httptest.NewRecorder()
 		server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, test.path, nil))
-		if response.Code != http.StatusOK {
+		if response.Code != test.code {
 			t.Fatalf("%s status=%d body=%s", test.path, response.Code, response.Body.String())
 		}
 		intent, err := store.GetOperationalIntent(ctx, test.id)
 		if err != nil || intent.Status != test.status {
 			t.Fatalf("%s intent=%+v err=%v", test.path, intent, err)
+		}
+		read := httptest.NewRecorder()
+		server.Handler().ServeHTTP(read, httptest.NewRequest(http.MethodGet, "/api/v1/operational-intents/"+test.id, nil))
+		if read.Code != http.StatusOK {
+			t.Fatalf("read intent status=%d body=%s", read.Code, read.Body.String())
 		}
 	}
 }

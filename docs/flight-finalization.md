@@ -1,0 +1,97 @@
+# Evidence-driven flight finalization
+
+Mission import accepts optional `ending_behavior: rtl | land`. Ops defaults to
+RTL. The choice becomes a terminal onboard mission item and part of the canonical
+digest; changing the choice under an existing import key conflicts. Omitting the
+field preserves existing WPL import behavior. RTL follows the autopilot's HOME
+and RTL settings; explicit waypoint coverage does not prove the return corridor.
+
+Agent tracks an applied mission start, observed airborne state, terminal mission
+progress or early RTL/LAND, then fresh landed and disarmed observations. These
+are independent milestones. The aircraft executes recovery from its onboard
+mission without an HTTP request or internet connection. A missing observation
+leaves completion pending; it never fabricates a successful flight.
+
+The Agent journal persists milestones and a deterministic completion event. Relay
+advertises durable admission only when `completion_outbox_path` is configured,
+commits the exact event to SQLite before issuing its digest receipt, and retains
+an API delivery obligation. Disk durability is local, not replicated Relay HA.
+The API polls registered Relays, durably admits exact flight/mission/Agent-bound
+evidence, then acknowledges Relay delivery. A lost receipt causes safe replay.
+
+The API worker resolves outstanding commands, closes the exact Conformance
+assignment using its exact flight, aircraft, Agent, intent identity and version,
+and clears Agent operation context. A database-clock lease fences
+its final transaction: flight complete, intent complete, optional DSS withdrawal
+request, and one `flight_finalized_outbox` row commit together. Closure errors
+remain retryable. Physical completion time and the monitoring authority boundary
+are separate; already committed Conformance history is preserved.
+
+`GET /api/v1/flights/{flight_id}/completion` returns evidence and finalization
+progress under the existing command-control authentication. A 404 means no
+completion event has been admitted. Ops displays finalization separately from
+command ACK/application and disables new controls after evidence admission.
+`POST /api/v1/operational-intents/{intent_id}/complete` now requires command
+credentials and recorded aircraft completion evidence; it reports durable progress
+with 202 rather than forcing a lifecycle transition without aircraft evidence.
+
+## Archive boundary
+
+The finalized outbox is the producer boundary for `aero-arc-archive-worker`.
+The worker currently has a draft immutable-fragment/manifest implementation.
+Snapshot capture, full telemetry pagination and late-evidence watermarks, outbox
+job delivery, archive discovery, and replay UI integration remain outstanding.
+An outbox row is not an uploaded archive and monitoring closure is not a claim
+that all delayed evidence has arrived.
+
+An operator cancellation does not erase physical flight completion evidence.
+If cancellation precedes or races finalization, the intent remains canceled;
+the evidenced flight still completes and creates its archive obligation.
+
+Completion admission atomically rejects commands whose delivery has not started,
+revokes their leases, and retires undelivered mission deployments. Workers check a
+flight-scoped dispatch fence before context setup and again before handoff. A
+previously started attempt remains uncertain; after completion its unchanged
+authority can be retried only after expiry for Agent journal/readback recovery.
+Pre-fence command rows are conservatively migrated as possibly dispatched.
+
+Completion admission also requires durable applied state/evidence for its exact
+MISSION_START command. A claim or dispatch permission never substitutes for that
+proof. If completion reaches API before the start result, Relay keeps the delivery
+obligation and retries after command evidence reconciliation.
+
+A flight has one applied mission-start execution identity, matching the Agent's
+immutable completion watch. New `MISSION_START` identities are rejected while
+another start for that flight is applied or has unresolved dispatch evidence.
+Retry/reconcile the original command identity; a separate execution requires a
+new flight. A rejected, never-applied start may be replaced. Imported or legacy
+records containing competing applied starts remain a reconciliation conflict;
+creation timestamps alone cannot prove which execution caused physical completion.
+
+Legacy non-UUID intent IDs were never published to DSS. Their completion still
+closes monitoring and Agent context, but does not enqueue an invalid DSS withdrawal.
+
+## Legacy active-flight upgrade preflight
+
+This is a pre-deployment release. The supported demo/customer installation path
+starts with a fresh isolated database and creates flights through durable C2.
+Automatic migration or operator closure of active flights from the retired
+`/start` route is outside this release. Keep existing development databases
+intact and use a distinct database/project for the demo; never reset them merely
+to satisfy startup checks. Importing a legacy database requires reconciliation
+before cutover and must pass the preflight below.
+
+Before this API starts serving or running workers, PostgreSQL-backed startup
+checks every active flight for applied durable MISSION_START authority. Flights
+activated by the retired empty `/start` endpoint are listed in a startup error;
+cutover is refused instead of silently stranding them in the new finalizer.
+The check is read-only and does not fabricate applied command events, airborne
+observations, or successful completion.
+
+Stop old admission/dispatch producers before checking a restored database, as
+required by the coordinated upgrade procedure. If legacy flights are reported,
+preserve the old binaries and all databases/journals and do not cut over. Their
+closure needs an explicit operator reconciliation policy and verified aircraft
+state; this release does not automatically transform them into evidenced flights.
+Do not reset status, delete flight records, or synthesize a MISSION_START to pass
+the preflight. New flights must start through the durable command endpoint.

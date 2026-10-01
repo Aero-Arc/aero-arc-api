@@ -425,11 +425,10 @@ func TestCommandAcceptanceRestartLeaseAndEvidence(t *testing.T) {
 		t.Fatalf("start application invented observation: %+v", value)
 	}
 	if _, err = fleet.SubmitCommand(ctx, f.ID, "mission-control-service", prefix+"-second-start", service.CommandRequest{Type: "MISSION_START"}); !errors.Is(err, durable.ErrVersionConflict) {
-		t.Fatalf("new mission start admitted on active flight: %v", err)
+		t.Fatalf("new identity replaced an applied mission start: %v", err)
 	}
-	startReplay, err := fleet.SubmitCommand(ctx, f.ID, "mission-control-service", prefix+"-start", service.CommandRequest{Type: "MISSION_START"})
-	if err != nil || startReplay.ID != start.ID {
-		t.Fatalf("original start replay lost: %+v %v", startReplay, err)
+	if replay, replayErr := fleet.SubmitCommand(ctx, f.ID, "mission-control-service", prefix+"-start", service.CommandRequest{Type: "MISSION_START"}); replayErr != nil || replay.ID != start.ID {
+		t.Fatalf("same start identity could not reconcile: %+v %v", replay, replayErr)
 	}
 
 	resume, err := fleet.SubmitCommand(ctx, f.ID, "mission-control-service", prefix+"-resume", service.CommandRequest{Type: "RESUME"})

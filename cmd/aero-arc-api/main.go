@@ -260,6 +260,11 @@ func run(ctx context.Context, cfg *config.Config) error {
 		}
 		slog.Info("seeded demo data")
 	}
+	if store, ok := durableStore.(interface{ CheckFlightFinalizationUpgrade(context.Context) error }); ok {
+		if err := store.CheckFlightFinalizationUpgrade(ctx); err != nil {
+			return err
+		}
+	}
 	fleetService := service.NewFleetService(durableStore, telemetryStore, replayStore, registryClient).
 		WithLiveStatePolicy(cfg.RegistryFreshness, cfg.TelemetryFreshness, nil)
 	if cfg.ConformanceAddress != "" {
@@ -311,6 +316,10 @@ func run(ctx context.Context, cfg *config.Config) error {
 		return err
 	}
 	workerCtx, stopWorker := context.WithCancel(ctx)
+	fleetService.WithFlightFinalization(deconflictionService)
+	finalizationDone := make(chan struct{})
+	go func() { defer close(finalizationDone); fleetService.RunFlightFinalization(workerCtx) }()
+	defer func() { stopWorker(); <-finalizationDone }()
 	commandWorkersDone := make(chan struct{})
 	go func() { defer close(commandWorkersDone); fleetService.RunCommandWorker(workerCtx) }()
 	defer func() { stopWorker(); <-commandWorkersDone }()

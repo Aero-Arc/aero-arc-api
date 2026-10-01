@@ -24,7 +24,10 @@ import (
 //
 // Parameters: ctx bounds the transaction; c is immutable authority; deployment optionally reserves the existing mission workflow.
 //
-// Returns: The original command on exact replay, or the accepted record; validation, binding, idempotency, and database errors fail without dispatch.
+// Returns: the original command on exact replay or the accepted record. A new
+// MISSION_START cannot replace an applied/uncertain start in the same flight;
+// reconcile the original identity or create a new flight. Validation, binding,
+// idempotency, and database errors fail without dispatch.
 func (s *Store) AcceptCommand(ctx context.Context, c domain.Command, deployment *domain.MissionDeployment) (domain.Command, error) {
 	var cmd pb.DurableCommand
 	if err := proto.Unmarshal(c.Payload, &cmd); err != nil {
@@ -102,12 +105,26 @@ func (s *Store) AcceptCommand(ctx context.Context, c domain.Command, deployment 
 	if (flightStatus != "planned" && flightStatus != "active") || (c.Type == "MISSION_START" && flightStatus != "planned") || (c.Type == "RESUME" && flightStatus != "active") {
 		return c, durable.ErrVersionConflict
 	}
+	var finalizing bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM flight_completions WHERE flight_id=$1)`, c.FlightID).Scan(&finalizing); err != nil {
+		return c, err
+	}
+	if finalizing {
+		return c, fmt.Errorf("%w: flight completion evidence has been admitted", durable.ErrVersionConflict)
+	}
 	var anotherActive bool
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM flight_records WHERE aircraft_id=$1 AND id<>$2 AND status='active')`, aircraft, c.FlightID).Scan(&anotherActive); err != nil {
 		return c, err
 	}
 	if anotherActive {
 		return c, durable.ErrVersionConflict
+	}
+	// One execution watch belongs to a flight. A rejected never-applied start
+	// can be replaced, but an applied/uncertain start requires the same ID.
+	if c.Type == "MISSION_START" {
+		if err = validateCompletionStart(ctx, tx, &pb.FlightCompletionEvidence{Context: cmd.Context, StartCommandId: c.ID}); err != nil {
+			return c, err
+		}
 	}
 	var outstanding bool
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM commands WHERE aircraft_id=$1 AND state NOT IN ('applied','rejected','failed','timed_out'))`, aircraft).Scan(&outstanding); err != nil {
@@ -281,7 +298,9 @@ func (s *Store) ListCommands(ctx context.Context, flight string) ([]domain.Comma
 }
 
 // ClaimCommand leases one outbox entry with database time and a new fencing generation.
-// Expired leases are recoverable; the immutable command remains unchanged.
+// Expired leases are recoverable; the immutable command remains unchanged. Once
+// completion is admitted, only previously started, expired commands are eligible
+// for journal/readback recovery; undelivered commands cannot be claimed.
 //
 // Parameters: ctx bounds a database transaction.
 //
@@ -295,7 +314,7 @@ func (s *Store) ClaimCommand(ctx context.Context) (domain.Command, error) {
 	var id string
 	var lease int64
 	var attempt int
-	err = tx.QueryRow(ctx, `WITH next AS (SELECT command_id FROM command_outbox WHERE NOT done AND available_at<=clock_timestamp() AND (lease_until IS NULL OR lease_until<clock_timestamp()) ORDER BY available_at,command_id FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE command_outbox o SET lease_until=clock_timestamp()+interval '150 seconds',generation=generation+1,attempts=attempts+1 FROM next WHERE o.command_id=next.command_id RETURNING o.command_id,o.generation,o.attempts`).Scan(&id, &lease, &attempt)
+	err = tx.QueryRow(ctx, `WITH next AS (SELECT o.command_id FROM command_outbox o JOIN commands c ON c.id=o.command_id WHERE NOT o.done AND (NOT EXISTS(SELECT 1 FROM flight_completions f WHERE f.flight_id=c.flight_id) OR (c.dispatch_started AND c.expires_at<=clock_timestamp() AND c.state NOT IN ('rejected','timed_out','failed'))) AND available_at<=clock_timestamp() AND (lease_until IS NULL OR lease_until<clock_timestamp()) ORDER BY available_at,command_id FOR UPDATE OF o SKIP LOCKED LIMIT 1) UPDATE command_outbox o SET lease_until=clock_timestamp()+interval '150 seconds',generation=generation+1,attempts=attempts+1 FROM next WHERE o.command_id=next.command_id RETURNING o.command_id,o.generation,o.attempts`).Scan(&id, &lease, &attempt)
 	if err != nil {
 		return domain.Command{}, err
 	}
@@ -338,13 +357,15 @@ func (s *Store) recordCommandEvidence(ctx context.Context, c domain.Command, eve
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// All command/completion mutations lock flight before outbox to avoid an
+	// inversion between finalization admission and streamed command progress.
 	var flightRaw []byte
+	if err = tx.QueryRow(ctx, `SELECT data FROM flight_records WHERE id=$1 FOR UPDATE`, c.FlightID).Scan(&flightRaw); err != nil {
+		return err
+	}
 	if c.Type == "MISSION_START" {
 		// Acceptance takes flight, aircraft lifecycle, then command outbox.
 		// Evidence must follow that same order, including observation retries.
-		if err = tx.QueryRow(ctx, `SELECT data FROM flight_records WHERE id=$1 FOR UPDATE`, c.FlightID).Scan(&flightRaw); err != nil {
-			return err
-		}
 		if err = lockMissionAircraftLifecycle(ctx, tx, c.AircraftID); err != nil {
 			return err
 		}
@@ -462,4 +483,47 @@ func (s *Store) RequeueCommand(ctx context.Context, id string) error {
 		return durable.ErrNotFound
 	}
 	return nil
+}
+
+// BeginCommandDispatch fences a leased attempt against admitted flight completion.
+// It commits a conservative delivery-start marker before any external operation;
+// this is permission to attempt delivery, not evidence of Agent acknowledgement.
+//
+// Parameters: ctx bounds the flight/outbox transaction; c identifies the claimed
+// command, exact flight, and current unexpired lease generation.
+// Returns: nil when delivery may begin, or ErrVersionConflict for a stale claim,
+// retired command, or admitted completion. After completion, previously started
+// commands may only recover after immutable authorization expires, so Agent can
+// return journal/readback evidence without initiating a new effect. Database
+// errors fail closed. Call again immediately before handoff after context setup.
+func (s *Store) BeginCommandDispatch(ctx context.Context, c domain.Command) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err = tx.Exec(ctx, `SELECT id FROM flight_records WHERE id=$1 FOR UPDATE`, c.FlightID); err != nil {
+		return err
+	}
+	var generation int64
+	if err = tx.QueryRow(ctx, `SELECT generation FROM command_outbox WHERE command_id=$1 AND NOT done AND lease_until>clock_timestamp() FOR UPDATE`, c.ID).Scan(&generation); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return durable.ErrVersionConflict
+		}
+		return err
+	}
+	if generation != c.Lease {
+		return durable.ErrVersionConflict
+	}
+	var allowed bool
+	if err = tx.QueryRow(ctx, `SELECT flight_id=$2 AND state NOT IN ('rejected','timed_out','failed') AND (NOT EXISTS(SELECT 1 FROM flight_completions f WHERE f.flight_id=commands.flight_id) OR (dispatch_started AND expires_at<=clock_timestamp())) FROM commands WHERE id=$1`, c.ID, c.FlightID).Scan(&allowed); err != nil {
+		return err
+	}
+	if !allowed {
+		return durable.ErrVersionConflict
+	}
+	if _, err = tx.Exec(ctx, `UPDATE commands SET dispatch_started=true WHERE id=$1`, c.ID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

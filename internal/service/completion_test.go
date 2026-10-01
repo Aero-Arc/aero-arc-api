@@ -1,0 +1,141 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Aero-Arc/aero-arc-api/internal/domain"
+	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
+	pb "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/agent/v1"
+	conformance "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/conformance/v1"
+	"google.golang.org/grpc"
+)
+
+type closureBindingStore struct {
+	durable.Store
+	durable.CommandStore
+	records []domain.Command
+	intent  *domain.OperationalIntent
+}
+
+func (s *closureBindingStore) ListCommands(context.Context, string) ([]domain.Command, error) {
+	return s.records, nil
+}
+func (s *closureBindingStore) GetOperationalIntentVersion(context.Context, string, int) (domain.OperationalIntent, error) {
+	if s.intent != nil {
+		return *s.intent, nil
+	}
+	return domain.OperationalIntent{ID: "intent-a", Version: 1, ConformanceRequired: true}, nil
+}
+
+type closureBindingClient struct {
+	conformance.ConformanceServiceClient
+	request      *conformance.EndAssignmentRequest
+	intentID     string
+	agentID      string
+	assignmentID string
+}
+
+func (c *closureBindingClient) EndAssignment(_ context.Context, req *conformance.EndAssignmentRequest, _ ...grpc.CallOption) (*conformance.EndAssignmentResponse, error) {
+	c.request = req
+	return &conformance.EndAssignmentResponse{Record: &conformance.AssignmentRecord{Assignment: &conformance.Assignment{AssignmentId: c.assignmentID, FlightId: "flight", AircraftId: "aircraft", IntentId: c.intentID, AgentId: c.agentID, IntentVersion: 1}}}, nil
+}
+func TestFinalizationRequiresExactClosureIntent(t *testing.T) {
+	for _, intentID := range []string{"intent-a", "intent-b", "wrong-agent", "wrong-assignment"} {
+		t.Run(intentID, func(t *testing.T) {
+			client := &closureBindingClient{intentID: intentID, agentID: "agent-a", assignmentID: "intent-a"}
+			if intentID == "wrong-assignment" {
+				client.intentID = "intent-a"
+				client.assignmentID = "different-assignment"
+			}
+			if intentID == "wrong-agent" {
+				client.intentID = "intent-a"
+				client.agentID = "agent-b"
+			}
+			stop := errors.New("stop after binding validation")
+			deployer := &fakeMissionDeployer{clearErr: stop}
+			svc := &FleetService{durable: &closureBindingStore{}, conformanceHistory: client, missionDeployer: deployer}
+			completion := domain.FlightCompletion{Evidence: &pb.FlightCompletionEvidence{EventId: "event", AgentId: "agent-a", Context: &pb.OperationContext{FlightId: "flight", AircraftId: "aircraft", IntentId: "intent-a", IntentVersion: 1}}}
+			err := svc.finalizeFlight(context.Background(), completion, nil)
+			if client.request.GetIntentId() != "intent-a" || client.request.GetAgentId() != "agent-a" {
+				t.Fatalf("closure omitted evidence intent: %v", client.request)
+			}
+			if intentID == "intent-a" {
+				if !errors.Is(err, stop) || len(deployer.clears) != 1 {
+					t.Fatalf("valid closure did not reach cleanup: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "closure binding mismatch") || len(deployer.clears) != 0 {
+				t.Fatalf("wrong intent closure reached cleanup: %v", err)
+			}
+		})
+	}
+}
+
+func TestCompetingStartPreventsExternalCompletionCleanup(t *testing.T) {
+	for _, state := range []string{"applied", "outcome_unknown", "failed"} {
+		t.Run(state, func(t *testing.T) {
+			client := &closureBindingClient{intentID: "intent-a", agentID: "agent-a"}
+			deployer := &fakeMissionDeployer{}
+			command := domain.Command{ID: "later", Type: "MISSION_START", State: state}
+			if state == "failed" {
+				command.Events = []domain.CommandEvent{{Stage: "applied"}}
+			}
+			svc := &FleetService{durable: &closureBindingStore{records: []domain.Command{command}}, conformanceHistory: client, missionDeployer: deployer}
+			completion := domain.FlightCompletion{Evidence: &pb.FlightCompletionEvidence{StartCommandId: "original", Context: &pb.OperationContext{FlightId: "flight"}}}
+			err := svc.finalizeFlight(context.Background(), completion, nil)
+			if err == nil || client.request != nil || len(deployer.clears) != 0 {
+				t.Fatalf("competing start reached cleanup: %v", err)
+			}
+		})
+	}
+}
+
+type completionPublicationRecorder struct {
+	durable.CompletionStore
+	publication *domain.OperationalIntentPublication
+	completed   bool
+}
+
+func (s *completionPublicationRecorder) CompleteFlight(_ context.Context, _ domain.FlightCompletion, p *domain.OperationalIntentPublication) error {
+	s.publication = p
+	s.completed = true
+	return nil
+}
+func TestFinalizationSkipsDSSWithdrawalForLegacyIntent(t *testing.T) {
+	for _, id := range []string{"legacy-intent", "33333333-3333-4333-8333-333333333333"} {
+		t.Run(id, func(t *testing.T) {
+			sink := &completionPublicationRecorder{}
+			svc := &FleetService{durable: &closureBindingStore{intent: &domain.OperationalIntent{ID: id}}, missionDeployer: &fakeMissionDeployer{}, completionPublication: &durableWorkflowCoordinator{}}
+			c := domain.FlightCompletion{Evidence: &pb.FlightCompletionEvidence{EventId: "event", AgentId: "agent", Context: &pb.OperationContext{FlightId: "flight", IntentId: id}}}
+			if err := svc.finalizeFlight(context.Background(), c, sink); err != nil {
+				t.Fatal(err)
+			}
+			if !sink.completed || (sink.publication != nil) != (id != "legacy-intent") {
+				t.Fatalf("incorrect publication: %+v", sink)
+			}
+		})
+	}
+}
+
+func TestLateMotionApplicationPreventsExternalCompletionCleanup(t *testing.T) {
+	for _, kind := range []string{"ARM", "RESUME"} {
+		for _, missing := range []bool{false, true} {
+			client := &closureBindingClient{}
+			deployer := &fakeMissionDeployer{}
+			boundary := time.Now().Add(-time.Minute)
+			command := domain.Command{ID: "late", Type: kind, State: "applied"}
+			if !missing {
+				command.Events = []domain.CommandEvent{{Stage: "applied", OccurredAt: boundary.Add(time.Second)}}
+			}
+			svc := &FleetService{durable: &closureBindingStore{records: []domain.Command{command}}, conformanceHistory: client, missionDeployer: deployer}
+			completion := domain.FlightCompletion{Evidence: &pb.FlightCompletionEvidence{Context: &pb.OperationContext{FlightId: "flight"}, LandedAtUnixNs: boundary.UnixNano(), DisarmedAtUnixNs: boundary.UnixNano()}}
+			err := svc.finalizeFlight(context.Background(), completion, nil)
+			if err == nil || !strings.Contains(err.Error(), "invalidates ground evidence") || client.request != nil || len(deployer.clears) != 0 {
+				t.Fatalf("kind=%s missing=%v cleanup passed: %v", kind, missing, err)
+			}
+		}
+	}
+}

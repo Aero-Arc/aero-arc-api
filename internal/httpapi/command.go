@@ -79,3 +79,17 @@ func (s *Server) handleReconcileCommand(c *mach.Context) {
 	}
 	writeJSON(c, http.StatusAccepted, command)
 }
+
+func (s *Server) handleGetFlightCompletion(c *mach.Context) {
+	if !s.commandAccess(c) {
+		return
+	}
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	completion, err := s.fleet.GetFlightCompletion(ctx, c.Param("flight_id"))
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, completion)
+}

@@ -352,13 +352,47 @@ func (s *Store) GetCurrentMissionDeploymentForFlight(ctx context.Context, flight
 // Returns:
 //   - error: reports encoding/persistence, durable.ErrNotFound for an unknown
 //     deployment, or durable.ErrVersionConflict for stale revision/identity.
+//     New dispatch attempts are serialized with completion admission: after
+//     closure evidence, only an already-started expired deployment can recover;
+//     in-flight attempt results can still be persisted without inventing failure.
 func (s *Store) UpdateMissionDeployment(ctx context.Context, deployment domain.MissionDeployment, expectedRevision int64) error {
 	deployment.Revision = expectedRevision + 1
 	raw, err := encodeMissionDeployment(deployment)
 	if err != nil {
 		return fmt.Errorf("encode mission deployment: %w", err)
 	}
-	tag, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var flightID string
+	if err = tx.QueryRow(ctx, `SELECT flight_id FROM mission_deployments WHERE id=$1`, deployment.ID).Scan(&flightID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return durable.ErrNotFound
+		}
+		return err
+	}
+	if flightID != deployment.FlightID {
+		return durable.ErrVersionConflict
+	}
+	if _, err = tx.Exec(ctx, `SELECT id FROM flight_records WHERE id=$1 FOR UPDATE`, deployment.FlightID); err != nil {
+		return err
+	}
+	previous, err := getMissionDeployment(ctx, tx, `WHERE id=$1 FOR UPDATE`, deployment.ID)
+	if err != nil {
+		return err
+	}
+	if deployment.DispatchStarted && deployment.AttemptCount > previous.AttemptCount {
+		var allowed bool
+		if err = tx.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM flight_completions WHERE flight_id=$1) OR ($2 AND $3::timestamptz<=clock_timestamp())`, deployment.FlightID, previous.DispatchStarted, previous.ExpiresAt).Scan(&allowed); err != nil {
+			return err
+		}
+		if !allowed {
+			return durable.ErrVersionConflict
+		}
+	}
+	tag, err := tx.Exec(ctx, `
 		UPDATE mission_deployments
 		SET revision=$1, status=$2, updated_at=$3, data=$4
 		WHERE id=$5 AND revision=$6 AND idempotency_key=$7 AND idempotency_request_hash=$8 AND mission_id=$9`,
@@ -368,12 +402,12 @@ func (s *Store) UpdateMissionDeployment(ctx context.Context, deployment domain.M
 		return fmt.Errorf("update mission deployment: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		if _, getErr := s.GetMissionDeployment(ctx, deployment.ID); errors.Is(getErr, durable.ErrNotFound) {
+		if _, getErr := getMissionDeployment(ctx, tx, `WHERE id=$1`, deployment.ID); errors.Is(getErr, durable.ErrNotFound) {
 			return durable.ErrNotFound
 		}
 		return durable.ErrVersionConflict
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 type deploymentQuerier interface {

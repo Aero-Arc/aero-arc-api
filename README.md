@@ -279,7 +279,7 @@ Fleet and replay:
 - `GET /api/v1/aircraft/{aircraft_id}/flights`
 - `POST /api/v1/aircraft/{aircraft_id}/battery-installations`
 - `GET /api/v1/flights/{flight_id}`
-- `POST /api/v1/flights/{flight_id}/start`
+- `POST /api/v1/flights/{flight_id}/start` (retired; returns `409`, use durable commands)
 - `GET /api/v1/flights/{flight_id}/replay?limit=500`
 - `POST /api/v1/batteries`
 - `POST /api/v1/maintenance-events`
@@ -334,16 +334,18 @@ POST /api/v1/operational-intents/{intent_id}/flights
 The API derives `aircraft_id`, `intent_id`, `intent_version`, and the effective
 operator from authoritative records and creates a `planned` flight. After the
 exact linked intent version becomes active and the exact current mission has an
-`applied` or `already_applied` deployment, start the flight with an empty
-`POST /api/v1/flights/{flight_id}/start`. Import, deployment creation, and start
-share durable flight, aircraft, and intent lifecycle fences. A retryable
-deployment blocks replacement binding mutations until a terminal correlated
-outcome, an active flight blocks another upload for its aircraft, and start
-requires the aircraft's latest authoritative deployment to be the exact current
-mission with matching applied readback. Starting assigns server time to
-`started_at`; retrying an already-active flight is idempotent. Starting without
-a verified current mission deployment, or against an accepted, superseded,
-completed, or otherwise non-active intent, returns `409`.
+`applied` or `already_applied` deployment, submit authenticated `MISSION_START`
+to `POST /api/v1/flights/{flight_id}/commands` with a stable `Idempotency-Key`.
+The durable applied command activates the flight and establishes the start
+authority required by automatic evidence-based finalization. HTTP acceptance
+alone does not activate it. Exact same-key retries recover that authority.
+The old empty `POST /flights/{flight_id}/start` returns `409` without changing
+state; it cannot create a flight with no finalizable start authority.
+Import, deployment, and command acceptance share flight/aircraft/intent fences;
+unresolved deployment and command outcomes require reconciliation. A new start
+requires a planned flight and a verified current mission under an active intent.
+RESUME requires an already-active flight.
+
 
 These operator-console routes follow the API's current local, unauthenticated
 single-operator deployment posture. They enforce operator consistency between

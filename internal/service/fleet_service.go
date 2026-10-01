@@ -21,17 +21,18 @@ import (
 )
 
 type FleetService struct {
-	durable            durable.Store
-	telemetry          telemetry.Store
-	replay             replay.Store
-	registry           registryv1.AeroRegistryClient
-	now                func() time.Time
-	registryFreshness  time.Duration
-	telemetryFreshness time.Duration
-	missionDeployer    MissionDeployer
-	commandTransport   CommandTransport
-	commandAuthorizer  CommandAuthorizer
-	conformanceHistory ConformanceHistoryClient
+	completionPublication DeconflictionCoordinator
+	durable               durable.Store
+	telemetry             telemetry.Store
+	replay                replay.Store
+	registry              registryv1.AeroRegistryClient
+	now                   func() time.Time
+	registryFreshness     time.Duration
+	telemetryFreshness    time.Duration
+	missionDeployer       MissionDeployer
+	commandTransport      CommandTransport
+	commandAuthorizer     CommandAuthorizer
+	conformanceHistory    ConformanceHistoryClient
 }
 
 const (

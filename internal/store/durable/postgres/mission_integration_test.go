@@ -18,7 +18,7 @@ func TestMissionPersistsAcrossStoreRestartWithPostGISCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := writer.pool.Exec(ctx, `TRUNCATE command_attempts, command_outbox, command_events, commands, mission_deployments, mission_items, missions, flight_records, aircraft, received_peer_notifications, peer_notifications, operational_intent_publications, conflict_findings, operational_volumes, operational_intents`); err != nil {
+	if _, err := writer.pool.Exec(ctx, `TRUNCATE flight_finalized_outbox, flight_completions, command_attempts, command_outbox, command_events, commands, mission_deployments, mission_items, missions, flight_records, aircraft, received_peer_notifications, peer_notifications, operational_intent_publications, conflict_findings, operational_volumes, operational_intents`); err != nil {
 		writer.Close()
 		t.Fatal(err)
 	}
