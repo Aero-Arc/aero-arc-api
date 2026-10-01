@@ -313,6 +313,8 @@ CREATE TABLE IF NOT EXISTS command_outbox (
 );
 -- Recovery can be reopened by newer authority without changing original expiry.
 ALTER TABLE command_outbox ADD COLUMN IF NOT EXISTS recovery_until timestamptz;
+CREATE INDEX IF NOT EXISTS command_outbox_pending_claim ON command_outbox(available_at,command_id) WHERE NOT done;
+CREATE INDEX IF NOT EXISTS commands_global_legacy_key ON commands(idempotency_key);
 CREATE TABLE IF NOT EXISTS command_attempts (
  command_id text NOT NULL REFERENCES commands(id),
  attempt integer NOT NULL,
