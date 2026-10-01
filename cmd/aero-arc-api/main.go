@@ -260,6 +260,11 @@ func run(ctx context.Context, cfg *config.Config) error {
 		}
 		slog.Info("seeded demo data")
 	}
+	if store, ok := durableStore.(interface{ CheckFlightFinalizationUpgrade(context.Context) error }); ok {
+		if err := store.CheckFlightFinalizationUpgrade(ctx); err != nil {
+			return err
+		}
+	}
 	fleetService := service.NewFleetService(durableStore, telemetryStore, replayStore, registryClient).
 		WithLiveStatePolicy(cfg.RegistryFreshness, cfg.TelemetryFreshness, nil)
 	if cfg.ConformanceAddress != "" {
@@ -398,15 +403,7 @@ func newDurableStore(ctx context.Context, cfg *config.Config) (durable.Store, er
 	case config.DurableStoreMemory:
 		return durablememory.NewStore(), nil
 	case config.DurableStorePostgres:
-		store, err := durablepostgres.Open(ctx, cfg.DatabaseURL)
-		if err != nil {
-			return nil, err
-		}
-		if err = store.CheckFlightFinalizationUpgrade(ctx); err != nil {
-			store.Close()
-			return nil, err
-		}
-		return store, nil
+		return durablepostgres.Open(ctx, cfg.DatabaseURL)
 	default:
 		return nil, fmt.Errorf("unsupported durable store %q", cfg.DurableStore)
 	}
