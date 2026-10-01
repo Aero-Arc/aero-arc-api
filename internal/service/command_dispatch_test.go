@@ -37,7 +37,7 @@ func TestCommandRechecksCompletionAfterContextSetup(t *testing.T) {
 		t.Run(map[bool]string{false: "during-context", true: "before-attempt"}[alreadyComplete], func(t *testing.T) {
 			store := &dispatchFenceStore{completed: alreadyComplete}
 			deployer := &fakeMissionDeployer{contextHook: func() { store.completed = true }}
-			svc := &FleetService{durable: store, missionDeployer: deployer, commandTransport: forbiddenCommandTransport{t: t}}
+			svc := &FleetService{now: time.Now, durable: store, missionDeployer: deployer, commandTransport: forbiddenCommandTransport{t: t}}
 			raw, err := proto.Marshal(&pb.DurableCommand{CommandId: "arm", AgentId: "agent", Context: &pb.OperationContext{FlightId: "flight"}})
 			if err != nil {
 				t.Fatal(err)
