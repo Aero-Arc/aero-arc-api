@@ -395,6 +395,9 @@ func (s *Service) ExecuteCommand(ctx context.Context, agentID string, command *a
 	}
 	stream, err := client.ExecuteCommand(ctx, &relayv1.ExecuteCommandRequest{AgentId: agentID, Command: command, AttemptId: attemptID})
 	if err != nil {
+		if status.Code(err) == codes.Unavailable {
+			s.invalidate(agentID, placement.relayID)
+		}
 		return err
 	}
 	for {

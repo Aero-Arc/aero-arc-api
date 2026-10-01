@@ -374,6 +374,41 @@ func TestCommandAcceptanceRestartLeaseAndEvidence(t *testing.T) {
 		t.Fatalf("verified mission observation: %+v", value)
 	}
 	checkUploadReplay(http.StatusOK)
+	// Both entry points share the original client-key namespace even after a
+	// terminal result releases the aircraft's outstanding-deployment fence.
+	keyLegacy, err := s.GetMissionDeployment(ctx, upload.DeploymentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyLegacy.ID = uuid.NewString()
+	keyLegacy.IdempotencyKey = prefix + "-upload"
+	if _, err = s.CreateMissionDeployment(ctx, keyLegacy); !errors.Is(err, durable.ErrIdempotencyConflict) {
+		t.Fatalf("keyLegacy reused C2 key: %v", err)
+	}
+	keyLegacy.ID = uuid.NewString()
+	keyLegacy.IdempotencyKey = prefix + "-keyLegacy-terminal"
+	legacyTx, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = legacyTx.Rollback(ctx) }()
+	if _, err = createMissionDeployment(ctx, legacyTx, keyLegacy); err != nil {
+		t.Fatal(err)
+	}
+	// The terminal legacy row is uncommitted and invisible to lookup. Its key
+	// lock must still prevent generic acceptance from racing the commit.
+	blockedCtx, cancelBlocked := context.WithTimeout(ctx, 100*time.Millisecond)
+	_, blockedErr := fleet.SubmitCommand(blockedCtx, f.ID, "mission-control-service", keyLegacy.IdempotencyKey, service.CommandRequest{Type: "MISSION_UPLOAD", MissionID: mission.Mission.ID, MissionDigest: mission.Mission.MissionDigest})
+	cancelBlocked()
+	if !errors.Is(blockedErr, context.DeadlineExceeded) {
+		t.Fatalf("generic acceptance passed uncommitted legacy key: %v", blockedErr)
+	}
+	if err = legacyTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = fleet.SubmitCommand(ctx, f.ID, "mission-control-service", keyLegacy.IdempotencyKey, service.CommandRequest{Type: "MISSION_UPLOAD", MissionID: mission.Mission.ID, MissionDigest: mission.Mission.MissionDigest}); !errors.Is(err, durable.ErrIdempotencyConflict) {
+		t.Fatalf("C2 reused terminal keyLegacy key: %v", err)
+	}
 	if _, err = fleet.SubmitCommand(ctx, f.ID, "mission-control-service", prefix+"-premature-resume", service.CommandRequest{Type: "RESUME"}); !errors.Is(err, durable.ErrVersionConflict) {
 		t.Fatalf("resume admitted before mission start activated flight: %v", err)
 	}

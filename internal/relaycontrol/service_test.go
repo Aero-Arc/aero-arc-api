@@ -324,3 +324,30 @@ func TestExecuteCommandStreamsProgressAndDoesNotHideDisconnectWithRedelivery(t *
 		t.Fatal("stale placement not invalidated for recovery")
 	}
 }
+
+func TestExecuteCommandSetupFailureInvalidatesPlacementWithoutRedelivery(t *testing.T) {
+	first, second := &fakeRelayClient{}, &fakeRelayClient{}
+	registry := &fakeRegistry{relayIDs: []string{"relay-1", "relay-2"}}
+	pool := &fakePool{clients: map[string]*fakeRelayClient{"relay-1": first, "relay-2": second}}
+	svc := newWithPool(registry, pool, time.Second, time.Hour)
+	calls := 0
+	first.execute = func(context.Context, *relayv1.ExecuteCommandRequest) (grpc.ServerStreamingClient[relayv1.ExecuteCommandResponse], error) {
+		calls++
+		return nil, status.Error(codes.Unavailable, "departed")
+	}
+	second.execute = func(_ context.Context, req *relayv1.ExecuteCommandRequest) (grpc.ServerStreamingClient[relayv1.ExecuteCommandResponse], error) {
+		calls++
+		if req.AttemptId != "attempt-2" {
+			t.Fatal("hidden same-attempt redelivery")
+		}
+		return &evidenceClientStream{}, nil
+	}
+	command := &agentv1.DurableCommand{CommandId: "c"}
+	receive := func(*agentv1.CommandEvidence) error { return nil }
+	if err := svc.ExecuteCommand(context.Background(), "agent-1", command, "attempt-1", receive); status.Code(err) != codes.Unavailable || calls != 1 || len(pool.invalidated) != 1 {
+		t.Fatalf("setup failure: calls=%d err=%v", calls, err)
+	}
+	if err := svc.ExecuteCommand(context.Background(), "agent-1", command, "attempt-2", receive); err != nil || calls != 2 || registry.calls != 2 {
+		t.Fatalf("new placement: calls=%d registry=%d err=%v", calls, registry.calls, err)
+	}
+}
