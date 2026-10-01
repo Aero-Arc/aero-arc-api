@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -189,10 +190,21 @@ func (s *IntentService) CreateIntent(ctx context.Context, req CreateIntentReques
 	if !req.PlannedStartAt.Before(req.PlannedEndAt) {
 		return domain.OperationalIntent{}, fmt.Errorf("%w: planned_start_at must be before planned_end_at", ErrValidation)
 	}
+	operatorID := strings.TrimSpace(req.OperatorID)
+	aircraft, err := s.durable.GetAircraft(ctx, req.AircraftID)
+	if err != nil && !errors.Is(err, durable.ErrNotFound) {
+		return domain.OperationalIntent{}, fmt.Errorf("get intent aircraft: %w", err)
+	}
+	if err == nil {
+		operatorID, err = consistentOperatorID(operatorID, aircraft.OperatorID)
+		if err != nil {
+			return domain.OperationalIntent{}, err
+		}
+	}
 
 	intent := domain.OperationalIntent{
 		ID:                  id,
-		OperatorID:          req.OperatorID,
+		OperatorID:          operatorID,
 		AircraftID:          req.AircraftID,
 		AuthorizationID:     req.AuthorizationID,
 		Version:             1,
@@ -270,6 +282,9 @@ func (s *IntentService) AddOperationalVolume(ctx context.Context, intentID strin
 	}
 	if req.MinAltitudeM == nil || req.MaxAltitudeM == nil {
 		return domain.OperationalVolume{}, fmt.Errorf("%w: min_altitude_m and max_altitude_m are required", ErrValidation)
+	}
+	if err := validateVolumeAltitude(*req.MinAltitudeM, *req.MaxAltitudeM); err != nil {
+		return domain.OperationalVolume{}, err
 	}
 	if req.AltitudeRef == "" {
 		return domain.OperationalVolume{}, fmt.Errorf("%w: altitude_ref is required", ErrValidation)
@@ -762,6 +777,9 @@ func buildOperationalVolumeFromRequest(intent domain.OperationalIntent, req AddO
 	if req.MinAltitudeM == nil || req.MaxAltitudeM == nil {
 		return domain.OperationalVolume{}, fmt.Errorf("%w: min_altitude_m and max_altitude_m are required", ErrValidation)
 	}
+	if err := validateVolumeAltitude(*req.MinAltitudeM, *req.MaxAltitudeM); err != nil {
+		return domain.OperationalVolume{}, err
+	}
 	if req.AltitudeRef == "" {
 		return domain.OperationalVolume{}, fmt.Errorf("%w: altitude_ref is required", ErrValidation)
 	}
@@ -783,6 +801,13 @@ func buildOperationalVolumeFromRequest(intent domain.OperationalIntent, req AddO
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}, nil
+}
+
+func validateVolumeAltitude(minimum, maximum float64) error {
+	if math.IsNaN(minimum) || math.IsNaN(maximum) || math.IsInf(minimum, 0) || math.IsInf(maximum, 0) || minimum > maximum {
+		return fmt.Errorf("%w: finite min_altitude_m must not exceed max_altitude_m", ErrValidation)
+	}
+	return nil
 }
 
 func applyIntentModification(intent *domain.OperationalIntent, fields ModifyIntentFields) {
