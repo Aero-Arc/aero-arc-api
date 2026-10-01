@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
+	"strings"
 	"testing"
 	"time"
 )
@@ -46,6 +47,9 @@ func TestFlightFinalizationIsAtomicIdempotentAndLeaseFenced(t *testing.T) {
 					if err = s.CreateFlightRecord(ctx, flight); err != nil {
 						t.Fatal(err)
 					}
+					if err = s.CheckFlightFinalizationUpgrade(ctx); err == nil || !strings.Contains(err.Error(), id) {
+						t.Fatalf("legacy active flight not identified by upgrade preflight: %v", err)
+					}
 					plan := &pb.MissionPlan{SchemaVersion: 1, Items: []*pb.MissionItem{{Command: 21, Param4: 1, Autocontinue: true}}}
 					digest, err := missiondigest.Digest(plan)
 					if err != nil {
@@ -58,6 +62,12 @@ func TestFlightFinalizationIsAtomicIdempotentAndLeaseFenced(t *testing.T) {
 					}
 					if _, err = s.pool.Exec(ctx, `INSERT INTO commands(id,operator_id,aircraft_id,flight_id,digest,idempotency_key,request_hash,payload,data,state,expires_at) VALUES($1,$1,$1,$1,'digest',$1,'hash',$2,'{}','applied',clock_timestamp())`, id, raw); err != nil {
 						t.Fatal(err)
+					}
+					if _, err = s.pool.Exec(ctx, `UPDATE commands SET data=jsonb_set(data,'{type}','"MISSION_START"') WHERE id=$1`, id); err != nil {
+						t.Fatal(err)
+					}
+					if err = s.CheckFlightFinalizationUpgrade(ctx); err != nil && strings.Contains(err.Error(), id) {
+						t.Fatalf("durable start misclassified as legacy: %v", err)
 					}
 					e := &pb.FlightCompletionEvidence{EventId: id, AgentId: id, Context: command.Context, MissionId: id, MissionDigest: digest, StartCommandId: id, Outcome: "mission_completed", AirborneAtUnixNs: now.Add(time.Second).UnixNano(), TerminalAtUnixNs: now.Add(2 * time.Second).UnixNano(), LandedAtUnixNs: now.Add(3 * time.Second).UnixNano(), DisarmedAtUnixNs: now.Add(4 * time.Second).UnixNano(), ObservationEpoch: id}
 					queuedID := id + "-queued"

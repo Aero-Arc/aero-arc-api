@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
@@ -377,4 +378,34 @@ func validateCompletionStart(ctx context.Context, tx pgx.Tx, e *pb.FlightComplet
 		}
 	}
 	return rows.Err()
+}
+
+// CheckFlightFinalizationUpgrade rejects cutover with active legacy flights that
+// have no applied durable mission-start authority. It never fabricates evidence.
+//
+// Parameters: ctx bounds the read-only preflight; callers must stop old producers
+// before checking, and must not start admission/dispatch/finalization on failure.
+// Returns: nil when every active flight has applied MISSION_START authority;
+// otherwise an actionable error listing affected flight IDs, or a storage error.
+func (s *Store) CheckFlightFinalizationUpgrade(ctx context.Context) error {
+	rows, err := s.pool.Query(ctx, `SELECT f.id FROM flight_records f WHERE f.status='active' AND NOT EXISTS(SELECT 1 FROM commands c WHERE c.flight_id=f.id AND c.data->>'type'='MISSION_START' AND (c.state='applied' OR EXISTS(SELECT 1 FROM command_events e WHERE e.command_id=c.id AND e.stage='applied'))) ORDER BY f.id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			return err
+		}
+		ids = append(ids, id)
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	if len(ids) > 0 {
+		return fmt.Errorf("finalization upgrade blocked: active legacy flights lack applied MISSION_START authority: %s; preserve existing stores and reconcile legacy records before cutover (docs/flight-finalization.md)", strings.Join(ids, ", "))
+	}
+	return nil
 }

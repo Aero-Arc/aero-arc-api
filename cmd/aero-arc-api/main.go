@@ -398,7 +398,15 @@ func newDurableStore(ctx context.Context, cfg *config.Config) (durable.Store, er
 	case config.DurableStoreMemory:
 		return durablememory.NewStore(), nil
 	case config.DurableStorePostgres:
-		return durablepostgres.Open(ctx, cfg.DatabaseURL)
+		store, err := durablepostgres.Open(ctx, cfg.DatabaseURL)
+		if err != nil {
+			return nil, err
+		}
+		if err = store.CheckFlightFinalizationUpgrade(ctx); err != nil {
+			store.Close()
+			return nil, err
+		}
+		return store, nil
 	default:
 		return nil, fmt.Errorf("unsupported durable store %q", cfg.DurableStore)
 	}

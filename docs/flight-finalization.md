@@ -70,3 +70,20 @@ creation timestamps alone cannot prove which execution caused physical completio
 
 Legacy non-UUID intent IDs were never published to DSS. Their completion still
 closes monitoring and Agent context, but does not enqueue an invalid DSS withdrawal.
+
+## Legacy active-flight upgrade preflight
+
+Before this API starts serving or running workers, PostgreSQL-backed startup
+checks every active flight for applied durable MISSION_START authority. Flights
+activated by the retired empty `/start` endpoint are listed in a startup error;
+cutover is refused instead of silently stranding them in the new finalizer.
+The check is read-only and does not fabricate applied command events, airborne
+observations, or successful completion.
+
+Stop old admission/dispatch producers before checking a restored database, as
+required by the coordinated upgrade procedure. If legacy flights are reported,
+preserve the old binaries and all databases/journals and do not cut over. Their
+closure needs an explicit operator reconciliation policy and verified aircraft
+state; this release does not automatically transform them into evidenced flights.
+Do not reset status, delete flight records, or synthesize a MISSION_START to pass
+the preflight. New flights must start through the durable command endpoint.
