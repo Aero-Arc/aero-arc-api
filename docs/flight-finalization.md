@@ -73,6 +73,14 @@ closes monitoring and Agent context, but does not enqueue an invalid DSS withdra
 
 ## Legacy active-flight upgrade preflight
 
+This is a pre-deployment release. The supported demo/customer installation path
+starts with a fresh isolated database and creates flights through durable C2.
+Automatic migration or operator closure of active flights from the retired
+`/start` route is outside this release. Keep existing development databases
+intact and use a distinct database/project for the demo; never reset them merely
+to satisfy startup checks. Importing a legacy database requires reconciliation
+before cutover and must pass the preflight below.
+
 Before this API starts serving or running workers, PostgreSQL-backed startup
 checks every active flight for applied durable MISSION_START authority. Flights
 activated by the retired empty `/start` endpoint are listed in a startup error;
