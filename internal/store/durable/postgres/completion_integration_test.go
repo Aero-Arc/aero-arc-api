@@ -61,12 +61,18 @@ func TestFlightFinalizationIsAtomicIdempotentAndLeaseFenced(t *testing.T) {
 					}
 					e := &pb.FlightCompletionEvidence{EventId: id, AgentId: id, Context: command.Context, MissionId: id, MissionDigest: digest, StartCommandId: id, Outcome: "mission_completed", AirborneAtUnixNs: now.Add(time.Second).UnixNano(), TerminalAtUnixNs: now.Add(2 * time.Second).UnixNano(), LandedAtUnixNs: now.Add(3 * time.Second).UnixNano(), DisarmedAtUnixNs: now.Add(4 * time.Second).UnixNano(), ObservationEpoch: id}
 					queuedID := id + "-queued"
-					queued := domain.Command{ID: queuedID, OperatorID: id, AircraftID: id, FlightID: id, Type: "ARM", Digest: "queued-digest", Payload: raw, Lease: 1, Attempts: 1, ExpiresAt: time.Now().Add(time.Minute)}
+					arm := proto.Clone(command).(*pb.DurableCommand)
+					arm.CommandId, arm.Definition = queuedID, "ARM"
+					armRaw, err := proto.Marshal(arm)
+					if err != nil {
+						t.Fatal(err)
+					}
+					queued := domain.Command{ID: queuedID, OperatorID: id, AircraftID: id, FlightID: id, Type: "ARM", Digest: "queued-digest", Payload: armRaw, Lease: 1, Attempts: 1, ExpiresAt: time.Now().Add(time.Minute)}
 					data, err := json.Marshal(queued)
 					if err != nil {
 						t.Fatal(err)
 					}
-					if _, err = s.pool.Exec(ctx, `INSERT INTO commands(id,operator_id,aircraft_id,flight_id,digest,idempotency_key,request_hash,payload,data,state,expires_at) VALUES($1,$2,$2,$2,'queued-digest',$1,'hash',$3,$4,'accepted',$5)`, queuedID, id, raw, data, queued.ExpiresAt); err != nil {
+					if _, err = s.pool.Exec(ctx, `INSERT INTO commands(id,operator_id,aircraft_id,flight_id,digest,idempotency_key,request_hash,payload,data,state,expires_at) VALUES($1,$2,$2,$2,'queued-digest',$1,'hash',$3,$4,'accepted',$5)`, queuedID, id, armRaw, data, queued.ExpiresAt); err != nil {
 						t.Fatal(err)
 					}
 					if _, err = s.pool.Exec(ctx, `INSERT INTO command_outbox(command_id,generation,attempts,lease_until) VALUES($1,1,1,CASE WHEN $2 THEN NULL ELSE clock_timestamp()+interval '150 seconds' END)`, queuedID, mode == "queued"); err != nil {
@@ -112,6 +118,35 @@ func TestFlightFinalizationIsAtomicIdempotentAndLeaseFenced(t *testing.T) {
 					}
 					if _, err = s.GetFlightCompletion(ctx, id); !errors.Is(err, durable.ErrNotFound) {
 						t.Fatalf("invalid start persisted completion: %v", err)
+					}
+					// Delayed evidence for the first start cannot close a competing
+					// applied or possibly executed start, including late applied
+					// evidence whose command state has not yet caught up.
+					for _, state := range []string{"applied", "outcome_unknown", "late_evidence"} {
+						dbState := state
+						if state == "late_evidence" {
+							dbState = "failed"
+						}
+						if _, err = s.pool.Exec(ctx, `UPDATE commands SET state=$2,dispatch_started=true WHERE id=$1`, laterStartID, dbState); err != nil {
+							t.Fatal(err)
+						}
+						if state == "late_evidence" {
+							if _, err = s.pool.Exec(ctx, `INSERT INTO command_events(event_id,command_id,stage,occurred_at,source,message) VALUES($1,$2,'applied',clock_timestamp(),'agent','late start evidence')`, laterStartID+"/applied", laterStartID); err != nil {
+								t.Fatal(err)
+							}
+						}
+						if err = s.AdmitFlightCompletion(ctx, e); !errors.Is(err, durable.ErrVersionConflict) {
+							t.Fatalf("%s competing start allowed old completion: %v", state, err)
+						}
+						if _, err = s.GetFlightCompletion(ctx, id); !errors.Is(err, durable.ErrNotFound) {
+							t.Fatalf("competing start persisted completion: %v", err)
+						}
+					}
+					if _, err = s.pool.Exec(ctx, `DELETE FROM command_events WHERE command_id=$1`, laterStartID); err != nil {
+						t.Fatal(err)
+					}
+					if _, err = s.pool.Exec(ctx, `UPDATE commands SET state='accepted',dispatch_started=false WHERE id=$1`, laterStartID); err != nil {
+						t.Fatal(err)
 					}
 					if mode == "dispatching" {
 						if err = s.BeginCommandDispatch(ctx, queued); err != nil {
@@ -184,6 +219,17 @@ func TestFlightFinalizationIsAtomicIdempotentAndLeaseFenced(t *testing.T) {
 					second, err := s.ClaimFlightCompletion(ctx)
 					if err != nil || second.Generation <= first.Generation {
 						t.Fatalf("takeover: %+v %v", second, err)
+					}
+					// Defense in depth: even a contradictory late applied record
+					// cannot commit lifecycle closure or the archive obligation.
+					if _, err = s.pool.Exec(ctx, `UPDATE commands SET state='applied' WHERE id=$1`, laterStartID); err != nil {
+						t.Fatal(err)
+					}
+					if err = s.CompleteFlight(ctx, second, nil); !errors.Is(err, durable.ErrVersionConflict) {
+						t.Fatalf("late competing start closed flight: %v", err)
+					}
+					if _, err = s.pool.Exec(ctx, `UPDATE commands SET state='rejected' WHERE id=$1`, laterStartID); err != nil {
+						t.Fatal(err)
 					}
 					if canceled {
 						current.Status = domain.IntentStatusCanceled

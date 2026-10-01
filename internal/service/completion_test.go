@@ -16,10 +16,11 @@ import (
 type closureBindingStore struct {
 	durable.Store
 	durable.CommandStore
+	records []domain.Command
 }
 
-func (*closureBindingStore) ListCommands(context.Context, string) ([]domain.Command, error) {
-	return nil, nil
+func (s *closureBindingStore) ListCommands(context.Context, string) ([]domain.Command, error) {
+	return s.records, nil
 }
 func (*closureBindingStore) GetOperationalIntentVersion(context.Context, string, int) (domain.OperationalIntent, error) {
 	return domain.OperationalIntent{ID: "intent-a", Version: 1, ConformanceRequired: true}, nil
@@ -58,6 +59,25 @@ func TestFinalizationRequiresExactClosureIntent(t *testing.T) {
 				}
 			} else if err == nil || !strings.Contains(err.Error(), "closure binding mismatch") || len(deployer.clears) != 0 {
 				t.Fatalf("wrong intent closure reached cleanup: %v", err)
+			}
+		})
+	}
+}
+
+func TestCompetingStartPreventsExternalCompletionCleanup(t *testing.T) {
+	for _, state := range []string{"applied", "outcome_unknown", "failed"} {
+		t.Run(state, func(t *testing.T) {
+			client := &closureBindingClient{intentID: "intent-a", agentID: "agent-a"}
+			deployer := &fakeMissionDeployer{}
+			command := domain.Command{ID: "later", Type: "MISSION_START", State: state}
+			if state == "failed" {
+				command.Events = []domain.CommandEvent{{Stage: "applied"}}
+			}
+			svc := &FleetService{durable: &closureBindingStore{records: []domain.Command{command}}, conformanceHistory: client, missionDeployer: deployer}
+			completion := domain.FlightCompletion{Evidence: &pb.FlightCompletionEvidence{StartCommandId: "original", Context: &pb.OperationContext{FlightId: "flight"}}}
+			err := svc.finalizeFlight(context.Background(), completion, nil)
+			if err == nil || client.request != nil || len(deployer.clears) != 0 {
+				t.Fatalf("competing start reached cleanup: %v", err)
 			}
 		})
 	}

@@ -83,6 +83,9 @@ func (s *Store) AdmitFlightCompletion(ctx context.Context, e *pb.FlightCompletio
 	if err != nil || missionHash != e.MissionDigest {
 		return durable.ErrVersionConflict
 	}
+	if err = validateCompletionStart(ctx, tx, e); err != nil {
+		return err
+	}
 	var databaseNow time.Time
 	if err = tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&databaseNow); err != nil {
 		return err
@@ -279,6 +282,9 @@ func (s *Store) CompleteFlight(ctx context.Context, c domain.FlightCompletion, p
 	if unresolved {
 		return fmt.Errorf("%w: outstanding command evidence must be reconciled", durable.ErrVersionConflict)
 	}
+	if err = validateCompletionStart(ctx, tx, e); err != nil {
+		return err
+	}
 	var revision int64
 	if err = tx.QueryRow(ctx, `SELECT data,revision FROM operational_intents WHERE id=$1 AND version=$2 FOR UPDATE`, f.IntentID, f.IntentVersion).Scan(&raw, &revision); err != nil {
 		return err
@@ -331,4 +337,30 @@ func (s *Store) CompleteFlight(ctx context.Context, c domain.FlightCompletion, p
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// validateCompletionStart runs under the flight row lock shared by command
+// admission, dispatch and evidence writes. A flight watch binds one immutable
+// start. Any other applied start, or one still able to have taken effect, makes
+// that watch's completion ambiguous. Unsent starts may be retired atomically.
+func validateCompletionStart(ctx context.Context, tx pgx.Tx, e *pb.FlightCompletionEvidence) error {
+	rows, err := tx.Query(ctx, `SELECT payload FROM commands c WHERE flight_id=$1 AND id<>$2 AND (state='applied' OR EXISTS(SELECT 1 FROM command_events WHERE command_id=c.id AND stage='applied') OR (dispatch_started AND state NOT IN ('rejected','failed','timed_out')))`, e.Context.FlightId, e.StartCommandId)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var raw []byte
+		if err = rows.Scan(&raw); err != nil {
+			return err
+		}
+		command := new(pb.DurableCommand)
+		if err = proto.Unmarshal(raw, command); err != nil {
+			return err
+		}
+		if command.Definition == "MISSION_START" {
+			return fmt.Errorf("%w: competing mission start %s requires reconciliation", durable.ErrVersionConflict, command.CommandId)
+		}
+	}
+	return rows.Err()
 }

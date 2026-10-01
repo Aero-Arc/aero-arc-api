@@ -102,6 +102,15 @@ func (s *FleetService) finalizeFlight(ctx context.Context, c domain.FlightComple
 		return err
 	}
 	for _, command := range records {
+		if command.Type == "MISSION_START" && command.ID != e.StartCommandId {
+			applied := command.State == "applied"
+			for _, event := range command.Events {
+				applied = applied || event.Stage == "applied"
+			}
+			if applied {
+				return fmt.Errorf("competing mission start %s requires reconciliation", command.ID)
+			}
+		}
 		switch command.State {
 		case "applied", "rejected", "failed", "timed_out":
 		default:
