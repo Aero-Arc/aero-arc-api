@@ -385,6 +385,11 @@ func TestCommandAcceptanceRestartLeaseAndEvidence(t *testing.T) {
 	if _, err = s.CreateMissionDeployment(ctx, keyLegacy); !errors.Is(err, durable.ErrIdempotencyConflict) {
 		t.Fatalf("keyLegacy reused C2 key: %v", err)
 	}
+	keyLegacy.OperatorID = prefix + "-other-operator"
+	if _, err = s.CreateMissionDeployment(ctx, keyLegacy); !errors.Is(err, durable.ErrIdempotencyConflict) {
+		t.Fatalf("other operator legacy creation shadowed C2 key: %v", err)
+	}
+	keyLegacy.OperatorID = prefix
 	keyLegacy.ID = uuid.NewString()
 	keyLegacy.IdempotencyKey = prefix + "-keyLegacy-terminal"
 	legacyTx, err := s.pool.Begin(ctx)
