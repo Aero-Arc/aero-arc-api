@@ -85,7 +85,7 @@ func (s *Store) AcceptCommand(ctx context.Context, c domain.Command, deployment 
 	if currentVersion != version || (intentStatus != "active" && (c.Type != "MISSION_UPLOAD" || intentStatus != "accepted")) {
 		return c, durable.ErrVersionConflict
 	}
-	if flightStatus != "planned" && flightStatus != "active" {
+	if (flightStatus != "planned" && flightStatus != "active") || (c.Type == "MISSION_START" && flightStatus != "planned") {
 		return c, durable.ErrVersionConflict
 	}
 	var anotherActive bool
@@ -291,14 +291,15 @@ func (s *Store) ClaimCommand(ctx context.Context) (domain.Command, error) {
 	return c, err
 }
 
-// FinishCommandAttempt atomically records immutable evidence and advances its
+// FinishCommandAttempt uses commandNow in the issuance clock domain for recovery expiry;
+// lease fencing and backoff remain on database time. It atomically records immutable evidence and advances its
 // projection only behind an unexpired lease. Ambiguous outcomes remain blockers.
 //
 // Parameters: ctx bounds persistence; c carries the claimed generation; events are immutable evidence; result describes the delivery attempt.
 //
 // Returns: Nil after atomic projection and outbox update; stale leases, contradictory evidence, and database errors roll back all updates.
-func (s *Store) FinishCommandAttempt(ctx context.Context, c domain.Command, events []domain.CommandEvent, result string) error {
-	return s.recordCommandEvidence(ctx, c, events, result, true)
+func (s *Store) FinishCommandAttempt(ctx context.Context, c domain.Command, events []domain.CommandEvent, result string, commandNow time.Time) error {
+	return s.recordCommandEvidence(ctx, c, events, result, true, commandNow)
 }
 
 // RecordCommandProgress persists immutable evidence and updates the projection
@@ -308,10 +309,10 @@ func (s *Store) FinishCommandAttempt(ctx context.Context, c domain.Command, even
 // events contain immutable source evidence.
 // Returns nil after commit, or a lease, evidence conflict, or database error.
 func (s *Store) RecordCommandProgress(ctx context.Context, c domain.Command, events []domain.CommandEvent) error {
-	return s.recordCommandEvidence(ctx, c, events, "", false)
+	return s.recordCommandEvidence(ctx, c, events, "", false, time.Time{})
 }
 
-func (s *Store) recordCommandEvidence(ctx context.Context, c domain.Command, events []domain.CommandEvent, result string, finish bool) error {
+func (s *Store) recordCommandEvidence(ctx context.Context, c domain.Command, events []domain.CommandEvent, result string, finish bool, commandNow time.Time) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -400,7 +401,7 @@ func (s *Store) recordCommandEvidence(ctx context.Context, c domain.Command, eve
 		return err
 	}
 	delay := time.Duration(1<<min(c.Attempts, 6)) * time.Second
-	tag, err := tx.Exec(ctx, `UPDATE command_outbox SET lease_until=NULL,available_at=clock_timestamp()+$2::interval,done=(SELECT state IN ('rejected','timed_out') OR (state='applied' AND observation_state IN ('observed','unavailable','superseded')) OR expires_at+interval '15 minutes'<clock_timestamp() FROM commands WHERE id=$1) WHERE command_id=$1 AND generation=$3 AND lease_until>clock_timestamp()`, c.ID, fmt.Sprintf("%f seconds", delay.Seconds()), c.Lease)
+	tag, err := tx.Exec(ctx, `UPDATE command_outbox SET lease_until=NULL,available_at=clock_timestamp()+$2::interval,done=(SELECT state IN ('rejected','timed_out') OR (state='applied' AND observation_state IN ('observed','unavailable','superseded')) OR expires_at+interval '15 minutes'<=$4 FROM commands WHERE id=$1) WHERE command_id=$1 AND generation=$3 AND lease_until>clock_timestamp()`, c.ID, fmt.Sprintf("%f seconds", delay.Seconds()), c.Lease, commandNow)
 	if err != nil {
 		return err
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -93,7 +94,30 @@ func TestReplayHonorsFlightCommandReadPolicy(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer secret")
 	response := httptest.NewRecorder()
 	New(fleet, time.Second).WithMissionDeploymentControl(time.Second, "secret").Handler().ServeHTTP(response, request)
-	if !called || response.Code < 400 {
+	if !called || response.Code != http.StatusForbidden {
 		t.Fatalf("replay bypassed read policy: %d", response.Code)
+	}
+}
+
+func TestCommandPoliciesReturnForbidden(t *testing.T) {
+	for _, route := range []struct{ method, path, body string }{
+		{http.MethodPost, "/api/v1/flights/flight/commands", "{\"type\":\"ARM\"}"},
+		{http.MethodGet, "/api/v1/flights/flight/commands", ""},
+		{http.MethodGet, "/api/v1/flights/flight/commands/original-command", ""},
+		{http.MethodPost, "/api/v1/flights/flight/commands/original-command/reconcile", ""},
+		{http.MethodGet, "/api/v1/flights/flight/replay", ""},
+	} {
+		t.Run(route.method+route.path, func(t *testing.T) {
+			store := &reviewCommandStore{}
+			fleet := service.NewFleetService(store, nil, nil, nil).WithCommandControl(reviewCommandTransport{}, func(context.Context, string, domain.FlightRecord, string) error { return service.ErrValidation })
+			req := httptest.NewRequest(route.method, route.path, strings.NewReader(route.body))
+			req.Header.Set("Authorization", "Bearer secret")
+			req.Header.Set("Idempotency-Key", "policy-denied")
+			response := httptest.NewRecorder()
+			New(fleet, time.Second).WithMissionDeploymentControl(time.Second, "secret").Handler().ServeHTTP(response, req)
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("policy denial=%d: %s", response.Code, response.Body.String())
+			}
+		})
 	}
 }

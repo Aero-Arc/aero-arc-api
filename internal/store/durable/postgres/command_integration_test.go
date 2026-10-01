@@ -130,7 +130,7 @@ func TestCommandAcceptanceRestartLeaseAndEvidence(t *testing.T) {
 		t.Fatal("lease generation did not advance")
 	}
 	evidence := []domain.CommandEvent{{ID: c.ID + "/applied", Stage: "applied", OccurredAt: now, Source: "agent", Message: "accepted by autopilot"}}
-	if err = s.FinishCommandAttempt(ctx, first, evidence, "old worker"); !errors.Is(err, durable.ErrVersionConflict) {
+	if err = s.FinishCommandAttempt(ctx, first, evidence, "old worker", time.Now()); !errors.Is(err, durable.ErrVersionConflict) {
 		t.Fatalf("stale worker: %v", err)
 	}
 
@@ -152,7 +152,38 @@ func TestCommandAcceptanceRestartLeaseAndEvidence(t *testing.T) {
 	if err = other.RecordCommandProgress(ctx, second, altered); err == nil {
 		t.Fatal("mutable progress accepted")
 	}
-	if err = other.FinishCommandAttempt(ctx, second, evidence, "applied"); err != nil {
+	if err = other.FinishCommandAttempt(ctx, second, evidence, "applied", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, offset := range []time.Duration{-24 * time.Hour, 24 * time.Hour} {
+		expiry := now.Add(offset)
+		if _, err = s.pool.Exec(ctx, `UPDATE commands SET expires_at=$2 WHERE id=$1`, c.ID, expiry); err != nil {
+			t.Fatal(err)
+		}
+		for _, boundary := range []struct {
+			at   time.Time
+			done bool
+		}{{expiry.Add(14 * time.Minute), false}, {expiry.Add(15 * time.Minute), true}} {
+			if _, err = s.pool.Exec(ctx, `UPDATE command_outbox SET done=false, available_at=clock_timestamp() WHERE command_id=$1`, c.ID); err != nil {
+				t.Fatal(err)
+			}
+			claimed, err := s.ClaimCommand(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = s.FinishCommandAttempt(ctx, claimed, evidence, "clock recovery", boundary.at); err != nil {
+				t.Fatal(err)
+			}
+			var done bool
+			if err = s.pool.QueryRow(ctx, `SELECT done FROM command_outbox WHERE command_id=$1`, c.ID).Scan(&done); err != nil || done != boundary.done {
+				t.Fatalf("clock offset=%s cutoff=%v done=%v want=%v err=%v", offset, boundary.at, done, boundary.done, err)
+			}
+		}
+	}
+	if _, err = s.pool.Exec(ctx, `UPDATE commands SET expires_at=$2 WHERE id=$1`, c.ID, now.Add(30*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `UPDATE command_outbox SET done=false WHERE command_id=$1`, c.ID); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.GetCommand(ctx, c.ID)
@@ -170,11 +201,11 @@ func TestCommandAcceptanceRestartLeaseAndEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	contradiction := []domain.CommandEvent{{ID: c.ID + "/rejected", Stage: "rejected", OccurredAt: now, Source: "agent", Message: "contradiction"}}
-	if err = s.FinishCommandAttempt(ctx, third, contradiction, "rejected"); err == nil {
+	if err = s.FinishCommandAttempt(ctx, third, contradiction, "rejected", time.Now()); err == nil {
 		t.Fatal("contradictory terminal evidence was committed")
 	}
 	evidence = append(evidence, domain.CommandEvent{ID: c.ID + "/observed", Stage: "observed", OccurredAt: now.Add(time.Second), Source: "heartbeat", Message: "armed"})
-	if err = s.FinishCommandAttempt(ctx, third, evidence, "observed"); err != nil {
+	if err = s.FinishCommandAttempt(ctx, third, evidence, "observed", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	got, err = s.GetCommand(ctx, c.ID)
@@ -292,6 +323,14 @@ func TestCommandAcceptanceRestartLeaseAndEvidence(t *testing.T) {
 	if value := waitApplied(start.ID); value.ObservationState != "pending" {
 		t.Fatalf("start application invented observation: %+v", value)
 	}
+	if _, err = fleet.SubmitCommand(ctx, f.ID, "mission-control-service", prefix+"-second-start", service.CommandRequest{Type: "MISSION_START"}); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("new mission start admitted on active flight: %v", err)
+	}
+	startReplay, err := fleet.SubmitCommand(ctx, f.ID, "mission-control-service", prefix+"-start", service.CommandRequest{Type: "MISSION_START"})
+	if err != nil || startReplay.ID != start.ID {
+		t.Fatalf("original start replay lost: %+v %v", startReplay, err)
+	}
+
 	active, err := s.GetFlightRecord(ctx, f.ID)
 	if err != nil || active.Status != domain.FlightStatusActive || active.StartedAt.IsZero() {
 		t.Fatalf("start activation: %+v %v", active, err)
