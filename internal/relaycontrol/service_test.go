@@ -3,6 +3,8 @@ package relaycontrol
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"testing"
 	"time"
 
@@ -51,6 +53,8 @@ func (f *fakePool) Invalidate(id string) { f.invalidated = append(f.invalidated,
 func (f *fakePool) Close() error         { return nil }
 
 type fakeRelayClient struct {
+	relayv1.RelayControlClient
+	execute           func(context.Context, *relayv1.ExecuteCommandRequest) (grpc.ServerStreamingClient[relayv1.ExecuteCommandResponse], error)
 	setRequests       []*relayv1.SetOperationContextRequest
 	clearRequests     []*relayv1.ClearOperationContextRequest
 	deployRequests    []*relayv1.DeployMissionRequest
@@ -61,6 +65,10 @@ type fakeRelayClient struct {
 	clearErr          error
 	block             bool
 	setDeadlines      []time.Time
+}
+
+func (f *fakeRelayClient) ExchangeCommand(context.Context, *relayv1.ExchangeCommandRequest, ...grpc.CallOption) (*relayv1.ExchangeCommandResponse, error) {
+	return nil, fmt.Errorf("unexpected command exchange")
 }
 
 func TestNewRequiresRelayTransportCredentials(t *testing.T) {
@@ -268,5 +276,78 @@ func TestTimeout(t *testing.T) {
 	_, err := service.SetOperationContext(context.Background(), SetRequest{AgentID: "agent-1", FlightID: "flight-1", CommandID: "command"})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func (f *fakeRelayClient) ExecuteCommand(ctx context.Context, req *relayv1.ExecuteCommandRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[relayv1.ExecuteCommandResponse], error) {
+	if f.execute == nil {
+		return nil, errors.New("unexpected streaming command")
+	}
+	return f.execute(ctx, req)
+}
+
+type evidenceClientStream struct {
+	grpc.ClientStream
+	evidence []*agentv1.CommandEvidence
+	terminal error
+}
+
+func (s *evidenceClientStream) Recv() (*relayv1.ExecuteCommandResponse, error) {
+	if len(s.evidence) == 0 {
+		if s.terminal != nil {
+			return nil, s.terminal
+		}
+		return nil, io.EOF
+	}
+	e := s.evidence[0]
+	s.evidence = s.evidence[1:]
+	return &relayv1.ExecuteCommandResponse{Evidence: e}, nil
+}
+func TestExecuteCommandStreamsProgressAndDoesNotHideDisconnectWithRedelivery(t *testing.T) {
+	client := &fakeRelayClient{}
+	pool := &fakePool{clients: map[string]*fakeRelayClient{"relay-1": client}}
+	service := newWithPool(&fakeRegistry{relayIDs: []string{"relay-1"}}, pool, time.Second, time.Minute)
+	calls := 0
+	client.execute = func(ctx context.Context, req *relayv1.ExecuteCommandRequest) (grpc.ServerStreamingClient[relayv1.ExecuteCommandResponse], error) {
+		calls++
+		if req.AttemptId != "command/attempt-1" {
+			t.Fatal("attempt identity changed")
+		}
+		return &evidenceClientStream{evidence: []*agentv1.CommandEvidence{{CommandId: "command", Events: []*agentv1.CommandEvent{{Stage: "acknowledged"}}}, {CommandId: "command", Events: []*agentv1.CommandEvent{{Stage: "acknowledged"}, {Stage: "applied"}}}}, terminal: status.Error(codes.Unavailable, "lost completion")}, nil
+	}
+	snapshots := 0
+	err := service.ExecuteCommand(context.Background(), "agent-1", &agentv1.DurableCommand{CommandId: "command"}, "command/attempt-1", func(e *agentv1.CommandEvidence) error { snapshots++; return nil })
+	if status.Code(err) != codes.Unavailable || calls != 1 || snapshots != 2 {
+		t.Fatalf("stream result calls=%d snapshots=%d err=%v", calls, snapshots, err)
+	}
+	if len(pool.invalidated) != 1 {
+		t.Fatal("stale placement not invalidated for recovery")
+	}
+}
+
+func TestExecuteCommandSetupFailureInvalidatesPlacementWithoutRedelivery(t *testing.T) {
+	first, second := &fakeRelayClient{}, &fakeRelayClient{}
+	registry := &fakeRegistry{relayIDs: []string{"relay-1", "relay-2"}}
+	pool := &fakePool{clients: map[string]*fakeRelayClient{"relay-1": first, "relay-2": second}}
+	svc := newWithPool(registry, pool, time.Second, time.Hour)
+	calls := 0
+	first.execute = func(context.Context, *relayv1.ExecuteCommandRequest) (grpc.ServerStreamingClient[relayv1.ExecuteCommandResponse], error) {
+		calls++
+		return nil, status.Error(codes.Unavailable, "departed")
+	}
+	second.execute = func(_ context.Context, req *relayv1.ExecuteCommandRequest) (grpc.ServerStreamingClient[relayv1.ExecuteCommandResponse], error) {
+		calls++
+		if req.AttemptId != "attempt-2" {
+			t.Fatal("hidden same-attempt redelivery")
+		}
+		return &evidenceClientStream{}, nil
+	}
+	command := &agentv1.DurableCommand{CommandId: "c"}
+	receive := func(*agentv1.CommandEvidence) error { return nil }
+	if err := svc.ExecuteCommand(context.Background(), "agent-1", command, "attempt-1", receive); status.Code(err) != codes.Unavailable || calls != 1 || len(pool.invalidated) != 1 {
+		t.Fatalf("setup failure: calls=%d err=%v", calls, err)
+	}
+	if err := svc.ExecuteCommand(context.Background(), "agent-1", command, "attempt-2", receive); err != nil || calls != 2 || registry.calls != 2 {
+		t.Fatalf("new placement: calls=%d registry=%d err=%v", calls, registry.calls, err)
 	}
 }

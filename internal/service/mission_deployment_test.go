@@ -186,9 +186,16 @@ func TestDeployCurrentMissionDoesNotStartContextOrMissionEffectAfterExpiry(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if retry.Deployment.Status != domain.MissionDeploymentOutcomeUnknown || retry.Deployment.DispatchStarted || len(deployer.contexts) != 1 || len(deployer.commands) != 0 ||
+	if retry.Deployment.Status != domain.MissionDeploymentRejected || retry.Deployment.DispatchStarted || len(deployer.contexts) != 1 || len(deployer.commands) != 0 ||
 		retry.Deployment.Message != "deployment command expired before its first dispatch; no effect was authorized" {
 		t.Fatalf("expired retry = %#v calls=%#v", retry.Deployment, deployer.events)
+	}
+	if retry.Deployment.CompletedAt == nil {
+		t.Fatal("undispatched expiry left deployment outstanding")
+	}
+	events, _ := svc.executeCommandAttempt(context.Background(), domain.Command{ID: "upload", Type: "MISSION_UPLOAD", FlightID: "flight-1", DeploymentID: first.Deployment.ID, ExpiresAt: first.Deployment.ExpiresAt})
+	if len(events) != 1 || events[0].Stage != "timed_out" {
+		t.Fatalf("command expiry not terminal: %+v", events)
 	}
 }
 
@@ -207,7 +214,7 @@ func TestDeployCurrentMissionRechecksExpiryBetweenControlPhases(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if result.Deployment.Status != domain.MissionDeploymentOutcomeUnknown || result.Deployment.DispatchStarted || len(deployer.contexts) != 1 || len(deployer.commands) != 0 ||
+		if result.Deployment.Status != domain.MissionDeploymentRejected || result.Deployment.DispatchStarted || len(deployer.contexts) != 1 || len(deployer.commands) != 0 ||
 			result.Deployment.Message != "deployment authorization expired after context acknowledgement; mission was not dispatched" {
 			t.Fatalf("slow context result = %#v calls=%#v", result.Deployment, deployer.events)
 		}
@@ -241,7 +248,7 @@ func TestDeployCurrentMissionRechecksExpiryBetweenControlPhases(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if result.Deployment.Status != domain.MissionDeploymentOutcomeUnknown || result.Deployment.DispatchStarted || len(deployer.clears) != 1 || len(deployer.contexts) != 1 || len(deployer.commands) != 1 ||
+		if result.Deployment.Status != domain.MissionDeploymentRejected || result.Deployment.DispatchStarted || len(deployer.clears) != 1 || len(deployer.contexts) != 1 || len(deployer.commands) != 1 ||
 			result.Deployment.Message != "deployment authorization expired after context clear; mission was not dispatched" {
 			t.Fatalf("slow clear result = %#v calls=%#v", result.Deployment, deployer.events)
 		}

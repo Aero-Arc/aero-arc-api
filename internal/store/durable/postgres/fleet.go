@@ -286,6 +286,9 @@ func (s *Store) StartFlightWithCurrentMissionDeployment(ctx context.Context, fli
 	if err := lockMissionAircraftLifecycle(ctx, tx, aircraftID); err != nil {
 		return err
 	}
+	if err := rejectOutstandingC2ForAircraft(ctx, tx, aircraftID, ""); err != nil {
+		return err
+	}
 	var anotherActive bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM flight_records WHERE aircraft_id=$1 AND id<>$2 AND status=$3)`, aircraftID, flight.ID, domain.FlightStatusActive).Scan(&anotherActive); err != nil {
 		return fmt.Errorf("check active aircraft flight: %w", err)

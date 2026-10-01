@@ -29,6 +29,8 @@ type FleetService struct {
 	registryFreshness  time.Duration
 	telemetryFreshness time.Duration
 	missionDeployer    MissionDeployer
+	commandTransport   CommandTransport
+	commandAuthorizer  CommandAuthorizer
 	conformanceHistory ConformanceHistoryClient
 }
 
@@ -50,6 +52,7 @@ type placementLookupResult struct {
 }
 
 type ReplayResponse struct {
+	Commands          []domain.Command          `json:"commands,omitempty"`
 	Flight            domain.FlightRecord       `json:"flight"`
 	ReplayManifest    *domain.ReplayManifest    `json:"replay_manifest,omitempty"`
 	Samples           []domain.TelemetrySample  `json:"samples"`
@@ -906,7 +909,15 @@ func (s *FleetService) GetFlightReplay(ctx context.Context, flightID string, lim
 		return ReplayResponse{}, fmt.Errorf("list conformance events: %w", err)
 	}
 
+	var commands []domain.Command
+	if store, ok := s.durable.(durable.CommandStore); ok {
+		commands, err = store.ListCommands(ctx, flightID)
+		if err != nil {
+			return ReplayResponse{}, fmt.Errorf("command replay: %w", err)
+		}
+	}
 	return ReplayResponse{
+		Commands:          commands,
 		Flight:            flight,
 		ReplayManifest:    manifest,
 		Samples:           samples,

@@ -323,6 +323,10 @@ func sameMissionDeploymentCommand(left, right domain.MissionDeployment) bool {
 func (s *FleetService) persistUndispatchedMissionExpiry(ctx context.Context, deployment domain.MissionDeployment, replayed bool, message string, now time.Time) (DeployMissionResult, error) {
 	updated := deployment
 	updated.Status = domain.MissionDeploymentOutcomeUnknown
+	if !deployment.DispatchStarted {
+		updated.Status = domain.MissionDeploymentRejected
+		updated.CompletedAt = &now
+	}
 	updated.Message = message
 	updated.UpdatedAt = now
 	if err := s.durable.UpdateMissionDeployment(ctx, updated, deployment.Revision); err != nil {
@@ -532,4 +536,37 @@ func missionBindingsEqual(left, right *agentv1.MissionBinding) bool {
 		left.GetDeploymentId() == right.GetDeploymentId() && left.GetOperatorId() == right.GetOperatorId() &&
 		left.GetAircraftId() == right.GetAircraftId() && left.GetFlightId() == right.GetFlightId() &&
 		left.GetIntentId() == right.GetIntentId() && left.GetIntentVersion() == right.GetIntentVersion()
+}
+
+// GetMissionDeploymentReplay retrieves legacy authority without dispatching it.
+// Parameters: ctx bounds reads; flightID, missionID, digest and key select the
+// exact original request; principal is checked against the flight upload policy.
+// Returns the preserved deployment, ErrNotFound when no legacy key exists,
+// or an authorization, identity, current-binding, or storage error.
+func (s *FleetService) GetMissionDeploymentReplay(ctx context.Context, flightID, missionID, digest, key, principal string) (DeployMissionResult, error) {
+	if err := validateIdempotencyKey(key); err != nil {
+		return DeployMissionResult{}, err
+	}
+	existing, err := s.durable.GetMissionDeploymentByIdempotencyKey(ctx, key)
+	if err != nil {
+		return DeployMissionResult{}, err
+	}
+	flight, err := s.durable.GetFlightRecord(ctx, flightID)
+	if err != nil {
+		return DeployMissionResult{}, err
+	}
+	if err = s.authorizeCommand(ctx, principal, flight, "MISSION_UPLOAD"); err != nil {
+		return DeployMissionResult{}, err
+	}
+	if existing.FlightID != flightID || existing.MissionID != missionID || existing.MissionDigest != digest {
+		return DeployMissionResult{}, durable.ErrIdempotencyConflict
+	}
+	hash := sha256Hex(strings.Join([]string{"deploy-mission-v1", existing.FlightID, existing.MissionID, fmt.Sprint(existing.MissionVersion), existing.MissionDigest}, "\x00"))
+	if existing.IdempotencyRequest != hash {
+		return DeployMissionResult{}, durable.ErrIdempotencyConflict
+	}
+	if err = s.validateCurrentMissionDeploymentReplay(ctx, existing); err != nil {
+		return DeployMissionResult{}, err
+	}
+	return DeployMissionResult{Deployment: existing, Replayed: true}, nil
 }

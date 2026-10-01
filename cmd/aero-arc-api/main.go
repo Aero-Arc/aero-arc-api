@@ -15,6 +15,7 @@ import (
 	interussprovider "github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider/interuss"
 	localprovider "github.com/Aero-Arc/aero-arc-api/internal/airspaceprovider/local"
 	"github.com/Aero-Arc/aero-arc-api/internal/config"
+	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/httpapi"
 	"github.com/Aero-Arc/aero-arc-api/internal/registry"
 	"github.com/Aero-Arc/aero-arc-api/internal/relaycontrol"
@@ -294,6 +295,12 @@ func run(ctx context.Context, cfg *config.Config) error {
 			}
 		}()
 		fleetService.WithMissionDeployer(relayService)
+		fleetService.WithCommandControl(relayService, func(_ context.Context, principal string, _ domain.FlightRecord, _ string) error {
+			if principal != "mission-control-service" {
+				return fmt.Errorf("command principal is not authorized")
+			}
+			return nil
+		})
 	}
 	deconflictionService, err := deconfliction.NewDeconflictionServiceWithPublicationLease(
 		durableStore,
@@ -304,7 +311,9 @@ func run(ctx context.Context, cfg *config.Config) error {
 		return err
 	}
 	workerCtx, stopWorker := context.WithCancel(ctx)
-	defer stopWorker()
+	commandWorkersDone := make(chan struct{})
+	go func() { defer close(commandWorkersDone); fleetService.RunCommandWorker(workerCtx) }()
+	defer func() { stopWorker(); <-commandWorkersDone }()
 	intentService := service.NewIntentService(durableStore, deconflictionService)
 	preflightService := preflight.NewPreflightService(durableStore)
 	conformanceService := service.NewConformanceService(durableStore, telemetryStore)

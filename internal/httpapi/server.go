@@ -169,6 +169,10 @@ func (s *Server) Handler() http.Handler {
 	api.GET("/aircraft/{aircraft_id}/flights", s.handleListAircraftFlights)
 	api.POST("/aircraft/{aircraft_id}/battery-installations", s.handleInstallBattery)
 	api.GET("/flights/{flight_id}", s.handleGetFlight)
+	api.POST("/flights/{flight_id}/commands", s.handleSubmitCommand)
+	api.GET("/flights/{flight_id}/commands", s.handleListCommands)
+	api.GET("/flights/{flight_id}/commands/{command_id}", s.handleGetCommand)
+	api.POST("/flights/{flight_id}/commands/{command_id}/reconcile", s.handleReconcileCommand)
 	api.POST("/flights/{flight_id}/start", s.handleStartFlight)
 	api.POST("/flights/{flight_id}/missions/import", s.handleImportMission)
 	api.GET("/flights/{flight_id}/missions/current", s.handleGetCurrentMission)
@@ -182,6 +186,7 @@ func (s *Server) Handler() http.Handler {
 		api.POST("/operational-intents", s.handleCreateOperationalIntent)
 		api.POST("/operational-intents/{intent_id}/modify", s.handleModifyOperationalIntent)
 		api.POST("/operational-intents/{intent_id}/volumes", s.handleAddOperationalVolume)
+		api.GET("/operational-intents/{intent_id}/volumes", s.handleGetIntentVolumes)
 		api.POST("/operational-intents/{intent_id}/submit", s.handleSubmitOperationalIntent)
 		api.POST("/operational-intents/{intent_id}/preflight/evaluate", s.handleEvaluateOperationalIntentPreflight)
 		if s.deconfliction != nil {

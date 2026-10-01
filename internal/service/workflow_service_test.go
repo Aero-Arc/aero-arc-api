@@ -26,6 +26,71 @@ func TestCreateIntentRejectsInvalidPlannedWindow(t *testing.T) {
 	}
 }
 
+func TestCreateIntentInheritsAircraftOperatorForPreflight(t *testing.T) {
+	for _, operator := range []string{"", "operator-1", "different-operator"} {
+		t.Run(operator, func(t *testing.T) {
+			ctx := context.Background()
+			store := durablememory.NewStore()
+			now := fixedWorkflowTime()
+			seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+			svc := NewIntentServiceWithClock(store, fixedClock(now), nil)
+			req := workflowIntentRequest(now)
+			req.OperatorID = operator
+			intent, err := svc.CreateIntent(ctx, req)
+			if operator == "different-operator" {
+				if !errors.Is(err, ErrValidation) {
+					t.Fatalf("ownership mismatch accepted: %v", err)
+				}
+				return
+			}
+			if err != nil || intent.OperatorID != "operator-1" {
+				t.Fatalf("operator not inherited: %+v %v", intent, err)
+			}
+			if _, err = svc.AddOperationalVolume(ctx, intent.ID, workflowVolumeRequest(now)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = svc.SubmitIntent(ctx, intent.ID); err != nil {
+				t.Fatal(err)
+			}
+			evaluation, err := preflightsvc.NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, check := range evaluation.Checks {
+				if check.RequirementCode == "BATTERY-INSTALLED" {
+					found = true
+					if check.Blocking {
+						t.Fatalf("installed battery disappeared from UI-created intent: %+v", check)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("battery check missing")
+			}
+		})
+	}
+}
+
+func TestOperationalVolumeRejectsInvertedAltitudeBeforePersistence(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	now := fixedWorkflowTime()
+	svc := NewIntentServiceWithClock(store, fixedClock(now), nil)
+	intent, err := svc.CreateIntent(ctx, workflowIntentRequest(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := workflowVolumeRequest(now)
+	req.MinAltitudeM, req.MaxAltitudeM = float64Ptr(100), float64Ptr(20)
+	if _, err = svc.AddOperationalVolume(ctx, intent.ID, req); !errors.Is(err, ErrValidation) {
+		t.Fatalf("inverted draft altitude: %v", err)
+	}
+	if _, err = buildOperationalVolumeFromRequest(intent, req, now, 0); !errors.Is(err, ErrValidation) {
+		t.Fatalf("inverted modified altitude: %v", err)
+	}
+}
+
 func TestCreateIntentPreservesNonUUIDIdentifierWithoutPublishing(t *testing.T) {
 	now := fixedWorkflowTime()
 	request := workflowIntentRequest(now)
@@ -1884,4 +1949,38 @@ func hasBlockingFinding(findings []domain.ComplianceFinding, requirementCode str
 		}
 	}
 	return false
+}
+
+func TestIntentGeometryIsExactVersionAndIndependentOfLifecycle(t *testing.T) {
+	for _, state := range []domain.IntentStatus{domain.IntentStatusAccepted, domain.IntentStatusComplete, domain.IntentStatusCanceled} {
+		t.Run(string(state), func(t *testing.T) {
+			ctx := context.Background()
+			store := durablememory.NewStore()
+			first := domain.OperationalIntent{ID: "geometry", Version: 1, Status: state}
+			if err := store.CreateOperationalIntent(ctx, first); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.RecordOperationalVolume(ctx, domain.OperationalVolume{ID: "v1", IntentID: first.ID, IntentVersion: 1}); err != nil {
+				t.Fatal(err)
+			}
+			next := first
+			next.Version = 2
+			if err := store.ReplaceOperationalIntent(ctx, 1, first.Revision, next, []domain.OperationalVolume{{ID: "v2", IntentID: first.ID, IntentVersion: 2}}); err != nil {
+				t.Fatal(err)
+			}
+			service := NewIntentService(store, nil)
+			for version, want := range map[int]string{1: "v1", 2: "v2"} {
+				got, err := service.GetIntentVolumes(ctx, first.ID, version)
+				if err != nil || len(got) != 1 || got[0].ID != want {
+					t.Fatalf("version %d: %v %v", version, got, err)
+				}
+			}
+			if _, err := service.GetIntentVolumes(ctx, first.ID, 0); !errors.Is(err, ErrValidation) {
+				t.Fatalf("invalid version: %v", err)
+			}
+			if _, err := service.GetIntentVolumes(ctx, first.ID, 3); !errors.Is(err, durable.ErrNotFound) {
+				t.Fatalf("missing version: %v", err)
+			}
+		})
+	}
 }

@@ -22,6 +22,10 @@ func writeError(c *mach.Context, statusCode int, message string) {
 }
 
 func writeServiceError(c *mach.Context, err error) {
+	if errors.Is(err, service.ErrCommandForbidden) {
+		writeError(c, http.StatusForbidden, "command policy denied")
+		return
+	}
 	if errors.Is(err, durable.ErrNotFound) {
 		writeError(c, http.StatusNotFound, "resource not found")
 		return

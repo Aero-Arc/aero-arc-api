@@ -1,0 +1,152 @@
+package httpapi
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Aero-Arc/aero-arc-api/internal/domain"
+	"github.com/Aero-Arc/aero-arc-api/internal/service"
+	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
+	pb "github.com/aero-arc/aero-arc-protos/gen/go/aeroarc/agent/v1"
+)
+
+type reviewCommandStore struct {
+	durable.Store
+	durable.CommandStore
+	requeued string
+}
+
+func (s *reviewCommandStore) GetFlightRecord(context.Context, string) (domain.FlightRecord, error) {
+	return domain.FlightRecord{ID: "flight", OperatorID: "operator"}, nil
+}
+func (s *reviewCommandStore) GetMissionDeployment(context.Context, string) (domain.MissionDeployment, error) {
+	return domain.MissionDeployment{ID: "deployment", FlightID: "flight", CommandID: "original-command", Status: domain.MissionDeploymentOutcomeUnknown}, nil
+}
+func (s *reviewCommandStore) GetCommand(context.Context, string) (domain.Command, error) {
+	return domain.Command{ID: "original-command", FlightID: "flight", OperatorID: "operator"}, nil
+}
+func (s *reviewCommandStore) RequeueCommand(_ context.Context, id string) error {
+	s.requeued = id
+	return nil
+}
+
+type reviewCommandTransport struct{}
+
+func (reviewCommandTransport) ExchangeCommand(context.Context, string, *pb.DurableCommand, string) (*pb.CommandEvidence, error) {
+	panic("HTTP must not dispatch commands")
+}
+
+func TestReplayRemainsProtectedWithoutCommandTransport(t *testing.T) {
+	for _, configured := range []bool{false, true} {
+		store := &reviewCommandStore{}
+		fleet := service.NewFleetService(store, nil, nil, nil)
+		server := New(fleet, time.Second)
+		want := http.StatusServiceUnavailable
+		if configured {
+			server.WithMissionDeploymentControl(time.Second, "secret")
+			want = http.StatusUnauthorized
+		}
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/flights/flight/replay", nil))
+		if response.Code != want {
+			t.Fatalf("configured=%v: status=%d body=%s", configured, response.Code, response.Body.String())
+		}
+	}
+}
+func TestDeploymentReconcileRequeuesOriginalDurableCommand(t *testing.T) {
+	store := &reviewCommandStore{}
+	var actions []string
+	fleet := service.NewFleetService(store, nil, nil, nil).WithCommandControl(reviewCommandTransport{}, func(_ context.Context, principal string, f domain.FlightRecord, action string) error {
+		if principal != "mission-control-service" || f.ID != "flight" {
+			t.Fatal("incorrect authorization binding")
+		}
+		actions = append(actions, action)
+		return nil
+	})
+	handler := New(fleet, time.Second).WithMissionDeploymentControl(time.Second, "secret").Handler()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/flights/flight/mission-deployments/deployment/reconcile", nil)
+	request.Header.Set("Authorization", "Bearer secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || store.requeued != "original-command" {
+		t.Fatalf("status=%d body=%s requeued=%q", response.Code, response.Body.String(), store.requeued)
+	}
+	if len(actions) != 2 || actions[0] != "READ" || actions[1] != "RECONCILE" {
+		t.Fatalf("authorization actions=%v", actions)
+	}
+}
+
+func TestReplayHonorsFlightCommandReadPolicy(t *testing.T) {
+	store := &reviewCommandStore{}
+	called := false
+	fleet := service.NewFleetService(store, nil, nil, nil).WithCommandControl(nil, func(_ context.Context, principal string, f domain.FlightRecord, action string) error {
+		called = true
+		if principal != "mission-control-service" || f.ID != "flight" || action != "READ" {
+			t.Fatal("wrong replay policy binding")
+		}
+		return service.ErrValidation
+	})
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/flights/flight/replay", nil)
+	request.Header.Set("Authorization", "Bearer secret")
+	response := httptest.NewRecorder()
+	New(fleet, time.Second).WithMissionDeploymentControl(time.Second, "secret").Handler().ServeHTTP(response, request)
+	if !called || response.Code != http.StatusForbidden {
+		t.Fatalf("replay bypassed read policy: %d", response.Code)
+	}
+}
+
+func TestCommandPoliciesReturnForbidden(t *testing.T) {
+	for _, route := range []struct{ method, path, body string }{
+		{http.MethodPost, "/api/v1/flights/flight/commands", "{\"type\":\"ARM\"}"},
+		{http.MethodGet, "/api/v1/flights/flight/commands", ""},
+		{http.MethodGet, "/api/v1/flights/flight/commands/original-command", ""},
+		{http.MethodPost, "/api/v1/flights/flight/commands/original-command/reconcile", ""},
+		{http.MethodGet, "/api/v1/flights/flight/replay", ""},
+	} {
+		t.Run(route.method+route.path, func(t *testing.T) {
+			store := &reviewCommandStore{}
+			fleet := service.NewFleetService(store, nil, nil, nil).WithCommandControl(reviewCommandTransport{}, func(context.Context, string, domain.FlightRecord, string) error { return service.ErrValidation })
+			req := httptest.NewRequest(route.method, route.path, strings.NewReader(route.body))
+			req.Header.Set("Authorization", "Bearer secret")
+			req.Header.Set("Idempotency-Key", "policy-denied")
+			response := httptest.NewRecorder()
+			New(fleet, time.Second).WithMissionDeploymentControl(time.Second, "secret").Handler().ServeHTTP(response, req)
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("policy denial=%d: %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+// A legacy deployment has no generic command row. Recovery must still enforce
+// the RECONCILE policy before the handler falls back to legacy dispatch.
+type missingGenericCommandStore struct{ reviewCommandStore }
+
+func (*missingGenericCommandStore) GetCommand(context.Context, string) (domain.Command, error) {
+	return domain.Command{}, durable.ErrNotFound
+}
+func TestLegacyDeploymentReconcileHonorsRecoveryPolicy(t *testing.T) {
+	store := &missingGenericCommandStore{}
+	var actions []string
+	fleet := service.NewFleetService(store, nil, nil, nil).WithCommandControl(reviewCommandTransport{}, func(_ context.Context, _ string, _ domain.FlightRecord, action string) error {
+		actions = append(actions, action)
+		if action == "RECONCILE" {
+			return service.ErrValidation
+		}
+		return nil
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/flights/flight/mission-deployments/deployment/reconcile", nil)
+	request.Header.Set("Authorization", "Bearer secret")
+	response := httptest.NewRecorder()
+	New(fleet, time.Second).WithMissionDeploymentControl(time.Second, "secret").Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || store.requeued != "" {
+		t.Fatalf("legacy recovery bypassed policy: %d %s", response.Code, response.Body.String())
+	}
+	if len(actions) != 2 || actions[0] != "READ" || actions[1] != "RECONCILE" {
+		t.Fatalf("actions=%v", actions)
+	}
+}

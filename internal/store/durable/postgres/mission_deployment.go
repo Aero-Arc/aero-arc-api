@@ -56,7 +56,18 @@ func (s *Store) CreateMissionDeploymentForPlannedFlight(ctx context.Context, dep
 		return domain.MissionDeployment{}, fmt.Errorf("begin planned-flight mission deployment: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 3))`, deployment.IdempotencyKey); err != nil {
+	result, err := admitMissionDeployment(ctx, tx, deployment)
+	if err != nil {
+		return domain.MissionDeployment{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return domain.MissionDeployment{}, err
+	}
+	return result, nil
+}
+
+func admitMissionDeployment(ctx context.Context, tx pgx.Tx, deployment domain.MissionDeployment) (domain.MissionDeployment, error) {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 3))`, deployment.IdempotencyKey); err != nil {
 		return domain.MissionDeployment{}, fmt.Errorf("lock mission deployment idempotency key: %w", err)
 	}
 	var replay *domain.MissionDeployment
@@ -87,6 +98,13 @@ func (s *Store) CreateMissionDeploymentForPlannedFlight(ctx context.Context, dep
 		return domain.MissionDeployment{}, durable.ErrVersionConflict
 	}
 	if err := lockMissionAircraftLifecycle(ctx, tx, aircraftID); err != nil {
+		return domain.MissionDeployment{}, err
+	}
+	commandID := deployment.CommandID
+	if replay != nil {
+		commandID = replay.CommandID
+	}
+	if err := rejectOutstandingC2ForAircraft(ctx, tx, aircraftID, commandID); err != nil {
 		return domain.MissionDeployment{}, err
 	}
 	if err := lockIntent(ctx, tx, intentID); err != nil {
@@ -150,9 +168,6 @@ func (s *Store) CreateMissionDeploymentForPlannedFlight(ctx context.Context, dep
 	if err != nil {
 		return domain.MissionDeployment{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.MissionDeployment{}, fmt.Errorf("commit planned-flight mission deployment: %w", err)
-	}
 	return deployment, nil
 }
 
@@ -168,6 +183,13 @@ func missionDeploymentOutstanding(status domain.MissionDeploymentStatus) bool {
 }
 
 func rejectOutstandingMissionDeploymentForIntent(ctx context.Context, tx pgx.Tx, intentID string) error {
+	var blocked bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM commands c JOIN flight_records f ON f.id=c.flight_id WHERE f.intent_id=$1 AND c.state NOT IN ('applied','rejected','failed','timed_out'))`, intentID).Scan(&blocked); err != nil {
+		return err
+	}
+	if blocked {
+		return durable.ErrVersionConflict
+	}
 	var outstanding bool
 	if err := tx.QueryRow(ctx, `
 		SELECT EXISTS(
@@ -186,6 +208,13 @@ func rejectOutstandingMissionDeploymentForIntent(ctx context.Context, tx pgx.Tx,
 }
 
 func rejectOutstandingMissionDeploymentForFlight(ctx context.Context, tx pgx.Tx, flightID string) error {
+	var blocked bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM commands WHERE flight_id=$1 AND state NOT IN ('applied','rejected','failed','timed_out'))`, flightID).Scan(&blocked); err != nil {
+		return err
+	}
+	if blocked {
+		return durable.ErrVersionConflict
+	}
 	var outstanding bool
 	if err := tx.QueryRow(ctx, `
 		SELECT EXISTS(
@@ -216,6 +245,15 @@ func createMissionDeployment(ctx context.Context, tx pgx.Tx, deployment domain.M
 		return existing, nil
 	case !errors.Is(err, durable.ErrNotFound):
 		return domain.MissionDeployment{}, err
+	}
+	// The legacy key lock is shared with generic mission acceptance. Never
+	// mint a second deployment from an already accepted C2 submission key.
+	var generic bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM commands WHERE idempotency_key=$1)`, deployment.IdempotencyKey).Scan(&generic); err != nil {
+		return domain.MissionDeployment{}, err
+	}
+	if generic {
+		return domain.MissionDeployment{}, durable.ErrIdempotencyConflict
 	}
 	deployment.Revision = 0
 	raw, err := encodeMissionDeployment(deployment)
@@ -394,5 +432,16 @@ func decodeMissionDeployment(raw []byte, deployment *domain.MissionDeployment) e
 	deployment.DispatchStarted = data.DispatchStarted
 	deployment.OperationContextCommandID = data.OperationContextCommandID
 	deployment.ReconciliationClearCommandID = data.ReconciliationClearCommandID
+	return nil
+}
+
+func rejectOutstandingMissionDeploymentForAircraft(ctx context.Context, tx pgx.Tx, aircraftID string) error {
+	var outstanding bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM mission_deployments d JOIN flight_records f ON f.id=d.flight_id WHERE f.aircraft_id=$1 AND d.status IN ($2,$3,$4))`, aircraftID, domain.MissionDeploymentPending, domain.MissionDeploymentTemporaryError, domain.MissionDeploymentOutcomeUnknown).Scan(&outstanding); err != nil {
+		return err
+	}
+	if outstanding {
+		return durable.ErrVersionConflict
+	}
 	return nil
 }

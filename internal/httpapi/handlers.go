@@ -14,6 +14,7 @@ import (
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
+	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	"github.com/mrshabel/mach"
 )
 
@@ -176,6 +177,9 @@ func (s *Server) handleGetFlight(c *mach.Context) {
 }
 
 func (s *Server) handleGetFlightReplay(c *mach.Context) {
+	if s.fleet.CommandHistoryEnabled() && !s.commandAccess(c) {
+		return
+	}
 	ctx, cancel := s.contextWithTimeout(c)
 	defer cancel()
 
@@ -185,6 +189,12 @@ func (s *Server) handleGetFlightReplay(c *mach.Context) {
 		return
 	}
 
+	if s.fleet.CommandHistoryEnabled() {
+		if _, err := s.fleet.ListFlightCommands(ctx, c.Param("flight_id"), "mission-control-service"); err != nil {
+			writeServiceError(c, err)
+			return
+		}
+	}
 	replay, err := s.fleet.GetFlightReplay(ctx, c.Param("flight_id"), limit)
 	if err != nil {
 		writeServiceError(c, err)
@@ -263,6 +273,41 @@ func (s *Server) handleDeployCurrentMission(c *mach.Context) {
 	expectedDigest, err := parseMissionIfMatch(c.Request.Header.Get("If-Match"))
 	if err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	if s.fleet.CommandControlEnabled() {
+		replay, replayErr := s.fleet.GetMissionDeploymentReplay(ctx, c.Param("flight_id"), c.Param("mission_id"), expectedDigest, c.Request.Header.Get("Idempotency-Key"), "mission-control-service")
+		if replayErr == nil {
+			status := http.StatusOK
+			if missionDeploymentPending(replay.Deployment.Status) {
+				status = http.StatusAccepted
+			}
+			c.Response.Header().Set("Idempotent-Replayed", "true")
+			writeJSON(c, status, replay)
+			return
+		}
+		if !errors.Is(replayErr, durable.ErrNotFound) {
+			writeServiceError(c, replayErr)
+			return
+		}
+		command, err := s.fleet.SubmitCommand(ctx, c.Param("flight_id"), "mission-control-service", c.Request.Header.Get("Idempotency-Key"), service.CommandRequest{Type: "MISSION_UPLOAD", MissionID: c.Param("mission_id"), MissionDigest: expectedDigest})
+		if err != nil {
+			writeServiceError(c, err)
+			return
+		}
+		deployment, err := s.fleet.GetMissionDeployment(ctx, command.FlightID, command.DeploymentID)
+		if err != nil {
+			writeServiceError(c, err)
+			return
+		}
+		status := http.StatusOK
+		if missionDeploymentPending(deployment.Status) {
+			status = http.StatusAccepted
+		}
+		if command.Replayed {
+			c.Response.Header().Set("Idempotent-Replayed", "true")
+		}
+		writeJSON(c, status, service.DeployMissionResult{Deployment: deployment, Replayed: command.Replayed})
 		return
 	}
 	result, err := s.fleet.DeployCurrentMission(ctx, c.Param("flight_id"), c.Param("mission_id"), expectedDigest, c.Request.Header.Get("Idempotency-Key"))
@@ -349,6 +394,29 @@ func (s *Server) handleReconcileMissionDeployment(c *mach.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Context(), s.missionDeploymentTimeout)
 	defer cancel()
+	if s.fleet.CommandControlEnabled() {
+		deployment, err := s.fleet.GetMissionDeployment(ctx, c.Param("flight_id"), c.Param("deployment_id"))
+		if err != nil {
+			writeServiceError(c, err)
+			return
+		}
+		_, err = s.fleet.ReconcileFlightCommand(ctx, deployment.FlightID, deployment.CommandID, "mission-control-service")
+		if err == nil {
+			c.Response.Header().Set("Idempotent-Replayed", "true")
+			status := http.StatusOK
+			if missionDeploymentPending(deployment.Status) {
+				status = http.StatusAccepted
+			}
+			writeJSON(c, status, service.DeployMissionResult{Deployment: deployment, Replayed: true})
+			return
+		}
+		if !errors.Is(err, durable.ErrNotFound) {
+			writeServiceError(c, err)
+			return
+		}
+		// Pre-C2 deployments have no generic command row. Retain their existing
+		// durable reconciliation path instead of stranding upgrade-era work.
+	}
 	result, err := s.fleet.ReconcileMissionDeployment(ctx, c.Param("flight_id"), c.Param("deployment_id"))
 	if err != nil {
 		writeServiceError(c, err)
@@ -752,4 +820,20 @@ func decodeJSON(c *mach.Context, dst any) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Server) handleGetIntentVolumes(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	version, err := strconv.Atoi(c.Query("version"))
+	if err != nil || version < 1 {
+		writeError(c, http.StatusBadRequest, "positive intent version required")
+		return
+	}
+	volumes, err := s.intents.GetIntentVolumes(ctx, c.Param("intent_id"), version)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, map[string]any{"volumes": volumes})
 }
