@@ -78,3 +78,22 @@ func TestDeploymentReconcileRequeuesOriginalDurableCommand(t *testing.T) {
 		t.Fatalf("authorization actions=%v", actions)
 	}
 }
+
+func TestReplayHonorsFlightCommandReadPolicy(t *testing.T) {
+	store := &reviewCommandStore{}
+	called := false
+	fleet := service.NewFleetService(store, nil, nil, nil).WithCommandControl(nil, func(_ context.Context, principal string, f domain.FlightRecord, action string) error {
+		called = true
+		if principal != "mission-control-service" || f.ID != "flight" || action != "READ" {
+			t.Fatal("wrong replay policy binding")
+		}
+		return service.ErrValidation
+	})
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/flights/flight/replay", nil)
+	request.Header.Set("Authorization", "Bearer secret")
+	response := httptest.NewRecorder()
+	New(fleet, time.Second).WithMissionDeploymentControl(time.Second, "secret").Handler().ServeHTTP(response, request)
+	if !called || response.Code < 400 {
+		t.Fatalf("replay bypassed read policy: %d", response.Code)
+	}
+}
