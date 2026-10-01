@@ -517,14 +517,7 @@ func (s *Server) handleCreatePlannedFlight(c *mach.Context) {
 }
 
 func (s *Server) handleStartFlight(c *mach.Context) {
-	ctx, cancel := s.contextWithTimeout(c)
-	defer cancel()
-	flight, err := s.fleet.StartFlight(ctx, c.Param("flight_id"))
-	if err != nil {
-		writeServiceError(c, err)
-		return
-	}
-	writeJSON(c, http.StatusOK, flight)
+	writeError(c, http.StatusConflict, "Legacy flight activation is disabled; submit authenticated MISSION_START through /api/v1/flights/{flight_id}/commands with an Idempotency-Key")
 }
 
 func (s *Server) handleCreateMaintenanceEvent(c *mach.Context) {

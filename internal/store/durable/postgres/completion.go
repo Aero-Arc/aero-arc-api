@@ -346,19 +346,31 @@ func (s *Store) CompleteFlight(ctx context.Context, c domain.FlightCompletion, p
 // start. Any other applied start, or one still able to have taken effect, makes
 // that watch's completion ambiguous. Unsent starts may be retired atomically.
 func validateCompletionStart(ctx context.Context, tx pgx.Tx, e *pb.FlightCompletionEvidence) error {
-	rows, err := tx.Query(ctx, `SELECT payload FROM commands c WHERE flight_id=$1 AND id<>$2 AND (state='applied' OR EXISTS(SELECT 1 FROM command_events WHERE command_id=c.id AND stage='applied') OR (dispatch_started AND state NOT IN ('rejected','failed','timed_out')))`, e.Context.FlightId, e.StartCommandId)
+	rows, err := tx.Query(ctx, `SELECT payload,state='applied', (SELECT max(occurred_at) FROM command_events WHERE command_id=c.id AND stage='applied') FROM commands c WHERE flight_id=$1 AND id<>$2 AND (state='applied' OR EXISTS(SELECT 1 FROM command_events WHERE command_id=c.id AND stage='applied') OR (dispatch_started AND state NOT IN ('rejected','failed','timed_out')))`, e.Context.FlightId, e.StartCommandId)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var raw []byte
-		if err = rows.Scan(&raw); err != nil {
+		var applied bool
+		var appliedAt *time.Time
+		if err = rows.Scan(&raw, &applied, &appliedAt); err != nil {
 			return err
 		}
 		command := new(pb.DurableCommand)
 		if err = proto.Unmarshal(raw, command); err != nil {
 			return err
+		}
+		projection := domain.Command{Type: command.Definition}
+		if applied {
+			projection.State = "applied"
+		}
+		if appliedAt != nil {
+			projection.Events = []domain.CommandEvent{{Stage: "applied", OccurredAt: *appliedAt}}
+		}
+		if e.LandedAtUnixNs > 0 && e.DisarmedAtUnixNs > 0 && projection.InvalidatesGroundEvidence(time.Unix(0, min(e.LandedAtUnixNs, e.DisarmedAtUnixNs))) {
+			return fmt.Errorf("%w: command %s invalidates ground evidence; explicit reconciliation required", durable.ErrVersionConflict, command.CommandId)
 		}
 		if command.Definition == "MISSION_START" {
 			return fmt.Errorf("%w: competing mission start %s requires reconciliation", durable.ErrVersionConflict, command.CommandId)

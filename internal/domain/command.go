@@ -34,3 +34,28 @@ type CommandEvent struct {
 	Source     string    `json:"source"`
 	Message    string    `json:"message"`
 }
+
+// InvalidatesGroundEvidence reports whether applied motion authority is not
+// proven earlier than the landed/disarmed evidence boundary.
+//
+// Parameters: boundary is the earlier ground observation timestamp. Command
+// events have millisecond precision; the same millisecond is conservatively ambiguous.
+// Returns: true for ARM/RESUME/MISSION_START with late or missing application
+// time, including applied evidence behind a conflicting projection. Other command
+// types do not independently authorize leaving the disarmed ground state.
+func (c Command) InvalidatesGroundEvidence(boundary time.Time) bool {
+	if c.Type != "ARM" && c.Type != "RESUME" && c.Type != "MISSION_START" {
+		return false
+	}
+	found := false
+	for _, event := range c.Events {
+		if event.Stage != "applied" {
+			continue
+		}
+		found = true
+		if event.OccurredAt.IsZero() || !event.OccurredAt.Before(boundary.Truncate(time.Millisecond)) {
+			return true
+		}
+	}
+	return c.State == "applied" && !found
+}

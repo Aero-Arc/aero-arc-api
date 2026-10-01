@@ -218,19 +218,14 @@ func TestHandleBootstrapBatteryAndFlightLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	startedResponse := performJSONRequest(t, server.Handler(), http.MethodPost, "/api/v1/flights/flight-1/start", `{}`)
-	if startedResponse.Code != http.StatusOK {
-		t.Fatalf("start status=%d body=%s", startedResponse.Code, startedResponse.Body.String())
+	if startedResponse.Code != http.StatusConflict || !strings.Contains(startedResponse.Body.String(), "MISSION_START") {
+		t.Fatalf("legacy start accepted without durable authority: %d %s", startedResponse.Code, startedResponse.Body.String())
 	}
-	if err := json.Unmarshal(startedResponse.Body.Bytes(), &flight); err != nil {
-		t.Fatal(err)
+	unchanged, err := store.GetFlightRecord(ctx, "flight-1")
+	if err != nil || unchanged.Status != domain.FlightStatusPlanned || !unchanged.StartedAt.IsZero() {
+		t.Fatalf("legacy activation changed flight: %+v %v", unchanged, err)
 	}
-	if flight.Status != domain.FlightStatusActive || flight.StartedAt.IsZero() {
-		t.Fatalf("started flight = %#v", flight)
-	}
-	retryResponse := performJSONRequest(t, server.Handler(), http.MethodPost, "/api/v1/flights/flight-1/start", `{}`)
-	if retryResponse.Code != http.StatusOK {
-		t.Fatalf("start retry status=%d body=%s", retryResponse.Code, retryResponse.Body.String())
-	}
+
 }
 
 func TestHandleOperationsExposesRegistryConformanceJSON(t *testing.T) {

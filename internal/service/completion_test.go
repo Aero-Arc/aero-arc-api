@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
@@ -116,5 +117,25 @@ func TestFinalizationSkipsDSSWithdrawalForLegacyIntent(t *testing.T) {
 				t.Fatalf("incorrect publication: %+v", sink)
 			}
 		})
+	}
+}
+
+func TestLateMotionApplicationPreventsExternalCompletionCleanup(t *testing.T) {
+	for _, kind := range []string{"ARM", "RESUME"} {
+		for _, missing := range []bool{false, true} {
+			client := &closureBindingClient{}
+			deployer := &fakeMissionDeployer{}
+			boundary := time.Now().Add(-time.Minute)
+			command := domain.Command{ID: "late", Type: kind, State: "applied"}
+			if !missing {
+				command.Events = []domain.CommandEvent{{Stage: "applied", OccurredAt: boundary.Add(time.Second)}}
+			}
+			svc := &FleetService{durable: &closureBindingStore{records: []domain.Command{command}}, conformanceHistory: client, missionDeployer: deployer}
+			completion := domain.FlightCompletion{Evidence: &pb.FlightCompletionEvidence{Context: &pb.OperationContext{FlightId: "flight"}, LandedAtUnixNs: boundary.UnixNano(), DisarmedAtUnixNs: boundary.UnixNano()}}
+			err := svc.finalizeFlight(context.Background(), completion, nil)
+			if err == nil || !strings.Contains(err.Error(), "invalidates ground evidence") || client.request != nil || len(deployer.clears) != 0 {
+				t.Fatalf("kind=%s missing=%v cleanup passed: %v", kind, missing, err)
+			}
+		}
 	}
 }

@@ -220,6 +220,23 @@ func TestFlightFinalizationIsAtomicIdempotentAndLeaseFenced(t *testing.T) {
 					if err != nil || second.Generation <= first.Generation {
 						t.Fatalf("takeover: %+v %v", second, err)
 					}
+					// Motion applied after the immutable ground pair invalidates it,
+					// even after completion admission and before the final commit.
+					if _, err = s.pool.Exec(ctx, `UPDATE commands SET state='applied' WHERE id=$1`, queuedID); err != nil {
+						t.Fatal(err)
+					}
+					if _, err = s.pool.Exec(ctx, `INSERT INTO command_events(event_id,command_id,stage,occurred_at,source,message) VALUES($1,$2,'applied',$3,'agent','late arm')`, queuedID+"/late-applied", queuedID, time.Unix(0, e.DisarmedAtUnixNs).Add(time.Second)); err != nil {
+						t.Fatal(err)
+					}
+					if err = s.CompleteFlight(ctx, second, nil); !errors.Is(err, durable.ErrVersionConflict) {
+						t.Fatalf("late arm closed flight: %v", err)
+					}
+					if _, err = s.pool.Exec(ctx, `DELETE FROM command_events WHERE event_id=$1`, queuedID+"/late-applied"); err != nil {
+						t.Fatal(err)
+					}
+					if _, err = s.pool.Exec(ctx, `UPDATE commands SET state='rejected' WHERE id=$1`, queuedID); err != nil {
+						t.Fatal(err)
+					}
 					// Defense in depth: even a contradictory late applied record
 					// cannot commit lifecycle closure or the archive obligation.
 					if _, err = s.pool.Exec(ctx, `UPDATE commands SET state='applied' WHERE id=$1`, laterStartID); err != nil {

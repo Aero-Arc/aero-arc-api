@@ -102,6 +102,9 @@ func (s *FleetService) finalizeFlight(ctx context.Context, c domain.FlightComple
 		return err
 	}
 	for _, command := range records {
+		if command.InvalidatesGroundEvidence(time.Unix(0, min(e.LandedAtUnixNs, e.DisarmedAtUnixNs))) {
+			return fmt.Errorf("command %s invalidates ground evidence; explicit reconciliation required", command.ID)
+		}
 		if command.Type == "MISSION_START" && command.ID != e.StartCommandId {
 			applied := command.State == "applied"
 			for _, event := range command.Events {
