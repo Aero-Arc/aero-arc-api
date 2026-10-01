@@ -172,6 +172,12 @@ func (s *Store) AcceptCommand(ctx context.Context, c domain.Command, deployment 
 			return c, err
 		}
 	}
+	// New admission may eventually supersede an older pending observation. Wake
+	// its readback even after the original recovery window, but do not invent
+	// supersession: the new command might be rejected before any aircraft effect.
+	if _, err = tx.Exec(ctx, `UPDATE command_outbox o SET done=false,available_at=LEAST(o.available_at,clock_timestamp()),recovery_until=GREATEST(o.recovery_until,$2::timestamptz+interval '15 minutes') FROM commands older WHERE older.id=o.command_id AND older.aircraft_id=$1 AND older.id<>$3 AND older.state='applied' AND older.observation_state='pending'`, c.AircraftID, c.ExpiresAt, c.ID); err != nil {
+		return c, err
+	}
 	if _, err = tx.Exec(ctx, `INSERT INTO command_outbox(command_id) VALUES($1)`, c.ID); err != nil {
 		return c, err
 	}
@@ -425,7 +431,7 @@ func (s *Store) recordCommandEvidence(ctx context.Context, c domain.Command, eve
 		return err
 	}
 	delay := time.Duration(1<<min(c.Attempts, 6)) * time.Second
-	tag, err := tx.Exec(ctx, `UPDATE command_outbox SET lease_until=NULL,available_at=clock_timestamp()+$2::interval,done=(SELECT state IN ('rejected','timed_out') OR (state='applied' AND observation_state IN ('observed','unavailable','superseded')) OR expires_at+interval '15 minutes'<=$4 FROM commands WHERE id=$1) WHERE command_id=$1 AND generation=$3 AND lease_until>clock_timestamp()`, c.ID, fmt.Sprintf("%f seconds", delay.Seconds()), c.Lease, commandNow)
+	tag, err := tx.Exec(ctx, `UPDATE command_outbox SET lease_until=NULL,available_at=clock_timestamp()+$2::interval,done=(SELECT state IN ('rejected','timed_out') OR (state='applied' AND observation_state IN ('observed','unavailable','superseded')) OR GREATEST(expires_at+interval '15 minutes',command_outbox.recovery_until)<=$4 FROM commands WHERE id=$1) WHERE command_id=$1 AND generation=$3 AND lease_until>clock_timestamp()`, c.ID, fmt.Sprintf("%f seconds", delay.Seconds()), c.Lease, commandNow)
 	if err != nil {
 		return err
 	}

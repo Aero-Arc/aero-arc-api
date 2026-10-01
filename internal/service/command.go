@@ -440,20 +440,27 @@ func (s *FleetService) GetFlightCommand(ctx context.Context, flightID, id, princ
 //
 // Returns: The unchanged command or an authorization, lookup, or scheduling error.
 func (s *FleetService) ReconcileFlightCommand(ctx context.Context, flightID, id, principal string) (domain.Command, error) {
-	c, err := s.GetFlightCommand(ctx, flightID, id, principal)
+	store, err := s.commandStore()
 	if err != nil {
-		return c, err
+		return domain.Command{}, err
 	}
 	f, err := s.durable.GetFlightRecord(ctx, flightID)
 	if err != nil {
-		return c, err
+		return domain.Command{}, err
 	}
-	if err = s.authorizeCommand(ctx, principal, f, "RECONCILE"); err != nil {
-		return c, err
+	// Authorize recovery before lookup: a missing generic record can select the
+	// legacy deployment recovery path in the HTTP compatibility endpoint.
+	for _, action := range []string{"READ", "RECONCILE"} {
+		if err = s.authorizeCommand(ctx, principal, f, action); err != nil {
+			return domain.Command{}, err
+		}
 	}
-	store, err := s.commandStore()
+	c, err := store.GetCommand(ctx, id)
 	if err != nil {
-		return c, err
+		return domain.Command{}, err
+	}
+	if c.FlightID != flightID || c.OperatorID != f.OperatorID {
+		return domain.Command{}, durable.ErrNotFound
 	}
 	if err = store.RequeueCommand(ctx, id); err != nil {
 		return c, err
