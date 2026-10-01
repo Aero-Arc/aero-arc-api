@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -239,7 +240,7 @@ func TestCommandAcceptanceRestartLeaseAndEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy, err := s.CreateMissionDeployment(ctx, domain.MissionDeployment{ID: prefix + "-legacy", FlightID: otherFlight.ID, MissionID: otherMission.Mission.ID, MissionVersion: otherMission.Mission.Version, MissionDigest: otherMission.Mission.MissionDigest, OperatorID: otherMission.Mission.OperatorID, AircraftID: otherMission.Mission.AircraftID, IntentID: otherMission.Mission.IntentID, IntentVersion: otherMission.Mission.IntentVersion, AgentID: a.AgentID, CommandID: prefix + "-legacy-command", IdempotencyKey: prefix + "-legacy-key", IdempotencyRequest: strings.Repeat("a", 64), Status: domain.MissionDeploymentOutcomeUnknown, CreatedAt: now, UpdatedAt: now})
+	legacy, err := s.CreateMissionDeployment(ctx, domain.MissionDeployment{ID: prefix + "-legacy", FlightID: otherFlight.ID, MissionID: otherMission.Mission.ID, MissionVersion: otherMission.Mission.Version, MissionDigest: otherMission.Mission.MissionDigest, OperatorID: otherMission.Mission.OperatorID, AircraftID: otherMission.Mission.AircraftID, IntentID: otherMission.Mission.IntentID, IntentVersion: otherMission.Mission.IntentVersion, AgentID: a.AgentID, CommandID: prefix + "-legacy-command", IdempotencyKey: prefix + "-legacy-key", IdempotencyRequest: fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join([]string{"deploy-mission-v1", otherFlight.ID, otherMission.Mission.ID, fmt.Sprint(otherMission.Mission.Version), otherMission.Mission.MissionDigest}, "\x00")))), Status: domain.MissionDeploymentOutcomeUnknown, CreatedAt: now, UpdatedAt: now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,6 +257,19 @@ func TestCommandAcceptanceRestartLeaseAndEvidence(t *testing.T) {
 	api.Handler().ServeHTTP(legacyResponse, legacyRequest)
 	if legacyResponse.Code != http.StatusOK || legacyResponse.Header().Get("Idempotent-Replayed") != "true" {
 		t.Fatalf("legacy recovery stranded by C2 upgrade: %d %s", legacyResponse.Code, legacyResponse.Body.String())
+	}
+	legacyPost := httptest.NewRequest(http.MethodPost, "/api/v1/flights/"+otherFlight.ID+"/missions/"+otherMission.Mission.ID+"/deploy", nil)
+	legacyPost.Header.Set("Authorization", "Bearer test-control-token")
+	legacyPost.Header.Set("If-Match", "\""+otherMission.Mission.MissionDigest+"\"")
+	legacyPost.Header.Set("Idempotency-Key", legacy.IdempotencyKey)
+	legacyPostResponse := httptest.NewRecorder()
+	api.Handler().ServeHTTP(legacyPostResponse, legacyPost)
+	if legacyPostResponse.Code != http.StatusOK || legacyPostResponse.Header().Get("Idempotent-Replayed") != "true" || !strings.Contains(legacyPostResponse.Body.String(), legacy.ID) {
+		t.Fatalf("legacy POST did not recover original authority: %d %s", legacyPostResponse.Code, legacyPostResponse.Body.String())
+	}
+	var legacyCommands int
+	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM commands WHERE flight_id=$1`, otherFlight.ID).Scan(&legacyCommands); err != nil || legacyCommands != 0 {
+		t.Fatalf("legacy replay created generic authority: %d %v", legacyCommands, err)
 	}
 	upload, err := fleet.SubmitCommand(ctx, f.ID, "mission-control-service", prefix+"-upload", service.CommandRequest{Type: "MISSION_UPLOAD", MissionID: mission.Mission.ID, MissionDigest: mission.Mission.MissionDigest})
 	if err != nil {

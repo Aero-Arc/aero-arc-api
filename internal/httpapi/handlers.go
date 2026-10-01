@@ -276,6 +276,20 @@ func (s *Server) handleDeployCurrentMission(c *mach.Context) {
 		return
 	}
 	if s.fleet.CommandControlEnabled() {
+		replay, replayErr := s.fleet.GetMissionDeploymentReplay(ctx, c.Param("flight_id"), c.Param("mission_id"), expectedDigest, c.Request.Header.Get("Idempotency-Key"), "mission-control-service")
+		if replayErr == nil {
+			status := http.StatusOK
+			if missionDeploymentPending(replay.Deployment.Status) {
+				status = http.StatusAccepted
+			}
+			c.Response.Header().Set("Idempotent-Replayed", "true")
+			writeJSON(c, status, replay)
+			return
+		}
+		if !errors.Is(replayErr, durable.ErrNotFound) {
+			writeServiceError(c, replayErr)
+			return
+		}
 		command, err := s.fleet.SubmitCommand(ctx, c.Param("flight_id"), "mission-control-service", c.Request.Header.Get("Idempotency-Key"), service.CommandRequest{Type: "MISSION_UPLOAD", MissionID: c.Param("mission_id"), MissionDigest: expectedDigest})
 		if err != nil {
 			writeServiceError(c, err)
