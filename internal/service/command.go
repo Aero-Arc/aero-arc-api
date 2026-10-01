@@ -62,6 +62,9 @@ func (s *FleetService) commandStore() (durable.CommandStore, error) {
 //
 // Returns: The committed command or exact replay; authorization, binding, validation, and storage errors prevent new acceptance.
 func (s *FleetService) SubmitCommand(ctx context.Context, flightID, principal, key string, req CommandRequest) (domain.Command, error) {
+	if !s.CommandControlEnabled() {
+		return domain.Command{}, ErrMissionDeploymentUnavailable
+	}
 	store, err := s.commandStore()
 	if err != nil {
 		return domain.Command{}, err

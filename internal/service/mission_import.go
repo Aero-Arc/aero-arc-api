@@ -137,6 +137,8 @@ func (s *FleetService) ImportMission(ctx context.Context, flightID string, idemp
 		if err != nil {
 			return ImportMissionResult{}, err
 		}
+	}
+	if last := items[len(items)-1].Command; last == 20 || last == 21 {
 		kept := findings[:0]
 		for _, finding := range findings {
 			if finding.Code != "landing_not_declared" {

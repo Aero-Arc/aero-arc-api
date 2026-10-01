@@ -481,3 +481,22 @@ func TestMissionEndingIsImmutableAndIdempotencyBound(t *testing.T) {
 		t.Fatalf("unknown ending accepted: %v", err)
 	}
 }
+
+func TestSourceProvidedRTLSuppressesMissingLandingWarning(t *testing.T) {
+	svc, _ := newMissionTestService(t)
+	source := strings.Replace(validWPL110, "3\t0\t0\t21\t0\t0\t0\t0\t-35.3632620\t149.1652370\t0\t1", "3\t0\t0\t20\t0\t0\t0\t0\t0\t0\t0\t1", 1)
+	result, err := svc.ImportMission(context.Background(), "flight-1", "source-rtl", validMissionRequest(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, f := range result.Mission.ValidationFindings {
+		if f.Code == "landing_not_declared" {
+			t.Fatal("terminal RTL marked missing recovery")
+		}
+		found = found || f.Code == "rtl_autopilot_settings"
+	}
+	if !found {
+		t.Fatal("RTL settings warning missing")
+	}
+}

@@ -131,7 +131,7 @@ func (s *FleetService) finalizeFlight(ctx context.Context, c domain.FlightComple
 			return err
 		}
 		a := response.GetRecord().GetAssignment()
-		if a.GetFlightId() != e.Context.FlightId || a.GetAircraftId() != e.Context.AircraftId || a.GetIntentVersion() != e.Context.IntentVersion || a.GetIntentId() != e.Context.IntentId || a.GetAgentId() != e.AgentId {
+		if a.GetAssignmentId() != intent.ID || a.GetFlightId() != e.Context.FlightId || a.GetAircraftId() != e.Context.AircraftId || a.GetIntentVersion() != e.Context.IntentVersion || a.GetIntentId() != e.Context.IntentId || a.GetAgentId() != e.AgentId {
 			return fmt.Errorf("monitoring closure binding mismatch")
 		}
 	}

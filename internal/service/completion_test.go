@@ -28,19 +28,24 @@ func (*closureBindingStore) GetOperationalIntentVersion(context.Context, string,
 
 type closureBindingClient struct {
 	conformance.ConformanceServiceClient
-	request  *conformance.EndAssignmentRequest
-	intentID string
-	agentID  string
+	request      *conformance.EndAssignmentRequest
+	intentID     string
+	agentID      string
+	assignmentID string
 }
 
 func (c *closureBindingClient) EndAssignment(_ context.Context, req *conformance.EndAssignmentRequest, _ ...grpc.CallOption) (*conformance.EndAssignmentResponse, error) {
 	c.request = req
-	return &conformance.EndAssignmentResponse{Record: &conformance.AssignmentRecord{Assignment: &conformance.Assignment{FlightId: "flight", AircraftId: "aircraft", IntentId: c.intentID, AgentId: c.agentID, IntentVersion: 1}}}, nil
+	return &conformance.EndAssignmentResponse{Record: &conformance.AssignmentRecord{Assignment: &conformance.Assignment{AssignmentId: c.assignmentID, FlightId: "flight", AircraftId: "aircraft", IntentId: c.intentID, AgentId: c.agentID, IntentVersion: 1}}}, nil
 }
 func TestFinalizationRequiresExactClosureIntent(t *testing.T) {
-	for _, intentID := range []string{"intent-a", "intent-b", "wrong-agent"} {
+	for _, intentID := range []string{"intent-a", "intent-b", "wrong-agent", "wrong-assignment"} {
 		t.Run(intentID, func(t *testing.T) {
-			client := &closureBindingClient{intentID: intentID, agentID: "agent-a"}
+			client := &closureBindingClient{intentID: intentID, agentID: "agent-a", assignmentID: "intent-a"}
+			if intentID == "wrong-assignment" {
+				client.intentID = "intent-a"
+				client.assignmentID = "different-assignment"
+			}
 			if intentID == "wrong-agent" {
 				client.intentID = "intent-a"
 				client.agentID = "agent-b"
