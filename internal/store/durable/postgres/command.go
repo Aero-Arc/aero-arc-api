@@ -56,6 +56,20 @@ func (s *Store) AcceptCommand(ctx context.Context, c domain.Command, deployment 
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return c, err
 	}
+	if deployment != nil {
+		// Share the legacy key lock before lifecycle locks so lookup and
+		// acceptance cannot race a terminal legacy deployment's commit.
+		if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,3))`, c.IdempotencyKey); err != nil {
+			return c, err
+		}
+		var legacy bool
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM mission_deployments WHERE idempotency_key=$1)`, c.IdempotencyKey).Scan(&legacy); err != nil {
+			return c, err
+		}
+		if legacy {
+			return c, durable.ErrIdempotencyConflict
+		}
+	}
 	var flightStatus, operator, aircraft, intent string
 	var version int
 	if err = tx.QueryRow(ctx, `SELECT status,operator_id,aircraft_id,intent_id,intent_version FROM flight_records WHERE id=$1 FOR UPDATE`, c.FlightID).Scan(&flightStatus, &operator, &aircraft, &intent, &version); err != nil {

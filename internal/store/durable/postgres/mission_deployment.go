@@ -246,6 +246,15 @@ func createMissionDeployment(ctx context.Context, tx pgx.Tx, deployment domain.M
 	case !errors.Is(err, durable.ErrNotFound):
 		return domain.MissionDeployment{}, err
 	}
+	// The legacy key lock is shared with generic mission acceptance. Never
+	// mint a second deployment from an already accepted C2 submission key.
+	var generic bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM commands WHERE operator_id=$1 AND idempotency_key=$2)`, deployment.OperatorID, deployment.IdempotencyKey).Scan(&generic); err != nil {
+		return domain.MissionDeployment{}, err
+	}
+	if generic {
+		return domain.MissionDeployment{}, durable.ErrIdempotencyConflict
+	}
 	deployment.Revision = 0
 	raw, err := encodeMissionDeployment(deployment)
 	if err != nil {
