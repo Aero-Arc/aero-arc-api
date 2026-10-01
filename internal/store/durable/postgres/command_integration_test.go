@@ -437,6 +437,52 @@ func TestCommandAcceptanceRestartLeaseAndEvidence(t *testing.T) {
 	}
 	waitApplied(resume.ID)
 
+	// Stop dispatch so this regression can hold the exact recovery lease while
+	// another transaction owns the flight row, as concurrent acceptance does.
+	stop()
+	<-done
+	if _, err = s.pool.Exec(ctx, `UPDATE command_outbox SET lease_until=clock_timestamp()+interval '1 minute' WHERE command_id=$1`, start.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.pool.QueryRow(ctx, `SELECT generation FROM command_outbox WHERE command_id=$1`, start.ID).Scan(&start.Lease); err != nil {
+		t.Fatal(err)
+	}
+	holder, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+	if _, err = holder.Exec(ctx, `SELECT id FROM flight_records WHERE id=$1 FOR UPDATE`, f.ID); err != nil {
+		t.Fatal(err)
+	}
+	progressCtx, cancelProgress := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelProgress()
+	progressDone := make(chan error, 1)
+	go func() { progressDone <- s.RecordCommandProgress(progressCtx, start, nil) }()
+	deadline := time.Now().Add(3 * time.Second)
+	blocked := false
+	for time.Now().Before(deadline) {
+		if err = s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid<>pg_backend_pid() AND wait_event_type='Lock' AND query LIKE 'SELECT data FROM flight_records WHERE id=%FOR UPDATE')`).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !blocked {
+		t.Fatal("evidence did not wait on held flight lock")
+	}
+	if _, err = holder.Exec(ctx, `SELECT command_id FROM command_outbox WHERE command_id=$1 FOR UPDATE NOWAIT`, start.ID); err != nil {
+		t.Fatalf("evidence held outbox while waiting for flight: %v", err)
+	}
+	if err = holder.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-progressDone; err != nil {
+		t.Fatal(err)
+	}
+
 	active, err := s.GetFlightRecord(ctx, f.ID)
 	if err != nil || active.Status != domain.FlightStatusActive || active.StartedAt.IsZero() {
 		t.Fatalf("start activation: %+v %v", active, err)

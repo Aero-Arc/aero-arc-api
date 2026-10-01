@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
@@ -12,6 +13,7 @@ import (
 )
 
 type readOnlyCommandStore struct {
+	existing *domain.Command
 	durable.Store
 	durable.CommandStore
 }
@@ -21,6 +23,28 @@ func (*readOnlyCommandStore) GetFlightRecord(context.Context, string) (domain.Fl
 }
 func (*readOnlyCommandStore) ListCommands(context.Context, string) ([]domain.Command, error) {
 	return []domain.Command{{ID: "historical"}}, nil
+}
+func (s *readOnlyCommandStore) FindCommand(context.Context, string, string) (domain.Command, error) {
+	if s.existing != nil {
+		return *s.existing, nil
+	}
+	return domain.Command{}, durable.ErrNotFound
+}
+func TestReadOnlyExactCommandReplay(t *testing.T) {
+	req := CommandRequest{Type: "ARM"}
+	raw, _ := json.Marshal(struct {
+		Flight  string
+		Request CommandRequest
+	}{"flight", req})
+	store := &readOnlyCommandStore{existing: &domain.Command{ID: "original", RequestHash: sha256Hex(string(raw))}}
+	svc := (&FleetService{durable: store}).WithCommandControl(nil, func(context.Context, string, domain.FlightRecord, string) error { return nil })
+	got, err := svc.SubmitCommand(context.Background(), "flight", "reader", "key", req)
+	if err != nil || got.ID != "original" || !got.Replayed {
+		t.Fatalf("exact read-only replay: %+v %v", got, err)
+	}
+	if _, err = svc.SubmitCommand(context.Background(), "flight", "reader", "key", CommandRequest{Type: "DISARM"}); !errors.Is(err, durable.ErrIdempotencyConflict) {
+		t.Fatalf("conflicting read-only replay: %v", err)
+	}
 }
 func TestReadOnlyCommandConfigurationRejectsSubmission(t *testing.T) {
 	svc := (&FleetService{durable: &readOnlyCommandStore{}}).WithCommandControl(nil, func(context.Context, string, domain.FlightRecord, string) error { return nil })

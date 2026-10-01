@@ -359,8 +359,16 @@ func (s *Store) recordCommandEvidence(ctx context.Context, c domain.Command, eve
 	defer func() { _ = tx.Rollback(ctx) }()
 	// All command/completion mutations lock flight before outbox to avoid an
 	// inversion between finalization admission and streamed command progress.
-	if _, err = tx.Exec(ctx, `SELECT id FROM flight_records WHERE id=$1 FOR UPDATE`, c.FlightID); err != nil {
+	var flightRaw []byte
+	if err = tx.QueryRow(ctx, `SELECT data FROM flight_records WHERE id=$1 FOR UPDATE`, c.FlightID).Scan(&flightRaw); err != nil {
 		return err
+	}
+	if c.Type == "MISSION_START" {
+		// Acceptance takes flight, aircraft lifecycle, then command outbox.
+		// Evidence must follow that same order, including observation retries.
+		if err = lockMissionAircraftLifecycle(ctx, tx, c.AircraftID); err != nil {
+			return err
+		}
 	}
 	var generation int64
 	if err = tx.QueryRow(ctx, `SELECT generation FROM command_outbox WHERE command_id=$1 AND lease_until>clock_timestamp() FOR UPDATE`, c.ID).Scan(&generation); err != nil {
@@ -403,15 +411,9 @@ func (s *Store) recordCommandEvidence(ctx context.Context, c domain.Command, eve
 			return err
 		}
 		if err == nil {
-			var raw []byte
-			if err = tx.QueryRow(ctx, `SELECT data FROM flight_records WHERE id=$1 FOR UPDATE`, c.FlightID).Scan(&raw); err != nil {
-				return err
-			}
+			raw := flightRaw
 			var flight domain.FlightRecord
 			if err = json.Unmarshal(raw, &flight); err != nil {
-				return err
-			}
-			if err = lockMissionAircraftLifecycle(ctx, tx, c.AircraftID); err != nil {
 				return err
 			}
 			if flight.Status == domain.FlightStatusPlanned {
