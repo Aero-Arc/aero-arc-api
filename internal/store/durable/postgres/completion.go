@@ -302,7 +302,9 @@ func (s *Store) CompleteFlight(ctx context.Context, c domain.FlightCompletion, p
 	if intent.Status == domain.IntentStatusActive {
 		intent.Status = domain.IntentStatusComplete
 		intent.CompletedAt = &ended
-		intent.UpdatedAt = ended
+		if err = tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&intent.UpdatedAt); err != nil {
+			return err
+		}
 		if err = updateOperationalIntentTx(ctx, tx, intent, revision); err != nil {
 			return err
 		}

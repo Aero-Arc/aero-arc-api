@@ -237,6 +237,7 @@ func TestFlightFinalizationIsAtomicIdempotentAndLeaseFenced(t *testing.T) {
 							t.Fatal(err)
 						}
 					}
+					finalizationBegan := time.Now().UTC()
 					if err = s.CompleteFlight(ctx, second, nil); err != nil {
 						t.Fatal(err)
 					}
@@ -251,6 +252,9 @@ func TestFlightFinalizationIsAtomicIdempotentAndLeaseFenced(t *testing.T) {
 					}
 					if err != nil || current.Status != wantStatus {
 						t.Fatalf("intent closure: %+v %v", current, err)
+					}
+					if !canceled && (current.CompletedAt == nil || current.UpdatedAt.Before(finalizationBegan) || !current.CompletedAt.Equal(time.Unix(0, max(e.LandedAtUnixNs, e.DisarmedAtUnixNs)).UTC())) {
+						t.Fatalf("physical completion and lifecycle update timestamps collapsed: %+v", current)
 					}
 					var count int
 					if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM flight_finalized_outbox WHERE event_id=$1`, id).Scan(&count); err != nil || count != 1 {
