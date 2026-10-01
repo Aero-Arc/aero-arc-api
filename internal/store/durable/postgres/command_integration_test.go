@@ -374,6 +374,9 @@ func TestCommandAcceptanceRestartLeaseAndEvidence(t *testing.T) {
 		t.Fatalf("verified mission observation: %+v", value)
 	}
 	checkUploadReplay(http.StatusOK)
+	if _, err = fleet.SubmitCommand(ctx, f.ID, "mission-control-service", prefix+"-premature-resume", service.CommandRequest{Type: "RESUME"}); !errors.Is(err, durable.ErrVersionConflict) {
+		t.Fatalf("resume admitted before mission start activated flight: %v", err)
+	}
 	start, err := fleet.SubmitCommand(ctx, f.ID, "mission-control-service", prefix+"-start", service.CommandRequest{Type: "MISSION_START"})
 	if err != nil {
 		t.Fatal(err)
@@ -387,6 +390,13 @@ func TestCommandAcceptanceRestartLeaseAndEvidence(t *testing.T) {
 	if replay, replayErr := fleet.SubmitCommand(ctx, f.ID, "mission-control-service", prefix+"-start", service.CommandRequest{Type: "MISSION_START"}); replayErr != nil || replay.ID != start.ID {
 		t.Fatalf("same start identity could not reconcile: %+v %v", replay, replayErr)
 	}
+
+	resume, err := fleet.SubmitCommand(ctx, f.ID, "mission-control-service", prefix+"-resume", service.CommandRequest{Type: "RESUME"})
+	if err != nil {
+		t.Fatalf("active flight resume: %v", err)
+	}
+	waitApplied(resume.ID)
+
 	active, err := s.GetFlightRecord(ctx, f.ID)
 	if err != nil || active.Status != domain.FlightStatusActive || active.StartedAt.IsZero() {
 		t.Fatalf("start activation: %+v %v", active, err)

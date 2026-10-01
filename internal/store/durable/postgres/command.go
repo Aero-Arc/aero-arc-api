@@ -88,7 +88,7 @@ func (s *Store) AcceptCommand(ctx context.Context, c domain.Command, deployment 
 	if currentVersion != version || (intentStatus != "active" && (c.Type != "MISSION_UPLOAD" || intentStatus != "accepted")) {
 		return c, durable.ErrVersionConflict
 	}
-	if (flightStatus != "planned" && flightStatus != "active") || (c.Type == "MISSION_START" && flightStatus != "planned") {
+	if (flightStatus != "planned" && flightStatus != "active") || (c.Type == "MISSION_START" && flightStatus != "planned") || (c.Type == "RESUME" && flightStatus != "active") {
 		return c, durable.ErrVersionConflict
 	}
 	var finalizing bool
