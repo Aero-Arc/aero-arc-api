@@ -26,6 +26,71 @@ func TestCreateIntentRejectsInvalidPlannedWindow(t *testing.T) {
 	}
 }
 
+func TestCreateIntentInheritsAircraftOperatorForPreflight(t *testing.T) {
+	for _, operator := range []string{"", "operator-1", "different-operator"} {
+		t.Run(operator, func(t *testing.T) {
+			ctx := context.Background()
+			store := durablememory.NewStore()
+			now := fixedWorkflowTime()
+			seedWorkflowAircraft(t, ctx, store, now, float64Ptr(95))
+			svc := NewIntentServiceWithClock(store, fixedClock(now), nil)
+			req := workflowIntentRequest(now)
+			req.OperatorID = operator
+			intent, err := svc.CreateIntent(ctx, req)
+			if operator == "different-operator" {
+				if !errors.Is(err, ErrValidation) {
+					t.Fatalf("ownership mismatch accepted: %v", err)
+				}
+				return
+			}
+			if err != nil || intent.OperatorID != "operator-1" {
+				t.Fatalf("operator not inherited: %+v %v", intent, err)
+			}
+			if _, err = svc.AddOperationalVolume(ctx, intent.ID, workflowVolumeRequest(now)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = svc.SubmitIntent(ctx, intent.ID); err != nil {
+				t.Fatal(err)
+			}
+			evaluation, err := preflightsvc.NewPreflightServiceWithClock(store, fixedClock(now)).EvaluateIntent(ctx, intent.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, check := range evaluation.Checks {
+				if check.RequirementCode == "BATTERY-INSTALLED" {
+					found = true
+					if check.Blocking {
+						t.Fatalf("installed battery disappeared from UI-created intent: %+v", check)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("battery check missing")
+			}
+		})
+	}
+}
+
+func TestOperationalVolumeRejectsInvertedAltitudeBeforePersistence(t *testing.T) {
+	ctx := context.Background()
+	store := durablememory.NewStore()
+	now := fixedWorkflowTime()
+	svc := NewIntentServiceWithClock(store, fixedClock(now), nil)
+	intent, err := svc.CreateIntent(ctx, workflowIntentRequest(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := workflowVolumeRequest(now)
+	req.MinAltitudeM, req.MaxAltitudeM = float64Ptr(100), float64Ptr(20)
+	if _, err = svc.AddOperationalVolume(ctx, intent.ID, req); !errors.Is(err, ErrValidation) {
+		t.Fatalf("inverted draft altitude: %v", err)
+	}
+	if _, err = buildOperationalVolumeFromRequest(intent, req, now, 0); !errors.Is(err, ErrValidation) {
+		t.Fatalf("inverted modified altitude: %v", err)
+	}
+}
+
 func TestCreateIntentPreservesNonUUIDIdentifierWithoutPublishing(t *testing.T) {
 	now := fixedWorkflowTime()
 	request := workflowIntentRequest(now)
