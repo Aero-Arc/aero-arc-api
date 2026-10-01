@@ -311,6 +311,8 @@ CREATE TABLE IF NOT EXISTS command_outbox (
  attempts integer NOT NULL DEFAULT 0,
  done boolean NOT NULL DEFAULT false
 );
+-- Recovery can be reopened by newer authority without changing original expiry.
+ALTER TABLE command_outbox ADD COLUMN IF NOT EXISTS recovery_until timestamptz;
 CREATE TABLE IF NOT EXISTS command_attempts (
  command_id text NOT NULL REFERENCES commands(id),
  attempt integer NOT NULL,

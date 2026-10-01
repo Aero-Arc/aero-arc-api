@@ -121,3 +121,32 @@ func TestCommandPoliciesReturnForbidden(t *testing.T) {
 		})
 	}
 }
+
+// A legacy deployment has no generic command row. Recovery must still enforce
+// the RECONCILE policy before the handler falls back to legacy dispatch.
+type missingGenericCommandStore struct{ reviewCommandStore }
+
+func (*missingGenericCommandStore) GetCommand(context.Context, string) (domain.Command, error) {
+	return domain.Command{}, durable.ErrNotFound
+}
+func TestLegacyDeploymentReconcileHonorsRecoveryPolicy(t *testing.T) {
+	store := &missingGenericCommandStore{}
+	var actions []string
+	fleet := service.NewFleetService(store, nil, nil, nil).WithCommandControl(reviewCommandTransport{}, func(_ context.Context, _ string, _ domain.FlightRecord, action string) error {
+		actions = append(actions, action)
+		if action == "RECONCILE" {
+			return service.ErrValidation
+		}
+		return nil
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/flights/flight/mission-deployments/deployment/reconcile", nil)
+	request.Header.Set("Authorization", "Bearer secret")
+	response := httptest.NewRecorder()
+	New(fleet, time.Second).WithMissionDeploymentControl(time.Second, "secret").Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || store.requeued != "" {
+		t.Fatalf("legacy recovery bypassed policy: %d %s", response.Code, response.Body.String())
+	}
+	if len(actions) != 2 || actions[0] != "READ" || actions[1] != "RECONCILE" {
+		t.Fatalf("actions=%v", actions)
+	}
+}

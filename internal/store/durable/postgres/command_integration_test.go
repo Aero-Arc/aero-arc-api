@@ -181,6 +181,50 @@ func TestCommandAcceptanceRestartLeaseAndEvidence(t *testing.T) {
 			}
 		}
 	}
+	// Acceptance wakes an older applied command whose observation recovery had
+	// stopped. Only Agent evidence may resolve/supersede that observation.
+	if _, err = s.pool.Exec(ctx, `UPDATE commands SET expires_at=$2 WHERE id=$1`, c.ID, now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	nextResponse := submit(`{"type":"DISARM"}`, prefix+"-next")
+	if nextResponse.Code != http.StatusAccepted {
+		t.Fatalf("next acceptance: %s", nextResponse.Body.String())
+	}
+	var next domain.Command
+	if err = json.Unmarshal(nextResponse.Body.Bytes(), &next); err != nil {
+		t.Fatal(err)
+	}
+	var reopened bool
+	if err = s.pool.QueryRow(ctx, `SELECT NOT done AND recovery_until >= $2 FROM command_outbox WHERE command_id=$1`, c.ID, next.ExpiresAt.Add(15*time.Minute)).Scan(&reopened); err != nil || !reopened {
+		t.Fatalf("old recovery not reopened: %v %v", reopened, err)
+	}
+	if _, err = s.pool.Exec(ctx, `UPDATE command_outbox SET available_at=clock_timestamp()+interval '1 hour' WHERE command_id=$1`, next.ID); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := s.ClaimCommand(ctx)
+	if err != nil || recovered.ID != c.ID {
+		t.Fatalf("old command not recoverable: %+v %v", recovered, err)
+	}
+	if err = s.FinishCommandAttempt(ctx, recovered, evidence, "still pending", now); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.pool.QueryRow(ctx, `SELECT NOT done FROM command_outbox WHERE command_id=$1`, c.ID).Scan(&reopened); err != nil || !reopened {
+		t.Fatalf("old cutoff stopped renewed recovery: %v %v", reopened, err)
+	}
+	// A later command's no-effect rejection must not manufacture supersession.
+	if _, err = s.pool.Exec(ctx, `UPDATE commands SET state='rejected' WHERE id=$1`, next.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `UPDATE command_outbox SET done=true WHERE command_id=$1`, next.ID); err != nil {
+		t.Fatal(err)
+	}
+	prior, err := s.GetCommand(ctx, c.ID)
+	if err != nil || prior.ObservationState != "pending" {
+		t.Fatalf("fabricated observation outcome: %+v %v", prior, err)
+	}
+	if _, err = s.pool.Exec(ctx, `UPDATE command_outbox SET recovery_until=NULL WHERE command_id=$1`, c.ID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = s.pool.Exec(ctx, `UPDATE commands SET expires_at=$2 WHERE id=$1`, c.ID, now.Add(30*time.Second)); err != nil {
 		t.Fatal(err)
 	}
