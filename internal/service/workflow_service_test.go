@@ -1885,3 +1885,37 @@ func hasBlockingFinding(findings []domain.ComplianceFinding, requirementCode str
 	}
 	return false
 }
+
+func TestIntentGeometryIsExactVersionAndIndependentOfLifecycle(t *testing.T) {
+	for _, state := range []domain.IntentStatus{domain.IntentStatusAccepted, domain.IntentStatusComplete, domain.IntentStatusCanceled} {
+		t.Run(string(state), func(t *testing.T) {
+			ctx := context.Background()
+			store := durablememory.NewStore()
+			first := domain.OperationalIntent{ID: "geometry", Version: 1, Status: state}
+			if err := store.CreateOperationalIntent(ctx, first); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.RecordOperationalVolume(ctx, domain.OperationalVolume{ID: "v1", IntentID: first.ID, IntentVersion: 1}); err != nil {
+				t.Fatal(err)
+			}
+			next := first
+			next.Version = 2
+			if err := store.ReplaceOperationalIntent(ctx, 1, first.Revision, next, []domain.OperationalVolume{{ID: "v2", IntentID: first.ID, IntentVersion: 2}}); err != nil {
+				t.Fatal(err)
+			}
+			service := NewIntentService(store, nil)
+			for version, want := range map[int]string{1: "v1", 2: "v2"} {
+				got, err := service.GetIntentVolumes(ctx, first.ID, version)
+				if err != nil || len(got) != 1 || got[0].ID != want {
+					t.Fatalf("version %d: %v %v", version, got, err)
+				}
+			}
+			if _, err := service.GetIntentVolumes(ctx, first.ID, 0); !errors.Is(err, ErrValidation) {
+				t.Fatalf("invalid version: %v", err)
+			}
+			if _, err := service.GetIntentVolumes(ctx, first.ID, 3); !errors.Is(err, durable.ErrNotFound) {
+				t.Fatalf("missing version: %v", err)
+			}
+		})
+	}
+}

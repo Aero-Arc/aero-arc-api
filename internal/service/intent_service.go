@@ -853,3 +853,29 @@ func latestOperationalVolumeUpdatedAt(volumes []domain.OperationalVolume) time.T
 	}
 	return latest
 }
+
+// GetIntentVolumes reads saved geometry for one exact intent version, including
+// accepted, canceled and completed plans independently of active map projections.
+//
+// Parameters: ctx bounds reads; intentID and version select immutable authority.
+// Returns: volumes for that version, an empty slice if none exist, or validation,
+// not-found, cancellation or storage errors. It never substitutes another version.
+func (s *IntentService) GetIntentVolumes(ctx context.Context, intentID string, version int) ([]domain.OperationalVolume, error) {
+	if version < 1 {
+		return nil, fmt.Errorf("%w: positive intent version required", ErrValidation)
+	}
+	if _, err := s.durable.GetOperationalIntentVersion(ctx, intentID, version); err != nil {
+		return nil, err
+	}
+	all, err := s.durable.ListOperationalVolumes(ctx, intentID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]domain.OperationalVolume, 0)
+	for _, v := range all {
+		if v.IntentVersion == version {
+			result = append(result, v)
+		}
+	}
+	return result, nil
+}

@@ -186,6 +186,7 @@ func (s *Server) Handler() http.Handler {
 		api.POST("/operational-intents", s.handleCreateOperationalIntent)
 		api.POST("/operational-intents/{intent_id}/modify", s.handleModifyOperationalIntent)
 		api.POST("/operational-intents/{intent_id}/volumes", s.handleAddOperationalVolume)
+		api.GET("/operational-intents/{intent_id}/volumes", s.handleGetIntentVolumes)
 		api.POST("/operational-intents/{intent_id}/submit", s.handleSubmitOperationalIntent)
 		api.POST("/operational-intents/{intent_id}/preflight/evaluate", s.handleEvaluateOperationalIntentPreflight)
 		if s.deconfliction != nil {

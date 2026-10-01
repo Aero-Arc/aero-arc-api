@@ -188,6 +188,12 @@ func (s *Server) handleGetFlightReplay(c *mach.Context) {
 		return
 	}
 
+	if s.fleet.CommandHistoryEnabled() {
+		if _, err := s.fleet.ListFlightCommands(ctx, c.Param("flight_id"), "mission-control-service"); err != nil {
+			writeServiceError(c, err)
+			return
+		}
+	}
 	replay, err := s.fleet.GetFlightReplay(ctx, c.Param("flight_id"), limit)
 	if err != nil {
 		writeServiceError(c, err)
@@ -783,4 +789,20 @@ func decodeJSON(c *mach.Context, dst any) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Server) handleGetIntentVolumes(c *mach.Context) {
+	ctx, cancel := s.contextWithTimeout(c)
+	defer cancel()
+	version, err := strconv.Atoi(c.Query("version"))
+	if err != nil || version < 1 {
+		writeError(c, http.StatusBadRequest, "positive intent version required")
+		return
+	}
+	volumes, err := s.intents.GetIntentVolumes(ctx, c.Param("intent_id"), version)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	writeJSON(c, http.StatusOK, map[string]any{"volumes": volumes})
 }

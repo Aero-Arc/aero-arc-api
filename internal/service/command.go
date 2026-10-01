@@ -284,6 +284,9 @@ func (s *FleetService) executeCommandAttempt(ctx context.Context, c domain.Comma
 	// Context installation is its own existing durable, idempotent operation.
 	// Never change operation context for post-expiry result recovery.
 	if time.Now().Before(c.ExpiresAt) {
+		if s.missionDeployer == nil {
+			return nil, "mission deployment unavailable"
+		}
 		if err := s.missionDeployer.EnsureOperationContext(ctx, envelope.AgentId, &pb.SetOperationContextCommand{CommandId: c.ID + "/context", Context: envelope.Context}); err != nil {
 			return nil, err.Error()
 		}
