@@ -208,7 +208,7 @@ func TestCommandAcceptanceRestartLeaseAndEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy, err := s.CreateMissionDeployment(ctx, domain.MissionDeployment{ID: prefix + "-legacy", FlightID: otherFlight.ID, MissionID: otherMission.Mission.ID, CommandID: prefix + "-legacy-command", IdempotencyKey: prefix + "-legacy-key", IdempotencyRequest: strings.Repeat("a", 64), Status: domain.MissionDeploymentOutcomeUnknown, CreatedAt: now, UpdatedAt: now})
+	legacy, err := s.CreateMissionDeployment(ctx, domain.MissionDeployment{ID: prefix + "-legacy", FlightID: otherFlight.ID, MissionID: otherMission.Mission.ID, MissionVersion: otherMission.Mission.Version, MissionDigest: otherMission.Mission.MissionDigest, OperatorID: otherMission.Mission.OperatorID, AircraftID: otherMission.Mission.AircraftID, IntentID: otherMission.Mission.IntentID, IntentVersion: otherMission.Mission.IntentVersion, AgentID: a.AgentID, CommandID: prefix + "-legacy-command", IdempotencyKey: prefix + "-legacy-key", IdempotencyRequest: strings.Repeat("a", 64), Status: domain.MissionDeploymentOutcomeUnknown, CreatedAt: now, UpdatedAt: now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,6 +219,13 @@ func TestCommandAcceptanceRestartLeaseAndEvidence(t *testing.T) {
 	if err = s.UpdateMissionDeployment(ctx, legacy, legacy.Revision); err != nil {
 		t.Fatal(err)
 	}
+	legacyRequest := httptest.NewRequest(http.MethodPost, "/api/v1/flights/"+otherFlight.ID+"/mission-deployments/"+legacy.ID+"/reconcile", nil)
+	legacyRequest.Header.Set("Authorization", "Bearer test-control-token")
+	legacyResponse := httptest.NewRecorder()
+	api.Handler().ServeHTTP(legacyResponse, legacyRequest)
+	if legacyResponse.Code != http.StatusOK || legacyResponse.Header().Get("Idempotent-Replayed") != "true" {
+		t.Fatalf("legacy recovery stranded by C2 upgrade: %d %s", legacyResponse.Code, legacyResponse.Body.String())
+	}
 	upload, err := fleet.SubmitCommand(ctx, f.ID, "mission-control-service", prefix+"-upload", service.CommandRequest{Type: "MISSION_UPLOAD", MissionID: mission.Mission.ID, MissionDigest: mission.Mission.MissionDigest})
 	if err != nil {
 		t.Fatal(err)
@@ -227,6 +234,19 @@ func TestCommandAcceptanceRestartLeaseAndEvidence(t *testing.T) {
 	if err != nil || deployment.DispatchStarted || deployment.CommandID != upload.ID {
 		t.Fatalf("atomic upload reservation: %+v %v", deployment, err)
 	}
+	checkUploadReplay := func(wantStatus int) {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/flights/"+f.ID+"/missions/"+mission.Mission.ID+"/deploy", nil)
+		request.Header.Set("Authorization", "Bearer test-control-token")
+		request.Header.Set("Idempotency-Key", prefix+"-upload")
+		request.Header.Set("If-Match", `"`+mission.Mission.MissionDigest+`"`)
+		response := httptest.NewRecorder()
+		api.Handler().ServeHTTP(response, request)
+		if response.Code != wantStatus || response.Header().Get("Idempotent-Replayed") != "true" || !strings.Contains(response.Body.String(), `"replayed":true`) {
+			t.Fatalf("upload replay: %d %s", response.Code, response.Body.String())
+		}
+	}
+	checkUploadReplay(http.StatusAccepted)
 	transport := &appliedCommandTransport{progress: func(id string) error {
 		value, err := s.GetCommand(ctx, id)
 		if err != nil {
@@ -264,6 +284,7 @@ func TestCommandAcceptanceRestartLeaseAndEvidence(t *testing.T) {
 	if value := waitApplied(upload.ID); value.ObservationState != "observed" {
 		t.Fatalf("verified mission observation: %+v", value)
 	}
+	checkUploadReplay(http.StatusOK)
 	start, err := fleet.SubmitCommand(ctx, f.ID, "mission-control-service", prefix+"-start", service.CommandRequest{Type: "MISSION_START"})
 	if err != nil {
 		t.Fatal(err)

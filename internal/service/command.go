@@ -92,6 +92,7 @@ func (s *FleetService) SubmitCommand(ctx context.Context, flightID, principal, k
 		if existing.RequestHash != hash {
 			return domain.Command{}, durable.ErrIdempotencyConflict
 		}
+		existing.Replayed = true
 		return existing, nil
 	}
 	if !errors.Is(err, durable.ErrNotFound) {
@@ -175,7 +176,9 @@ func (s *FleetService) SubmitCommand(ctx context.Context, flightID, principal, k
 	if err != nil {
 		return domain.Command{}, err
 	}
-	return store.AcceptCommand(ctx, domain.Command{ID: id, OperatorID: flight.OperatorID, AircraftID: flight.AircraftID, FlightID: flight.ID, Type: req.Type, Digest: envelope.CommandDigest, RequestedBy: principal, IdempotencyKey: key, RequestHash: hash, Payload: payload, ExpiresAt: time.UnixMilli(envelope.ExpiresAtUnixMs)}, deployment)
+	accepted, err := store.AcceptCommand(ctx, domain.Command{ID: id, OperatorID: flight.OperatorID, AircraftID: flight.AircraftID, FlightID: flight.ID, Type: req.Type, Digest: envelope.CommandDigest, RequestedBy: principal, IdempotencyKey: key, RequestHash: hash, Payload: payload, ExpiresAt: time.UnixMilli(envelope.ExpiresAtUnixMs)}, deployment)
+	accepted.Replayed = err == nil && accepted.ID != id
+	return accepted, err
 }
 
 // ListFlightCommands authorizes a flight-scoped read and returns durable evidence.
@@ -278,7 +281,7 @@ func (s *FleetService) executeCommandAttempt(ctx context.Context, c domain.Comma
 			if d.DispatchStarted {
 				return []domain.CommandEvent{event("outcome_unknown", d.Message, "mission_deployment", at)}, string(d.Status)
 			}
-			if time.Now().After(c.ExpiresAt) {
+			if !s.now().Before(c.ExpiresAt) {
 				return []domain.CommandEvent{event("timed_out", "authorization expired before mission dispatch", "api_worker", c.ExpiresAt)}, string(d.Status)
 			}
 			return nil, string(d.Status)
@@ -286,7 +289,7 @@ func (s *FleetService) executeCommandAttempt(ctx context.Context, c domain.Comma
 	}
 	// Context installation is its own existing durable, idempotent operation.
 	// Never change operation context for post-expiry result recovery.
-	if time.Now().Before(c.ExpiresAt) {
+	if s.now().Before(c.ExpiresAt) {
 		if s.missionDeployer == nil {
 			return nil, "mission deployment unavailable"
 		}
@@ -325,7 +328,7 @@ func (s *FleetService) executeCommandAttempt(ctx context.Context, c domain.Comma
 		evidence, err = s.commandTransport.ExchangeCommand(ctx, envelope.AgentId, &envelope, fmt.Sprintf("%s/attempt-%d", c.ID, c.Attempts))
 	}
 	if err != nil {
-		unknown := event("delivery_unknown", "delivery attempt has no authoritative outcome", "api_worker", time.Now().UTC())
+		unknown := event("delivery_unknown", "delivery attempt has no authoritative outcome", "api_worker", s.now().UTC())
 		unknown.ID = fmt.Sprintf("%s/attempt-%d/delivery_unknown", c.ID, c.Attempts)
 		return []domain.CommandEvent{unknown}, err.Error()
 	}
