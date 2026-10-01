@@ -4,6 +4,7 @@ import "time"
 
 // Command is durable API acceptance and its independent execution evidence.
 type Command struct {
+	Replayed         bool           `json:"-"` // transient submission metadata, never persisted
 	ID               string         `json:"id"`
 	OperatorID       string         `json:"operator_id"`
 	AircraftID       string         `json:"aircraft_id"`

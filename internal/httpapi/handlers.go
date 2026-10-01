@@ -14,6 +14,7 @@ import (
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 	"github.com/Aero-Arc/aero-arc-api/internal/service"
+	"github.com/Aero-Arc/aero-arc-api/internal/store/durable"
 	"github.com/mrshabel/mach"
 )
 
@@ -285,7 +286,14 @@ func (s *Server) handleDeployCurrentMission(c *mach.Context) {
 			writeServiceError(c, err)
 			return
 		}
-		writeJSON(c, http.StatusAccepted, service.DeployMissionResult{Deployment: deployment})
+		status := http.StatusOK
+		if missionDeploymentPending(deployment.Status) {
+			status = http.StatusAccepted
+		}
+		if command.Replayed {
+			c.Response.Header().Set("Idempotent-Replayed", "true")
+		}
+		writeJSON(c, status, service.DeployMissionResult{Deployment: deployment, Replayed: command.Replayed})
 		return
 	}
 	result, err := s.fleet.DeployCurrentMission(ctx, c.Param("flight_id"), c.Param("mission_id"), expectedDigest, c.Request.Header.Get("Idempotency-Key"))
@@ -378,13 +386,22 @@ func (s *Server) handleReconcileMissionDeployment(c *mach.Context) {
 			writeServiceError(c, err)
 			return
 		}
-		if _, err := s.fleet.ReconcileFlightCommand(ctx, deployment.FlightID, deployment.CommandID, "mission-control-service"); err != nil {
+		_, err = s.fleet.ReconcileFlightCommand(ctx, deployment.FlightID, deployment.CommandID, "mission-control-service")
+		if err == nil {
+			c.Response.Header().Set("Idempotent-Replayed", "true")
+			status := http.StatusOK
+			if missionDeploymentPending(deployment.Status) {
+				status = http.StatusAccepted
+			}
+			writeJSON(c, status, service.DeployMissionResult{Deployment: deployment, Replayed: true})
+			return
+		}
+		if !errors.Is(err, durable.ErrNotFound) {
 			writeServiceError(c, err)
 			return
 		}
-		c.Response.Header().Set("Idempotent-Replayed", "true")
-		writeJSON(c, http.StatusAccepted, service.DeployMissionResult{Deployment: deployment, Replayed: true})
-		return
+		// Pre-C2 deployments have no generic command row. Retain their existing
+		// durable reconciliation path instead of stranding upgrade-era work.
 	}
 	result, err := s.fleet.ReconcileMissionDeployment(ctx, c.Param("flight_id"), c.Param("deployment_id"))
 	if err != nil {
