@@ -2,6 +2,7 @@ package durable
 
 import (
 	"context"
+	"time"
 
 	"github.com/Aero-Arc/aero-arc-api/internal/domain"
 )
@@ -15,5 +16,5 @@ type CommandStore interface {
 	GetCommand(context.Context, string) (domain.Command, error)
 	FindCommand(context.Context, string, string) (domain.Command, error)
 	ClaimCommand(context.Context) (domain.Command, error)
-	FinishCommandAttempt(context.Context, domain.Command, []domain.CommandEvent, string) error
+	FinishCommandAttempt(context.Context, domain.Command, []domain.CommandEvent, string, time.Time) error
 }

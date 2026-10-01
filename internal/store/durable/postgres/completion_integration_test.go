@@ -176,14 +176,14 @@ func TestFlightFinalizationIsAtomicIdempotentAndLeaseFenced(t *testing.T) {
 						if err = s.BeginCommandDispatch(ctx, queued); err != nil {
 							t.Fatalf("post-expiry recovery blocked: %v", err)
 						}
-						if err = s.FinishCommandAttempt(ctx, queued, []domain.CommandEvent{{ID: queuedID + "/rejected", Stage: "rejected", OccurredAt: time.Now(), Source: "agent", Message: "expired before first effect"}}, "expired recovery"); err != nil {
+						if err = s.FinishCommandAttempt(ctx, queued, []domain.CommandEvent{{ID: queuedID + "/rejected", Stage: "rejected", OccurredAt: time.Now(), Source: "agent", Message: "expired before first effect"}}, "expired recovery", time.Now()); err != nil {
 							t.Fatal(err)
 						}
 					} else {
 						if storedCommand.State != "rejected" || len(storedCommand.Events) != 1 || storedCommand.Events[0].Source != "api_completion" {
 							t.Fatalf("queued command not retired: %+v", storedCommand)
 						}
-						if err = s.FinishCommandAttempt(ctx, queued, []domain.CommandEvent{{ID: queuedID + "/applied", Stage: "applied", OccurredAt: time.Now(), Source: "stale-worker"}}, "late"); err == nil {
+						if err = s.FinishCommandAttempt(ctx, queued, []domain.CommandEvent{{ID: queuedID + "/applied", Stage: "applied", OccurredAt: time.Now(), Source: "stale-worker"}}, "late", time.Now()); err == nil {
 							t.Fatal("retired worker overwrote completion fence")
 						}
 						if err = s.RequeueCommand(ctx, queuedID); err != nil {

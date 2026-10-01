@@ -17,8 +17,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// CommandAuthorizer evaluates an authenticated principal against an exact flight
-// and action. Implementations must fail closed and return their denial as an error.
+// ErrCommandForbidden identifies an authenticated command policy denial.
+var ErrCommandForbidden = errors.New("command policy denied")
+
+// CommandAuthorizer evaluates authenticated principals against an exact flight and action.
 type CommandAuthorizer func(context.Context, string, domain.FlightRecord, string) error
 
 // CommandTransport exchanges immutable commands for durable Agent evidence.
@@ -76,7 +78,7 @@ func (s *FleetService) SubmitCommand(ctx context.Context, flightID, principal, k
 	if err != nil {
 		return domain.Command{}, err
 	}
-	if err = s.commandAuthorizer(ctx, principal, flight, req.Type); err != nil {
+	if err = s.authorizeCommand(ctx, principal, flight, req.Type); err != nil {
 		return domain.Command{}, err
 	}
 	requestBytes, err := json.Marshal(struct {
@@ -195,7 +197,7 @@ func (s *FleetService) ListFlightCommands(ctx context.Context, flightID, princip
 	if err != nil {
 		return nil, err
 	}
-	if err = s.commandAuthorizer(ctx, principal, f, "READ"); err != nil {
+	if err = s.authorizeCommand(ctx, principal, f, "READ"); err != nil {
 		return nil, err
 	}
 	return store.ListCommands(ctx, flightID)
@@ -236,7 +238,7 @@ func (s *FleetService) runCommandWorker(ctx context.Context) {
 			events, result := s.executeCommandAttempt(attempt, c)
 			cancel()
 			persist, cancelPersist := context.WithTimeout(ctx, 5*time.Second)
-			if e = store.FinishCommandAttempt(persist, c, events, result); e != nil {
+			if e = store.FinishCommandAttempt(persist, c, events, result, s.now()); e != nil {
 				slog.Error("command evidence persistence failed", "command_id", c.ID, "error", e)
 			}
 			cancelPersist()
@@ -418,7 +420,7 @@ func (s *FleetService) GetFlightCommand(ctx context.Context, flightID, id, princ
 	if err != nil {
 		return domain.Command{}, err
 	}
-	if err = s.commandAuthorizer(ctx, principal, f, "READ"); err != nil {
+	if err = s.authorizeCommand(ctx, principal, f, "READ"); err != nil {
 		return domain.Command{}, err
 	}
 	c, err := store.GetCommand(ctx, id)
@@ -446,7 +448,7 @@ func (s *FleetService) ReconcileFlightCommand(ctx context.Context, flightID, id,
 	if err != nil {
 		return c, err
 	}
-	if err = s.commandAuthorizer(ctx, principal, f, "RECONCILE"); err != nil {
+	if err = s.authorizeCommand(ctx, principal, f, "RECONCILE"); err != nil {
 		return c, err
 	}
 	store, err := s.commandStore()
@@ -457,4 +459,12 @@ func (s *FleetService) ReconcileFlightCommand(ctx context.Context, flightID, id,
 		return c, err
 	}
 	return c, nil
+}
+
+// authorizeCommand preserves the policy cause while classifying every denial.
+func (s *FleetService) authorizeCommand(ctx context.Context, principal string, flight domain.FlightRecord, action string) error {
+	if err := s.commandAuthorizer(ctx, principal, flight, action); err != nil {
+		return fmt.Errorf("%w: %w", ErrCommandForbidden, err)
+	}
+	return nil
 }
